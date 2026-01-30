@@ -2926,7 +2926,7 @@ export function CanvasEditor() {
 
               return (
                 <Group key={folder.id}>
-                  {/* Folder Label - Above the border */}
+                  {/* Folder Label - visible and draggable (for drag functionality) */}
                   <Text
                     x={currentFolder.x}
                     y={currentFolder.y}
@@ -2935,6 +2935,7 @@ export function CanvasEditor() {
                     fontStyle="600"
                     fill={currentFolder.color}
                     draggable
+                    listening={true}
                     onMouseEnter={(e) => {
                       const container = e.target.getStage()?.container();
                       if (container) container.style.cursor = 'pointer';
@@ -2953,12 +2954,12 @@ export function CanvasEditor() {
                       const newX = e.target.x();
                       const newY = e.target.y();
                       const now = Date.now();
-                      
+
                       // Always update dragged folder position for smooth movement
-                      const updatedFolders = folders.map((f) => 
+                      const updatedFolders = folders.map((f) =>
                         f.id === currentFolder.id ? { ...f, x: newX, y: newY } : f
                       );
-                      
+
                       // Always reflow images for the dragged folder
                       const folderImgs = images.filter(img => currentFolder.imageIds.includes(img.id));
                       let updatedImages = [...images];
@@ -2969,7 +2970,7 @@ export function CanvasEditor() {
                           return reflowed ? reflowed : img;
                         });
                       }
-                      
+
                       // Throttle overlap resolution for smooth performance
                       if (now - lastOverlapCheckRef.current >= overlapThrottleMs) {
                         lastOverlapCheckRef.current = now;
@@ -2991,7 +2992,7 @@ export function CanvasEditor() {
                       setTimeout(() => {
                         folderNameDragRef.current = false;
                       }, 100);
-                      
+
                       // Final overlap resolution to ensure clean state
                       const { folders: finalFolders, images: finalImages } = resolveOverlapsAndReflow(
                         folders,
@@ -3001,7 +3002,7 @@ export function CanvasEditor() {
                       setFolders(finalFolders);
                       setImages(finalImages);
                       saveToHistory();
-                      
+
                       // Persist folder and image positions to Supabase
                       if (user) {
                         // Save all folder positions (some may have been pushed)
@@ -3014,7 +3015,7 @@ export function CanvasEditor() {
                               if (error) console.error('Failed to update folder position:', error);
                             });
                         }
-                        
+
                         // Save all images positions
                         const allFolderImages = finalImages.filter((img: CanvasImage) => img.storagePath && img.folderId);
                         for (const img of allFolderImages) {
@@ -3381,46 +3382,55 @@ export function CanvasEditor() {
           </Layer>
         </Stage>
         
-        {/* Plus buttons for each folder - positioned to the right of folder name */}
+        {/* Plus buttons for folders - positioned using flexbox */}
         {folders.map((folder) => {
           // Get the current folder from state to ensure we have the latest position
           const currentFolder = folders.find(f => f.id === folder.id) || folder;
-          
-          // Position to the right of folder name
-          // Folder name is at folder.x, folder.y with fontSize 16, fontStyle "600"
-          // Text baseline is at folder.y, so center vertically is at folder.y + 8 (half of fontSize 16)
-          // We need to estimate the width of the folder name text
-          const folderNameWidth = currentFolder.name.length * 9.5; // Estimate for bold text at fontSize 16
-          const plusButtonX = currentFolder.x + folderNameWidth + 12; // 12px gap after folder name
-          const plusButtonY = currentFolder.y + 8; // Center vertically with folder name (fontSize 16 / 2 = 8)
-          
+
           // Convert stage coordinates to screen coordinates
-          const screenX = plusButtonX * stageScale + stagePosition.x;
-          const screenY = plusButtonY * stageScale + stagePosition.y;
-          
+          const screenX = currentFolder.x * stageScale + stagePosition.x;
+          const screenY = currentFolder.y * stageScale + stagePosition.y;
+
           return (
-            <button
-              key={`plus-${currentFolder.id}-${currentFolder.x}-${currentFolder.y}-${stageScale}`}
-              onClick={() => handleAddPhotosToFolder(currentFolder.id)}
-              className="absolute pointer-events-auto cursor-pointer bg-transparent p-0 m-0 rounded-full flex items-center justify-center z-10 border border-dashed border-[#3ECF8E]"
+            <div
+              key={`folder-controls-${currentFolder.id}`}
+              className="absolute pointer-events-none flex items-center gap-3 z-10"
               style={{
                 left: `${screenX}px`,
                 top: `${screenY}px`,
-                width: `${28 * stageScale}px`,
-                height: `${28 * stageScale}px`,
-                transform: 'translate(-50%, -50%)',
-                borderWidth: `${1 * stageScale}px`,
               }}
             >
-              <span 
-                className="text-[#3ECF8E] font-bold leading-none flex items-center justify-center w-full h-full"
+              {/* Spacer for folder name - same size as Konva text */}
+              <div
+                className="font-semibold pointer-events-none opacity-0"
                 style={{
-                  fontSize: `${18 * stageScale}px`,
+                  fontSize: `${16 * stageScale}px`,
                 }}
               >
-                +
-              </span>
-            </button>
+                {currentFolder.name}
+              </div>
+              {/* Plus button */}
+              <button
+                onClick={() => handleAddPhotosToFolder(currentFolder.id)}
+                className="pointer-events-auto cursor-pointer bg-transparent p-0 m-0 rounded-full flex items-center justify-center border border-dashed flex-shrink-0"
+                style={{
+                  width: `${24 * stageScale}px`,
+                  height: `${24 * stageScale}px`,
+                  borderWidth: `${1 * stageScale}px`,
+                  borderColor: currentFolder.color,
+                }}
+              >
+                <span
+                  className="font-bold leading-none"
+                  style={{
+                    fontSize: `${16 * stageScale}px`,
+                    color: currentFolder.color,
+                  }}
+                >
+                  +
+                </span>
+              </button>
+            </div>
           );
         })}
       </div>
