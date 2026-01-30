@@ -321,6 +321,7 @@ export function CanvasEditor() {
   const [isDragging, setIsDragging] = useState(false);
   const lastOverlapCheckRef = useRef<number>(0);
   const folderNameDragRef = useRef<boolean>(false);
+  const lastSwappedImageRef = useRef<{ id: string; x: number; y: number } | null>(null);
   const overlapThrottleMs = 32; // ~30fps for smooth updates
   const [lastTouchDistance, setLastTouchDistance] = useState<number | null>(null);
   const [lastTouchCenter, setLastTouchCenter] = useState<{ x: number; y: number } | null>(null);
@@ -1403,6 +1404,202 @@ export function CanvasEditor() {
   }, []);
 
   // Handle object drag end with smart snapping (only if near another photo)
+  // Handle real-time grid snapping and shuffling during drag
+  const handleImageDragMove = useCallback(
+    (e: Konva.KonvaEventObject<DragEvent>) => {
+      const node = e.target;
+      const currentX = node.x();
+      const currentY = node.y();
+      const currentImg = images.find((i) => i.id === node.id());
+      if (!currentImg) return;
+
+      const currentCenterX = currentX + currentImg.width / 2;
+      const currentCenterY = currentY + currentImg.height / 2;
+
+      // Detect which folder is being hovered
+      let targetFolderId: string | undefined = currentImg.folderId;
+      let targetFolder: PhotoFolder | undefined = folders.find(f => f.id === currentImg.folderId);
+      
+      for (const folder of folders) {
+        const folderImages = images.filter(i => folder.imageIds.includes(i.id) && i.id !== currentImg.id);
+        const cols = calculateColsFromWidth(folder.width);
+        const rows = Math.ceil(folderImages.length / cols) || 1;
+        const contentHeight = rows * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
+        
+        const boundLeft = folder.x;
+        const boundRight = folder.x + folder.width;
+        const boundTop = folder.y + 30;
+        const boundBottom = folder.y + 30 + Math.max(contentHeight, 100);
+        
+        if (currentCenterX >= boundLeft && currentCenterX <= boundRight &&
+            currentCenterY >= boundTop && currentCenterY <= boundBottom) {
+          targetFolderId = folder.id;
+          targetFolder = folder;
+          break;
+        }
+      }
+
+      // If image is in a folder, calculate grid position and shuffle in real-time
+      if (targetFolderId && targetFolder) {
+        const cols = calculateColsFromWidth(targetFolder.width);
+        const { folderPadding, imageMaxSize } = GRID_CONFIG;
+        const contentStartX = targetFolder.x + folderPadding;
+        const contentStartY = targetFolder.y + 30 + folderPadding;
+        
+        // Calculate which cell the drag position corresponds to
+        const relativeX = currentX - contentStartX;
+        const relativeY = currentY - contentStartY;
+        const targetCol = Math.max(0, Math.floor(relativeX / CELL_SIZE));
+        const targetRow = Math.max(0, Math.floor(relativeY / CELL_SIZE));
+        const clampedCol = Math.min(targetCol, cols - 1);
+        
+        // Calculate the center of the target cell
+        const targetCellCenterX = contentStartX + clampedCol * CELL_SIZE + imageMaxSize / 2;
+        const targetCellCenterY = contentStartY + targetRow * CELL_SIZE + imageMaxSize / 2;
+        
+        // Snap threshold - only snap when within 40px of cell center
+        const snapThreshold = 40;
+        const distanceToCellCenter = Math.sqrt(
+          Math.pow(currentX + currentImg.width / 2 - targetCellCenterX, 2) +
+          Math.pow(currentY + currentImg.height / 2 - targetCellCenterY, 2)
+        );
+        
+        // Update folder hover state
+        setDragHoveredFolderId(targetFolderId || null);
+        
+        // Only snap if close enough to cell center
+        if (distanceToCellCenter > snapThreshold) {
+          // Too far from cell center - allow free dragging
+          return;
+        }
+        
+        const targetCellIndex = targetRow * cols + clampedCol;
+        
+        // Get other images in folder
+        const otherFolderImages = images.filter(img => 
+          targetFolder!.imageIds.includes(img.id) && img.id !== currentImg.id
+        );
+        
+        // Calculate current cell positions for other images
+        const imageCellMap = new Map<string, number>();
+        otherFolderImages.forEach((img) => {
+          const imgRelativeX = img.x - contentStartX;
+          const imgRelativeY = img.y - contentStartY;
+          const imgCol = Math.floor(imgRelativeX / CELL_SIZE);
+          const imgRow = Math.floor(imgRelativeY / CELL_SIZE);
+          const cellIndex = imgRow * cols + imgCol;
+          imageCellMap.set(img.id, cellIndex);
+        });
+        
+        // Calculate current image's cell
+        const currentImgRelativeX = currentImg.x - contentStartX;
+        const currentImgRelativeY = currentImg.y - contentStartY;
+        const currentImgCol = Math.floor(currentImgRelativeX / CELL_SIZE);
+        const currentImgRow = Math.floor(currentImgRelativeY / CELL_SIZE);
+        const currentImgCell = currentImgRow * cols + currentImgCol;
+        
+        // Check if target cell is occupied
+        const occupiedBy = Array.from(imageCellMap.entries()).find(([, cellIndex]) => cellIndex === targetCellIndex);
+        
+        let swapX: number | undefined;
+        let swapY: number | undefined;
+        let swapImgId: string | undefined;
+        let finalCol = clampedCol;
+        let finalRow = targetRow;
+        
+        if (occupiedBy) {
+          const [occupiedImgId] = occupiedBy;
+          
+          // Swap if current image has a valid cell position
+          if (currentImgCell >= 0 && currentImgCell < cols * 1000 && 
+              currentImg.folderId === targetFolderId) {
+            const occupiedImg = otherFolderImages.find(img => img.id === occupiedImgId);
+            if (occupiedImg) {
+              const swapCol = currentImgCell % cols;
+              const swapRow = Math.floor(currentImgCell / cols);
+              const swapImgWidth = Math.min(occupiedImg.width * occupiedImg.scaleX, imageMaxSize);
+              const swapImgHeight = Math.min(occupiedImg.height * occupiedImg.scaleY, imageMaxSize);
+              const swapOffsetX = (imageMaxSize - swapImgWidth) / 2;
+              const swapOffsetY = (imageMaxSize - swapImgHeight) / 2;
+              
+              swapX = contentStartX + swapCol * CELL_SIZE + swapOffsetX;
+              swapY = contentStartY + swapRow * CELL_SIZE + swapOffsetY;
+              swapImgId = occupiedImgId;
+            }
+          } else {
+            // Find nearest empty cell
+            const occupiedCells = new Set(Array.from(imageCellMap.values()));
+            const maxRows = Math.max(10, Math.ceil((otherFolderImages.length + 1) / cols));
+            
+            for (let radius = 0; radius < maxRows * cols; radius++) {
+              let foundEmpty = false;
+              for (let dr = -radius; dr <= radius && !foundEmpty; dr++) {
+                for (let dc = -radius; dc <= radius && !foundEmpty; dc++) {
+                  if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue;
+                  
+                  const checkRow = targetRow + dr;
+                  const checkCol = clampedCol + dc;
+                  
+                  if (checkRow >= 0 && checkCol >= 0 && checkCol < cols) {
+                    const checkCellIndex = checkRow * cols + checkCol;
+                    if (!occupiedCells.has(checkCellIndex)) {
+                      finalRow = checkRow;
+                      finalCol = checkCol;
+                      foundEmpty = true;
+                    }
+                  }
+                }
+              }
+              if (foundEmpty) break;
+            }
+          }
+        }
+        
+        // Calculate final position for dragged image
+        const imgWidth = Math.min(currentImg.width * currentImg.scaleX, imageMaxSize);
+        const imgHeight = Math.min(currentImg.height * currentImg.scaleY, imageMaxSize);
+        const cellOffsetX = (imageMaxSize - imgWidth) / 2;
+        const cellOffsetY = (imageMaxSize - imgHeight) / 2;
+        
+        const finalX = contentStartX + finalCol * CELL_SIZE + cellOffsetX;
+        const finalY = contentStartY + finalRow * CELL_SIZE + cellOffsetY;
+        
+        // Update positions in real-time
+        setImages((prev) =>
+          prev.map((img) => {
+            if (img.id === currentImg.id) {
+              return { ...img, x: finalX, y: finalY };
+            }
+            if (swapImgId && img.id === swapImgId && swapX !== undefined && swapY !== undefined) {
+              return { ...img, x: swapX, y: swapY };
+            }
+            return img;
+          })
+        );
+        
+        // Update swapped image node position instantly
+        if (swapImgId && swapX !== undefined && swapY !== undefined) {
+          const swapNode = node.getStage()?.findOne(`#${swapImgId}`);
+          if (swapNode) {
+            swapNode.setAttrs({ x: swapX, y: swapY });
+            // Track swapped image for saving later
+            lastSwappedImageRef.current = { id: swapImgId, x: swapX, y: swapY };
+          }
+        }
+        // Don't clear lastSwappedImageRef here - when hovering over the target cell after a swap,
+        // the target appears "empty" (other image moved out) so we'd clear it and lose the swap
+        // info. We only clear it in handleObjectDragEnd after saving.
+        
+        // Update dragged image position using setAttrs
+        node.setAttrs({ x: finalX, y: finalY });
+      }
+      
+      // Update folder hover state for visual feedback
+      setDragHoveredFolderId(targetFolderId || null);
+    },
+    [images, folders]
+  );
+
   const handleObjectDragEnd = useCallback(
     (e: Konva.KonvaEventObject<DragEvent>, type: 'image' | 'text') => {
       const node = e.target;
@@ -1412,32 +1609,24 @@ export function CanvasEditor() {
       let newX = currentX;
       let newY = currentY;
 
-      // Only snap if it's an image and there are other photos nearby
+      // Only snap if it's an image
       if (type === 'image') {
         const currentImg = images.find((img) => img.id === node.id());
         if (currentImg) {
+          // Get the current position (already updated by handleImageDragMove if in folder)
+          newX = currentX;
+          newY = currentY;
+          
           // Calculate current center position
           const currentCenterX = currentX + currentImg.width / 2;
           const currentCenterY = currentY + currentImg.height / 2;
-          
-          // Find nearest photo
-          const nearest = findNearestPhoto(currentCenterX, currentCenterY, images, node.id(), 100);
-          if (nearest) {
-            // Snap this photo's center to the nearest photo's center
-            newX = nearest.x - currentImg.width / 2;
-            newY = nearest.y - currentImg.height / 2;
-            // Snap to grid for final position
-            newX = snapToGrid(newX, GRID_SIZE);
-            newY = snapToGrid(newY, GRID_SIZE);
-          }
-          // If no nearby photo, keep free position (no snapping)
 
-          // Check if image was dropped into a folder
-          let targetFolderId: string | undefined = undefined;
+          // Check if image was dropped into a folder (or is already in one)
+          let targetFolderId: string | undefined = currentImg.folderId;
+          let targetFolder: PhotoFolder | undefined = folders.find(f => f.id === currentImg.folderId);
           
+          // Check if dropped into a different folder
           for (const folder of folders) {
-            // Calculate folder bounds using folder width
-            // Border starts at folder.x, spans folder.width
             const folderImages = images.filter(img => folder.imageIds.includes(img.id) && img.id !== currentImg.id);
             const cols = calculateColsFromWidth(folder.width);
             const rows = Math.ceil(folderImages.length / cols) || 1;
@@ -1445,14 +1634,25 @@ export function CanvasEditor() {
             
             const boundLeft = folder.x;
             const boundRight = folder.x + folder.width;
-            const boundTop = folder.y + 30; // Border starts 30px below label
+            const boundTop = folder.y + 30;
             const boundBottom = folder.y + 30 + Math.max(contentHeight, 100);
             
-            // Check if image center is within folder bounds
             if (currentCenterX >= boundLeft && currentCenterX <= boundRight &&
                 currentCenterY >= boundTop && currentCenterY <= boundBottom) {
               targetFolderId = folder.id;
+              targetFolder = folder;
               break;
+            }
+          }
+
+          // If image is outside folders, use snapping logic
+          if (!targetFolderId) {
+            const nearest = findNearestPhoto(currentCenterX, currentCenterY, images, node.id(), 100);
+            if (nearest) {
+              newX = nearest.x - currentImg.width / 2;
+              newY = nearest.y - currentImg.height / 2;
+              newX = snapToGrid(newX, GRID_SIZE);
+              newY = snapToGrid(newY, GRID_SIZE);
             }
           }
 
@@ -1643,10 +1843,97 @@ export function CanvasEditor() {
                       if (error) console.error('Failed to update photo folder:', error);
                     });
                 }
+                
+                // Save swapped image if there was a swap (when moving within same folder before folder change)
+                if (lastSwappedImageRef.current) {
+                  const swappedImg = resolvedImages.find(img => img.id === lastSwappedImageRef.current!.id);
+                  if (swappedImg?.storagePath) {
+                    supabase.from('photo_edits')
+                      .update({ 
+                        x: Math.round(swappedImg.x), 
+                        y: Math.round(swappedImg.y),
+                        folder_id: swappedImg.folderId || null
+                      })
+                      .eq('storage_path', swappedImg.storagePath)
+                      .eq('user_id', user.id)
+                      .then(({ error }) => {
+                        if (error) console.error('Failed to update swapped photo position:', error);
+                      });
+                  }
+                  // Clear swap tracking
+                  lastSwappedImageRef.current = null;
+                }
               }
 
               return; // Exit early since we already updated images
             }
+          }
+
+          // If image is in a folder (same folder move), positions are already updated in real-time
+          // Just save to Supabase and ensure folder assignment is correct
+          if (targetFolderId && targetFolderId === oldFolderId) {
+            // Use node position directly - it was updated synchronously by handleImageDragMove
+            const finalX = node.x();
+            const finalY = node.y();
+            
+            // Update folder assignment if needed (should already be set)
+            setImages((prev) =>
+              prev.map((img) =>
+                img.id === currentImg.id
+                  ? { ...img, folderId: targetFolderId, x: finalX, y: finalY }
+                  : img
+              )
+            );
+
+            // Save to Supabase if user is logged in
+            if (user) {
+              // Save dragged image using state position
+              if (currentImg.storagePath) {
+                supabase.from('photo_edits')
+                  .update({ x: Math.round(finalX), y: Math.round(finalY), folder_id: targetFolderId })
+                  .eq('storage_path', currentImg.storagePath)
+                  .eq('user_id', user.id)
+                  .then(({ error }) => {
+                    if (error) console.error('Failed to update photo position:', error);
+                  });
+              }
+              
+              // Save swapped image if there was a swap - use the position from ref (calculated during drag)
+              if (lastSwappedImageRef.current) {
+                const swappedRef = lastSwappedImageRef.current;
+                const swappedImg = images.find(img => img.id === swappedRef.id);
+                if (swappedImg?.storagePath) {
+                  const swappedX = swappedRef.x;
+                  const swappedY = swappedRef.y;
+                  
+                  // Use swappedRef (captured) - the ref may be cleared before the callback runs
+                  setImages((prev) =>
+                    prev.map((img) =>
+                      img.id === swappedRef.id
+                        ? { ...img, x: swappedX, y: swappedY }
+                        : img
+                    )
+                  );
+                  
+                  supabase.from('photo_edits')
+                    .update({ 
+                      x: Math.round(swappedX), 
+                      y: Math.round(swappedY) 
+                    })
+                    .eq('storage_path', swappedImg.storagePath)
+                    .eq('user_id', user.id)
+                    .then(({ error }) => {
+                      if (error) console.error('Failed to update swapped photo position:', error);
+                    });
+                }
+                // Clear swap tracking
+                lastSwappedImageRef.current = null;
+              }
+            }
+
+            // Update node position to match state (in case there's any drift)
+            node.position({ x: finalX, y: finalY });
+            return; // Exit early since we already updated images
           }
         }
       }
@@ -1910,28 +2197,32 @@ export function CanvasEditor() {
     // Calculate starting X position (left edge of first folder)
     let currentX = viewportCenterX - totalWidth / 2;
     
+    // Sort folders by current x position to preserve user's left-to-right arrangement
+    const sortedFolders = [...folders].sort((a, b) => a.x - b.x);
+    
     // Position all folders horizontally
     const recenteredFolders: PhotoFolder[] = [];
     let recenteredImages = [...images];
     
-    for (let i = 0; i < folders.length; i++) {
-      const folder = folders[i];
+    for (let i = 0; i < sortedFolders.length; i++) {
+      const folder = sortedFolders[i];
       const newFolder = {
         ...folder,
         x: currentX,
         y: viewportCenterY - 100, // Slightly above center
       };
       recenteredFolders.push(newFolder);
-      
-      // Reflow images for this folder
-      const folderImgs = images.filter(img => folder.imageIds.includes(img.id));
-      if (folderImgs.length > 0) {
-        const reflowed = reflowImagesInFolder(folderImgs, newFolder.x, newFolder.y, newFolder.width);
-        recenteredImages = recenteredImages.map(img => {
-          const r = reflowed.find(ri => ri.id === img.id);
-          return r || img;
-        });
-      }
+
+      // Translate images with their folder (preserve layout and order, don't reflow)
+      const deltaX = newFolder.x - folder.x;
+      const deltaY = newFolder.y - folder.y;
+      const folderImgIds = new Set(folder.imageIds);
+      recenteredImages = recenteredImages.map((img) => {
+        if (folderImgIds.has(img.id)) {
+          return { ...img, x: img.x + deltaX, y: img.y + deltaY };
+        }
+        return img;
+      });
       
       currentX += folder.width + folderGap;
     }
@@ -2557,46 +2848,7 @@ export function CanvasEditor() {
                   setDragHoveredFolderId(null);
                   handleObjectDragEnd(e, 'image');
                 }}
-                onDragMove={(e) => {
-                  // Detect which folder is being hovered
-                  const node = e.target;
-                  const currentX = node.x();
-                  const currentY = node.y();
-                  const currentImg = images.find((i) => i.id === node.id());
-                  if (!currentImg) return;
-
-                  const currentCenterX = currentX + currentImg.width / 2;
-                  const currentCenterY = currentY + currentImg.height / 2;
-
-                  let hoveredId: string | null = null;
-                  
-                  for (const folder of folders) {
-                    const folderImages = images.filter(i => folder.imageIds.includes(i.id) && i.id !== currentImg.id);
-                    
-                    // Use folder width for bounds - border starts at folder.x
-                    const cols = calculateColsFromWidth(folder.width);
-                    const rows = Math.ceil(folderImages.length / cols) || 1;
-                    const contentHeight = rows * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
-                    
-                    const boundLeft = folder.x;
-                    const boundRight = folder.x + folder.width;
-                    const boundTop = folder.y + 30; // Border starts 30px below label
-                    const boundBottom = folder.y + 30 + Math.max(contentHeight, 100);
-                    
-                    if (currentCenterX >= boundLeft && currentCenterX <= boundRight &&
-                        currentCenterY >= boundTop && currentCenterY <= boundBottom) {
-                      hoveredId = folder.id;
-                      break;
-                    }
-                  }
-                  
-                  // Also highlight if dragging out of current folder
-                  if (!hoveredId && currentImg.folderId) {
-                    hoveredId = currentImg.folderId;
-                  }
-                  
-                  setDragHoveredFolderId(hoveredId);
-                }}
+                onDragMove={handleImageDragMove}
                 onUpdate={(updates) => {
                   setImages((prev) =>
                     prev.map((i) => (i.id === img.id ? { ...i, ...updates } : i))
@@ -3187,7 +3439,6 @@ function ImageNode({
     node.cache({
       pixelRatio: qualityPixelRatio,
       imageSmoothingEnabled: true,
-      imageSmoothingQuality: 'high', // High quality image smoothing
     });
   }, [img, hasActiveFilters, isCurvesModified, image]);
 
