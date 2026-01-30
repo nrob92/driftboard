@@ -116,6 +116,7 @@ interface PhotoFolder {
   x: number;
   y: number;
   width: number; // Folder width - controls how many columns fit
+  height?: number; // Explicit height (label + content). When set, overrides content-based calculation.
   imageIds: string[]; // IDs of images in this folder
   color: string; // Accent color for the folder
 }
@@ -138,6 +139,7 @@ const GRID_CONFIG = {
   folderPadding: 15,  // Padding inside folder border
   defaultFolderWidth: 500, // Default folder width
   minFolderWidth: 180, // Minimum folder width (at least 1 image + padding)
+  minFolderHeight: 130, // Minimum total height (30 label + 100 content)
   folderGap: 40,      // Minimum gap between folders
 };
 const CELL_SIZE = GRID_CONFIG.imageMaxSize + GRID_CONFIG.imageGap;
@@ -187,16 +189,28 @@ const getFolderBounds = (folder: PhotoFolder, imageCount: number) => {
   const cols = calculateColsFromWidth(folder.width);
   const rows = Math.ceil(imageCount / cols) || 1;
   const contentHeight = rows * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
-  const height = 30 + Math.max(contentHeight, 100); // 30px for label gap
+  const calculatedHeight = 30 + Math.max(contentHeight, 100); // 30px for label gap
+  const height = folder.height ?? calculatedHeight;
   
   return {
     x: folder.x,
     y: folder.y,
     width: folder.width,
-    height: height,
+    height,
     right: folder.x + folder.width,
     bottom: folder.y + height,
   };
+};
+
+// Get folder border/content height (below label) for rendering
+const getFolderBorderHeight = (folder: PhotoFolder, imageCount: number): number => {
+  if (folder.height != null) {
+    return Math.max(folder.height - 30, 100); // 30px for label
+  }
+  const cols = calculateColsFromWidth(folder.width);
+  const rows = Math.ceil(imageCount / cols) || 1;
+  const contentHeight = rows * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
+  return Math.max(contentHeight, 100);
 };
 
 // Check if two rectangles overlap
@@ -571,6 +585,7 @@ export function CanvasEditor() {
               x: sf.x,
               y: sf.y,
               width: sf.width ?? GRID_CONFIG.defaultFolderWidth,
+              height: sf.height,
               color: sf.color,
               imageIds: folderImageIds,
             });
@@ -1421,17 +1436,11 @@ export function CanvasEditor() {
       let targetFolder: PhotoFolder | undefined = folders.find(f => f.id === currentImg.folderId);
       
       for (const folder of folders) {
-        const folderImages = images.filter(i => folder.imageIds.includes(i.id) && i.id !== currentImg.id);
-        const cols = calculateColsFromWidth(folder.width);
-        const rows = Math.ceil(folderImages.length / cols) || 1;
-        const contentHeight = rows * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
-        
-        const boundLeft = folder.x;
-        const boundRight = folder.x + folder.width;
+        const bounds = getFolderBounds(folder, folder.imageIds.length);
         const boundTop = folder.y + 30;
-        const boundBottom = folder.y + 30 + Math.max(contentHeight, 100);
+        const boundBottom = bounds.bottom;
         
-        if (currentCenterX >= boundLeft && currentCenterX <= boundRight &&
+        if (currentCenterX >= bounds.x && currentCenterX <= bounds.right &&
             currentCenterY >= boundTop && currentCenterY <= boundBottom) {
           targetFolderId = folder.id;
           targetFolder = folder;
@@ -1627,17 +1636,11 @@ export function CanvasEditor() {
           
           // Check if dropped into a different folder
           for (const folder of folders) {
-            const folderImages = images.filter(img => folder.imageIds.includes(img.id) && img.id !== currentImg.id);
-            const cols = calculateColsFromWidth(folder.width);
-            const rows = Math.ceil(folderImages.length / cols) || 1;
-            const contentHeight = rows * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
-            
-            const boundLeft = folder.x;
-            const boundRight = folder.x + folder.width;
+            const bounds = getFolderBounds(folder, folder.imageIds.length);
             const boundTop = folder.y + 30;
-            const boundBottom = folder.y + 30 + Math.max(contentHeight, 100);
+            const boundBottom = bounds.bottom;
             
-            if (currentCenterX >= boundLeft && currentCenterX <= boundRight &&
+            if (currentCenterX >= bounds.x && currentCenterX <= bounds.right &&
                 currentCenterY >= boundTop && currentCenterY <= boundBottom) {
               targetFolderId = folder.id;
               targetFolder = folder;
@@ -2572,12 +2575,7 @@ export function CanvasEditor() {
               const borderX = currentFolder.x;
               const borderY = currentFolder.y + 30; // Start below the label
               const borderWidth = currentFolder.width;
-              
-              // Calculate height based on actual content
-              const cols = calculateColsFromWidth(currentFolder.width);
-              const rows = Math.ceil(folderImages.length / cols) || 1;
-              const contentHeight = rows * CELL_SIZE + (folderPadding * 2); // Padding top and bottom
-              const borderHeight = Math.max(contentHeight, 100); // Minimum height
+              const borderHeight = getFolderBorderHeight(currentFolder, folderImages.length);
               
               const isHovered = hoveredFolderBorder === currentFolder.id;
               const isResizing = resizingFolderId === currentFolder.id;
@@ -2709,29 +2707,20 @@ export function CanvasEditor() {
                     }}
                   />
                   
-                  {/* Resize Handle - Right edge */}
+                  {/* Resize Handle - Bottom-right corner */}
                   <Rect
-                    x={borderX + borderWidth - 8}
-                    y={borderY + borderHeight / 2 - 20}
-                    width={16}
-                    height={40}
+                    x={borderX + borderWidth - 20}
+                    y={borderY + borderHeight - 20}
+                    width={20}
+                    height={20}
                     fill={isHovered || isResizing ? currentFolder.color : 'transparent'}
                     opacity={isHovered || isResizing ? 0.6 : 0}
                     cornerRadius={4}
                     draggable
-                    dragBoundFunc={(pos) => {
-                      // Only allow horizontal dragging
-                      const minWidth = GRID_CONFIG.minFolderWidth;
-                      const newWidth = pos.x - borderX + 8;
-                      const clampedWidth = Math.max(minWidth, newWidth);
-                      return {
-                        x: borderX + clampedWidth - 8,
-                        y: borderY + borderHeight / 2 - 20
-                      };
-                    }}
+                    dragBoundFunc={(pos) => pos}
                     onMouseEnter={(e) => {
                       const container = e.target.getStage()?.container();
-                      if (container) container.style.cursor = 'ew-resize';
+                      if (container) container.style.cursor = 'nwse-resize';
                       setHoveredFolderBorder(currentFolder.id);
                     }}
                     onMouseLeave={(e) => {
@@ -2743,39 +2732,32 @@ export function CanvasEditor() {
                       setResizingFolderId(currentFolder.id);
                     }}
                     onDragMove={(e) => {
-                      const newWidth = e.target.x() - borderX + 8;
-                      const clampedWidth = Math.max(GRID_CONFIG.minFolderWidth, newWidth);
+                      const handleSize = 20;
+                      const newWidth = Math.max(GRID_CONFIG.minFolderWidth, e.target.x() - borderX + handleSize);
+                      const newContentHeight = Math.max(100, e.target.y() - borderY + handleSize);
+                      const newTotalHeight = 30 + newContentHeight;
                       const now = Date.now();
                       
-                      // Recalculate border height based on new width
-                      const newCols = calculateColsFromWidth(clampedWidth);
-                      const newRows = Math.ceil(folderImages.length / newCols) || 1;
-                      const newContentHeight = newRows * CELL_SIZE + (folderPadding * 2);
-                      const newBorderHeight = Math.max(newContentHeight, 100);
-                      
-                      // Update folder width
-                      const updatedFolders = folders.map((f) => 
-                        f.id === currentFolder.id ? { ...f, width: clampedWidth } : f
+                      // Update folder width and height
+                      const updatedFolders = folders.map((f) =>
+                        f.id === currentFolder.id ? { ...f, width: newWidth, height: newTotalHeight } : f
                       );
                       
-                      // Update the handle position to stay aligned with the border (center vertically)
-                      const handleX = borderX + clampedWidth - 8;
-                      const handleY = borderY + newBorderHeight / 2 - 20;
-                      e.target.x(handleX);
-                      e.target.y(handleY);
+                      // Keep handle at bottom-right corner
+                      e.target.x(borderX + newWidth - handleSize);
+                      e.target.y(borderY + newContentHeight - handleSize);
                       
-                      // Reflow images within the folder
+                      // Reflow images within the folder (width change affects layout)
                       const folderImgs = images.filter(img => currentFolder.imageIds.includes(img.id));
                       let updatedImages = [...images];
                       if (folderImgs.length > 0) {
-                        const reflowedImages = reflowImagesInFolder(folderImgs, currentFolder.x, currentFolder.y, clampedWidth);
+                        const reflowedImages = reflowImagesInFolder(folderImgs, currentFolder.x, currentFolder.y, newWidth);
                         updatedImages = images.map((img) => {
                           const reflowed = reflowedImages.find(r => r.id === img.id);
                           return reflowed ? reflowed : img;
                         });
                       }
                       
-                      // Throttle overlap resolution for smooth performance
                       if (now - lastOverlapCheckRef.current >= overlapThrottleMs) {
                         lastOverlapCheckRef.current = now;
                         const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
@@ -2786,7 +2768,6 @@ export function CanvasEditor() {
                         setFolders(resolvedFolders);
                         setImages(resolvedImages);
                       } else {
-                        // Just update the resized folder without overlap check
                         setFolders(updatedFolders);
                         setImages(updatedImages);
                       }
@@ -2812,7 +2793,12 @@ export function CanvasEditor() {
                         // Save all folder positions (some may have been pushed)
                         for (const f of finalFolders) {
                           supabase.from('photo_folders')
-                            .update({ x: Math.round(f.x), y: Math.round(f.y), width: Math.round(f.width) })
+                            .update({
+                              x: Math.round(f.x),
+                              y: Math.round(f.y),
+                              width: Math.round(f.width),
+                              ...(f.height != null && { height: Math.round(f.height) }),
+                            })
                             .eq('id', f.id)
                             .eq('user_id', user.id)
                             .then(({ error }) => {
