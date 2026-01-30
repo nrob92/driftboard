@@ -1449,27 +1449,61 @@ export function CanvasEditor() {
       }
 
       if (newImages.length > 0) {
-        // Update folder with new image IDs
-        const updatedFolders = folders.map((f) =>
-          f.id === folderId
-            ? { ...f, imageIds: [...f.imageIds, ...newImages.map(img => img.id)] }
-            : f
-        );
-        
+        // Calculate total image count in folder
+        const totalImageCount = targetFolder.imageIds.length + newImages.length;
+
+        // Calculate minimum required size for all images
+        const minSize = calculateMinimumFolderSize(totalImageCount, targetFolder.width);
+
+        // Determine if folder needs to grow
+        const currentHeight = targetFolder.height ?? getFolderBorderHeight(targetFolder, targetFolder.imageIds.length);
+        const needsResize = minSize.width > targetFolder.width || minSize.height > currentHeight;
+
+        // Update folder with new image IDs and potentially new dimensions
+        const updatedFolders = folders.map((f) => {
+          if (f.id === folderId) {
+            return {
+              ...f,
+              imageIds: [...f.imageIds, ...newImages.map(img => img.id)],
+              width: needsResize ? Math.max(f.width, minSize.width) : f.width,
+              height: needsResize ? Math.max(currentHeight, minSize.height) : f.height,
+            };
+          }
+          return f;
+        });
+
         const allImages = [...images, ...newImages];
-        
+
+        // If folder was resized, reflow all images in the folder
+        let finalImages = allImages;
+        if (needsResize) {
+          const updatedFolder = updatedFolders.find(f => f.id === folderId)!;
+          const allFolderImages = allImages.filter(img => updatedFolder.imageIds.includes(img.id));
+          const reflowedImages = reflowImagesInFolder(
+            allFolderImages,
+            updatedFolder.x,
+            updatedFolder.y,
+            updatedFolder.width
+          );
+          finalImages = allImages.map(img => {
+            const reflowed = reflowedImages.find(r => r.id === img.id);
+            return reflowed ? reflowed : img;
+          });
+        }
+
         // Resolve any folder overlaps (folder got bigger)
         const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
           updatedFolders,
-          allImages,
+          finalImages,
           folderId
         );
-        
+
         setFolders(resolvedFolders);
         setImages(resolvedImages);
 
-        // Save photo edits to Supabase
+        // Save photo edits and folder dimensions to Supabase
         if (user) {
+          // Save new images
           const imagesToSave = newImages.filter(img => img.storagePath);
           if (imagesToSave.length > 0) {
             const editsToSave = imagesToSave.map(img => ({
@@ -1506,6 +1540,35 @@ export function CanvasEditor() {
             await supabase
               .from('photo_edits')
               .upsert(editsToSave, { onConflict: 'storage_path,user_id' });
+          }
+
+          // Update folder dimensions if they changed
+          if (needsResize) {
+            const updatedFolder = resolvedFolders.find(f => f.id === folderId);
+            if (updatedFolder) {
+              await supabase
+                .from('photo_folders')
+                .update({
+                  width: Math.round(updatedFolder.width),
+                  ...(updatedFolder.height != null && { height: Math.round(updatedFolder.height) }),
+                })
+                .eq('id', folderId)
+                .eq('user_id', user.id);
+            }
+          }
+
+          // Update positions of existing images if folder was reflowed
+          if (needsResize) {
+            const existingFolderImages = resolvedImages.filter(
+              img => img.folderId === folderId && img.storagePath && !newImages.find(n => n.id === img.id)
+            );
+            for (const img of existingFolderImages) {
+              await supabase
+                .from('photo_edits')
+                .update({ x: Math.round(img.x), y: Math.round(img.y) })
+                .eq('storage_path', img.storagePath!)
+                .eq('user_id', user.id);
+            }
           }
         }
         
