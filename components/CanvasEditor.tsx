@@ -151,6 +151,12 @@ const calculateColsFromWidth = (folderWidth: number): number => {
   return Math.max(1, cols);
 };
 
+// Determine layout mode based on folder width
+const getFolderLayoutMode = (folderWidth: number): 'grid' | 'stack' => {
+  const cols = calculateColsFromWidth(folderWidth);
+  return cols === 1 ? 'stack' : 'grid';
+};
+
 // Reflow images within a folder based on its width
 const reflowImagesInFolder = (
   folderImages: CanvasImage[],
@@ -158,24 +164,47 @@ const reflowImagesInFolder = (
   folderY: number,
   folderWidth: number
 ): CanvasImage[] => {
-  const cols = calculateColsFromWidth(folderWidth);
-  const { folderPadding, imageMaxSize } = GRID_CONFIG;
-  
+  const layoutMode = getFolderLayoutMode(folderWidth);
+  const { folderPadding, imageMaxSize, imageGap } = GRID_CONFIG;
+
   // Border starts at folderX, so images start at folderX + folderPadding
   // Border is 30px below label (folderY), add padding for top of content area
   const contentStartX = folderX + folderPadding;
   const contentStartY = folderY + 30 + folderPadding; // 30px for label gap + padding
-  
+
+  if (layoutMode === 'stack') {
+    // Vertical stacking mode - images in single column with vertical gaps
+    return folderImages.map((img, index) => {
+      const imgWidth = Math.min(img.width * img.scaleX, imageMaxSize);
+      const imgHeight = Math.min(img.height * img.scaleY, imageMaxSize);
+
+      // Center horizontally in folder
+      const availableWidth = folderWidth - (2 * folderPadding);
+      const cellOffsetX = (availableWidth - imgWidth) / 2;
+
+      // Stack vertically with gaps
+      const yOffset = index * (imageMaxSize + imageGap);
+
+      return {
+        ...img,
+        x: contentStartX + cellOffsetX,
+        y: contentStartY + yOffset,
+      };
+    });
+  }
+
+  // Grid mode - original multi-column layout
+  const cols = calculateColsFromWidth(folderWidth);
   return folderImages.map((img, index) => {
     const col = index % cols;
     const row = Math.floor(index / cols);
-    
+
     // Center images in their cells
     const imgWidth = Math.min(img.width * img.scaleX, imageMaxSize);
     const imgHeight = Math.min(img.height * img.scaleY, imageMaxSize);
     const cellOffsetX = (imageMaxSize - imgWidth) / 2;
     const cellOffsetY = (imageMaxSize - imgHeight) / 2;
-    
+
     return {
       ...img,
       x: contentStartX + col * CELL_SIZE + cellOffsetX,
@@ -186,12 +215,22 @@ const reflowImagesInFolder = (
 
 // Calculate folder bounding box (including label)
 const getFolderBounds = (folder: PhotoFolder, imageCount: number) => {
-  const cols = calculateColsFromWidth(folder.width);
-  const rows = Math.ceil(imageCount / cols) || 1;
-  const contentHeight = rows * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
+  const layoutMode = getFolderLayoutMode(folder.width);
+  let contentHeight;
+
+  if (layoutMode === 'stack') {
+    // Stack mode: height based on number of images vertically
+    contentHeight = imageCount * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
+  } else {
+    // Grid mode: existing calculation
+    const cols = calculateColsFromWidth(folder.width);
+    const rows = Math.ceil(imageCount / cols) || 1;
+    contentHeight = rows * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
+  }
+
   const calculatedHeight = 30 + Math.max(contentHeight, 100); // 30px for label gap
   const height = folder.height ?? calculatedHeight;
-  
+
   return {
     x: folder.x,
     y: folder.y,
@@ -207,10 +246,256 @@ const getFolderBorderHeight = (folder: PhotoFolder, imageCount: number): number 
   if (folder.height != null) {
     return Math.max(folder.height - 30, 100); // 30px for label
   }
-  const cols = calculateColsFromWidth(folder.width);
-  const rows = Math.ceil(imageCount / cols) || 1;
-  const contentHeight = rows * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
+
+  const layoutMode = getFolderLayoutMode(folder.width);
+  let contentHeight;
+
+  if (layoutMode === 'stack') {
+    // Stack mode: height based on number of images vertically
+    contentHeight = imageCount * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
+  } else {
+    // Grid mode: existing calculation
+    const cols = calculateColsFromWidth(folder.width);
+    const rows = Math.ceil(imageCount / cols) || 1;
+    contentHeight = rows * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
+  }
+
   return Math.max(contentHeight, 100);
+};
+
+// Interface for image cell positions
+interface ImageCellPosition {
+  imageId: string;
+  col: number;
+  row: number;
+  cellIndex: number;
+}
+
+// Get current grid cell positions for all images in a folder
+const getImageCellPositions = (
+  folderImages: CanvasImage[],
+  folderX: number,
+  folderY: number,
+  currentWidth: number
+): ImageCellPosition[] => {
+  const cols = calculateColsFromWidth(currentWidth);
+  const contentStartX = folderX + GRID_CONFIG.folderPadding;
+  const contentStartY = folderY + 30 + GRID_CONFIG.folderPadding;
+
+  return folderImages.map((img) => {
+    const relativeX = img.x - contentStartX;
+    const relativeY = img.y - contentStartY;
+    const col = Math.max(0, Math.floor(relativeX / CELL_SIZE));
+    const row = Math.max(0, Math.floor(relativeY / CELL_SIZE));
+
+    return {
+      imageId: img.id,
+      col,
+      row,
+      cellIndex: row * cols + col,
+    };
+  });
+};
+
+// Interface for minimum folder size
+interface MinimumSize {
+  width: number;
+  height: number;
+}
+
+// Calculate minimum folder size to fit all images
+const calculateMinimumFolderSize = (
+  imageCount: number,
+  proposedWidth: number
+): MinimumSize => {
+  if (imageCount === 0) {
+    return {
+      width: GRID_CONFIG.minFolderWidth,
+      height: GRID_CONFIG.minFolderHeight,
+    };
+  }
+
+  const layoutMode = getFolderLayoutMode(proposedWidth);
+
+  if (layoutMode === 'stack') {
+    // Stack mode: needs height for all images vertically
+    const contentHeight = imageCount * CELL_SIZE + (2 * GRID_CONFIG.folderPadding);
+    return {
+      width: GRID_CONFIG.minFolderWidth,
+      height: 30 + Math.max(contentHeight, 100),
+    };
+  }
+
+  // Grid mode: calculate minimum based on proposed width
+  const cols = calculateColsFromWidth(proposedWidth);
+  const rows = Math.ceil(imageCount / cols) || 1;
+  const contentHeight = rows * CELL_SIZE + (2 * GRID_CONFIG.folderPadding);
+
+  return {
+    width: proposedWidth,
+    height: 30 + Math.max(contentHeight, 100),
+  };
+};
+
+// Cell assignment for smart positioning
+interface CellAssignment {
+  imageId: string;
+  col: number;
+  row: number;
+}
+
+// Intelligently reposition images only when borders would cut them off
+// Returns cell assignments (row/col) for each image, NOT just sorted IDs
+const smartRepackImages = (
+  folderImages: CanvasImage[],
+  currentPositions: ImageCellPosition[],
+  oldWidth: number,
+  newWidth: number,
+  newHeight?: number
+): CellAssignment[] => {
+  const newCols = calculateColsFromWidth(newWidth);
+
+  // Calculate max rows based on new height (if provided)
+  let newMaxRows = Infinity;
+  if (newHeight != null) {
+    const contentHeight = newHeight - 30; // Subtract label height
+    const availableContentHeight = contentHeight - (2 * GRID_CONFIG.folderPadding);
+    newMaxRows = Math.max(1, Math.floor(availableContentHeight / CELL_SIZE));
+  }
+
+  // Build a map of current cell assignments
+  const imageIdToCell = new Map<string, ImageCellPosition>();
+  currentPositions.forEach((pos) => {
+    imageIdToCell.set(pos.imageId, pos);
+  });
+
+  // Track which images need to be relocated and which can stay
+  const imagesToRelocate: string[] = [];
+  const keptImages: CellAssignment[] = [];
+
+  // First pass: Determine which images can stay in their current cells
+  currentPositions.forEach((pos) => {
+    const isColumnValid = pos.col < newCols;
+    const isRowValid = pos.row < newMaxRows;
+
+    if (isColumnValid && isRowValid) {
+      // Image can stay in its current position
+      keptImages.push({ imageId: pos.imageId, col: pos.col, row: pos.row });
+    } else {
+      // Image needs to be relocated
+      imagesToRelocate.push(pos.imageId);
+    }
+  });
+
+  // Build set of occupied cells (using "row,col" string keys)
+  const occupiedCells = new Set(keptImages.map(img => `${img.row},${img.col}`));
+
+  // Second pass: Find new positions for relocated images
+  const relocatedImages: CellAssignment[] = [];
+
+  for (const imageId of imagesToRelocate) {
+    const originalPos = imageIdToCell.get(imageId)!;
+    let foundCol = -1;
+    let foundRow = -1;
+
+    // Strategy 1: Try to stay in same row (move left)
+    if (originalPos.row < newMaxRows) {
+      for (let col = newCols - 1; col >= 0; col--) {
+        const key = `${originalPos.row},${col}`;
+        if (!occupiedCells.has(key)) {
+          foundRow = originalPos.row;
+          foundCol = col;
+          break;
+        }
+      }
+    }
+
+    // Strategy 2: Find any available cell (spiral search from original position)
+    if (foundCol === -1) {
+      const startRow = Math.min(originalPos.row, newMaxRows - 1);
+      const startCol = Math.min(originalPos.col, newCols - 1);
+
+      // Spiral outward from starting position
+      outerLoop:
+      for (let radius = 0; radius < Math.max(newMaxRows, newCols) * 2; radius++) {
+        for (let dr = -radius; dr <= radius; dr++) {
+          for (let dc = -radius; dc <= radius; dc++) {
+            if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue;
+
+            const checkRow = startRow + dr;
+            const checkCol = startCol + dc;
+
+            if (checkRow >= 0 && checkRow < newMaxRows && checkCol >= 0 && checkCol < newCols) {
+              const key = `${checkRow},${checkCol}`;
+              if (!occupiedCells.has(key)) {
+                foundRow = checkRow;
+                foundCol = checkCol;
+                break outerLoop;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (foundCol !== -1 && foundRow !== -1) {
+      relocatedImages.push({ imageId, col: foundCol, row: foundRow });
+      occupiedCells.add(`${foundRow},${foundCol}`);
+    }
+  }
+
+  // Combine kept and relocated images
+  return [...keptImages, ...relocatedImages];
+};
+
+// Position images at specific cells (not sequential like reflowImagesInFolder)
+const positionImagesInCells = (
+  folderImages: CanvasImage[],
+  cellAssignments: CellAssignment[],
+  folderX: number,
+  folderY: number,
+  folderWidth: number
+): CanvasImage[] => {
+  const { folderPadding, imageMaxSize } = GRID_CONFIG;
+  const layoutMode = getFolderLayoutMode(folderWidth);
+
+  const contentStartX = folderX + folderPadding;
+  const contentStartY = folderY + 30 + folderPadding;
+
+  // Create a map of image ID to cell assignment
+  const assignmentMap = new Map<string, CellAssignment>();
+  cellAssignments.forEach((a) => assignmentMap.set(a.imageId, a));
+
+  return folderImages.map((img) => {
+    const assignment = assignmentMap.get(img.id);
+    if (!assignment) return img; // No assignment, keep as is
+
+    const imgWidth = Math.min(img.width * img.scaleX, imageMaxSize);
+    const imgHeight = Math.min(img.height * img.scaleY, imageMaxSize);
+
+    if (layoutMode === 'stack') {
+      // Stack mode: single column, position based on row index
+      const availableWidth = folderWidth - (2 * folderPadding);
+      const cellOffsetX = (availableWidth - imgWidth) / 2;
+      const yOffset = assignment.row * CELL_SIZE;
+
+      return {
+        ...img,
+        x: contentStartX + cellOffsetX,
+        y: contentStartY + yOffset,
+      };
+    }
+
+    // Grid mode: position at specific col/row
+    const cellOffsetX = (imageMaxSize - imgWidth) / 2;
+    const cellOffsetY = (imageMaxSize - imgHeight) / 2;
+
+    return {
+      ...img,
+      x: contentStartX + assignment.col * CELL_SIZE + cellOffsetX,
+      y: contentStartY + assignment.row * CELL_SIZE + cellOffsetY,
+    };
+  });
 };
 
 // Check if two rectangles overlap
@@ -355,6 +640,13 @@ export function CanvasEditor() {
   const [dragHoveredFolderId, setDragHoveredFolderId] = useState<string | null>(null);
   const [resizingFolderId, setResizingFolderId] = useState<string | null>(null);
   const [hoveredFolderBorder, setHoveredFolderBorder] = useState<string | null>(null);
+  const [dragGhostPosition, setDragGhostPosition] = useState<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    folderId: string;
+  } | null>(null);
   const folderFileInputRef = useRef<HTMLInputElement>(null);
   const { user } = useAuth();
 
@@ -1402,7 +1694,7 @@ export function CanvasEditor() {
     const stage = transformer.getStage();
     if (!stage) return;
 
-    const selectedNode = stage.findOne(`.${selectedId}`);
+    const selectedNode = stage.findOne(`#${selectedId}`);
     if (selectedNode) {
       transformer.nodes([selectedNode]);
       transformer.getLayer()?.batchDraw();
@@ -1478,7 +1770,8 @@ export function CanvasEditor() {
         
         // Only snap if close enough to cell center
         if (distanceToCellCenter > snapThreshold) {
-          // Too far from cell center - allow free dragging
+          // Too far from cell center - clear ghost and allow free dragging
+          setDragGhostPosition(null);
           return;
         }
         
@@ -1569,9 +1862,18 @@ export function CanvasEditor() {
         const imgHeight = Math.min(currentImg.height * currentImg.scaleY, imageMaxSize);
         const cellOffsetX = (imageMaxSize - imgWidth) / 2;
         const cellOffsetY = (imageMaxSize - imgHeight) / 2;
-        
+
         const finalX = contentStartX + finalCol * CELL_SIZE + cellOffsetX;
         const finalY = contentStartY + finalRow * CELL_SIZE + cellOffsetY;
+
+        // Update ghost placeholder position
+        setDragGhostPosition({
+          x: finalX,
+          y: finalY,
+          width: imgWidth,
+          height: imgHeight,
+          folderId: targetFolderId,
+        });
         
         // Update positions in real-time
         setImages((prev) =>
@@ -1586,11 +1888,17 @@ export function CanvasEditor() {
           })
         );
         
-        // Update swapped image node position instantly
+        // Animate swapped image position with iOS-like smooth transition
         if (swapImgId && swapX !== undefined && swapY !== undefined) {
           const swapNode = node.getStage()?.findOne(`#${swapImgId}`);
           if (swapNode) {
-            swapNode.setAttrs({ x: swapX, y: swapY });
+            // Smooth 150ms animation (iOS-like)
+            swapNode.to({
+              x: swapX,
+              y: swapY,
+              duration: 0.15,
+              easing: Konva.Easings.EaseOut,
+            });
             // Track swapped image for saving later
             lastSwappedImageRef.current = { id: swapImgId, x: swapX, y: swapY };
           }
@@ -1614,7 +1922,10 @@ export function CanvasEditor() {
       const node = e.target;
       const currentX = node.x();
       const currentY = node.y();
-      
+
+      // Clear ghost placeholder when drag ends
+      setDragGhostPosition(null);
+
       let newX = currentX;
       let newY = currentY;
 
@@ -1630,17 +1941,20 @@ export function CanvasEditor() {
           const currentCenterX = currentX + currentImg.width / 2;
           const currentCenterY = currentY + currentImg.height / 2;
 
-          // Check if image was dropped into a folder (or is already in one)
-          let targetFolderId: string | undefined = currentImg.folderId;
-          let targetFolder: PhotoFolder | undefined = folders.find(f => f.id === currentImg.folderId);
-          
-          // Check if dropped into a different folder
+          // Check which folder the image was dropped into (if any)
+          let targetFolderId: string | undefined = undefined;
+          let targetFolder: PhotoFolder | undefined = undefined;
+
+          // Check all folders to see if image center is inside any of them
           for (const folder of folders) {
-            const bounds = getFolderBounds(folder, folder.imageIds.length);
-            const boundTop = folder.y + 30;
-            const boundBottom = bounds.bottom;
-            
-            if (currentCenterX >= bounds.x && currentCenterX <= bounds.right &&
+            // Use folder's actual height (or calculated height) for bounds
+            const folderHeight = folder.height ?? getFolderBorderHeight(folder, folder.imageIds.length);
+            const boundLeft = folder.x;
+            const boundRight = folder.x + folder.width;
+            const boundTop = folder.y + 30; // Below label
+            const boundBottom = folder.y + 30 + folderHeight;
+
+            if (currentCenterX >= boundLeft && currentCenterX <= boundRight &&
                 currentCenterY >= boundTop && currentCenterY <= boundBottom) {
               targetFolderId = folder.id;
               targetFolder = folder;
@@ -1648,8 +1962,38 @@ export function CanvasEditor() {
             }
           }
 
+          // If image is IN a folder, snap to nearest grid cell
+          if (targetFolderId && targetFolder) {
+            const { folderPadding, imageMaxSize } = GRID_CONFIG;
+            const cols = calculateColsFromWidth(targetFolder.width);
+            const contentStartX = targetFolder.x + folderPadding;
+            const contentStartY = targetFolder.y + 30 + folderPadding;
+
+            // Calculate max rows based on folder's actual height
+            const folderHeight = targetFolder.height ?? getFolderBorderHeight(targetFolder, targetFolder.imageIds.length);
+            const contentHeight = folderHeight - (2 * folderPadding);
+            const maxRows = Math.max(1, Math.floor(contentHeight / CELL_SIZE));
+
+            // Calculate which cell the image should snap to based on current position
+            const relativeX = currentX - contentStartX;
+            const relativeY = currentY - contentStartY;
+            const targetCol = Math.max(0, Math.min(cols - 1, Math.round(relativeX / CELL_SIZE)));
+            const targetRow = Math.max(0, Math.min(maxRows - 1, Math.round(relativeY / CELL_SIZE)));
+
+            // Calculate snapped position
+            const imgWidth = Math.min(currentImg.width * currentImg.scaleX, imageMaxSize);
+            const imgHeight = Math.min(currentImg.height * currentImg.scaleY, imageMaxSize);
+            const cellOffsetX = (imageMaxSize - imgWidth) / 2;
+            const cellOffsetY = (imageMaxSize - imgHeight) / 2;
+
+            newX = contentStartX + targetCol * CELL_SIZE + cellOffsetX;
+            newY = contentStartY + targetRow * CELL_SIZE + cellOffsetY;
+
+            // Update node position to snapped position
+            node.position({ x: newX, y: newY });
+          }
           // If image is outside folders, use snapping logic
-          if (!targetFolderId) {
+          else if (!targetFolderId) {
             const nearest = findNearestPhoto(currentCenterX, currentCenterY, images, node.id(), 100);
             if (nearest) {
               newX = nearest.x - currentImg.width / 2;
@@ -2733,31 +3077,84 @@ export function CanvasEditor() {
                     }}
                     onDragMove={(e) => {
                       const handleSize = 20;
-                      const newWidth = Math.max(GRID_CONFIG.minFolderWidth, e.target.x() - borderX + handleSize);
-                      const newContentHeight = Math.max(100, e.target.y() - borderY + handleSize);
-                      const newTotalHeight = 30 + newContentHeight;
+                      const proposedWidth = Math.max(GRID_CONFIG.minFolderWidth, e.target.x() - borderX + handleSize);
+                      const proposedContentHeight = Math.max(100, e.target.y() - borderY + handleSize);
+                      const proposedHeight = 30 + proposedContentHeight;
                       const now = Date.now();
-                      
-                      // Update folder width and height
+
+                      // Get folder images
+                      const folderImgs = images.filter(img => currentFolder.imageIds.includes(img.id));
+
+                      // Calculate minimum size to fit all images
+                      const minSize = calculateMinimumFolderSize(folderImgs.length, proposedWidth);
+
+                      // Enforce minimum size (user cannot resize smaller than needed)
+                      const newWidth = Math.max(proposedWidth, minSize.width);
+                      const newHeight = Math.max(proposedHeight, minSize.height);
+                      const newContentHeight = newHeight - 30;
+
+                      // Get current cell positions for images
+                      const oldCols = calculateColsFromWidth(currentFolder.width);
+                      const newCols = calculateColsFromWidth(newWidth);
+                      const dimensionsChanged = newWidth !== currentFolder.width || newHeight !== currentFolder.height;
+                      const needsRepack = newCols !== oldCols || newHeight < (currentFolder.height ?? Infinity);
+
+                      // Get current positions
+                      const currentPositions = folderImgs.length > 0
+                        ? getImageCellPositions(folderImgs, currentFolder.x, currentFolder.y, currentFolder.width)
+                        : [];
+
+                      // Calculate cell assignments - preserve positions unless collision
+                      let cellAssignments: CellAssignment[] = [];
+                      if (folderImgs.length > 0) {
+                        if (dimensionsChanged && needsRepack) {
+                          // Need to repack - some images may need to move
+                          cellAssignments = smartRepackImages(
+                            folderImgs,
+                            currentPositions,
+                            currentFolder.width,
+                            newWidth,
+                            newHeight
+                          );
+                        } else {
+                          // No repack needed - keep images in their current cells
+                          cellAssignments = currentPositions.map(pos => ({
+                            imageId: pos.imageId,
+                            col: pos.col,
+                            row: pos.row,
+                          }));
+                        }
+                      }
+
+                      // Update folder with new dimensions (keep same imageIds order)
                       const updatedFolders = folders.map((f) =>
-                        f.id === currentFolder.id ? { ...f, width: newWidth, height: newTotalHeight } : f
+                        f.id === currentFolder.id
+                          ? { ...f, width: newWidth, height: newHeight }
+                          : f
                       );
-                      
+
                       // Keep handle at bottom-right corner
                       e.target.x(borderX + newWidth - handleSize);
                       e.target.y(borderY + newContentHeight - handleSize);
-                      
-                      // Reflow images within the folder (width change affects layout)
-                      const folderImgs = images.filter(img => currentFolder.imageIds.includes(img.id));
+
+                      // Position images at their specific cells (preserving positions)
                       let updatedImages = [...images];
-                      if (folderImgs.length > 0) {
-                        const reflowedImages = reflowImagesInFolder(folderImgs, currentFolder.x, currentFolder.y, newWidth);
+                      if (folderImgs.length > 0 && cellAssignments.length > 0) {
+                        const positionedImages = positionImagesInCells(
+                          folderImgs,
+                          cellAssignments,
+                          currentFolder.x,
+                          currentFolder.y,
+                          newWidth
+                        );
+
                         updatedImages = images.map((img) => {
-                          const reflowed = reflowedImages.find(r => r.id === img.id);
-                          return reflowed ? reflowed : img;
+                          const positioned = positionedImages.find(p => p.id === img.id);
+                          return positioned ? positioned : img;
                         });
                       }
-                      
+
+                      // Throttled overlap checking
                       if (now - lastOverlapCheckRef.current >= overlapThrottleMs) {
                         lastOverlapCheckRef.current = now;
                         const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
@@ -2777,11 +3174,108 @@ export function CanvasEditor() {
                       if (container) container.style.cursor = 'default';
                       setResizingFolderId(null);
                       setHoveredFolderBorder(null);
-                      
+
+                      // Get current folder from state (may have been updated during drag)
+                      const resizedFolder = folders.find(f => f.id === currentFolder.id);
+                      if (!resizedFolder) return;
+
+                      // Get folder images and their current positions
+                      const folderImgs = images.filter(img => resizedFolder.imageIds.includes(img.id));
+                      const imageCount = folderImgs.length;
+
+                      if (imageCount === 0) {
+                        // No images - just finalize
+                        const { folders: finalFolders, images: finalImages } = resolveOverlapsAndReflow(
+                          folders,
+                          images,
+                          currentFolder.id
+                        );
+                        setFolders(finalFolders);
+                        setImages(finalImages);
+                        saveToHistory();
+                        return;
+                      }
+
+                      // Get current cell positions of images
+                      const currentPositions = getImageCellPositions(
+                        folderImgs,
+                        resizedFolder.x,
+                        resizedFolder.y,
+                        resizedFolder.width
+                      );
+
+                      // Calculate snapped dimensions based on USER'S resize (not image count)
+                      // This allows empty cells for dragging photos into
+                      const cols = calculateColsFromWidth(resizedFolder.width);
+
+                      // Calculate rows based on the height the user dragged to
+                      const currentContentHeight = (resizedFolder.height ?? 130) - 30; // Subtract label
+                      const availableForCells = currentContentHeight - (2 * GRID_CONFIG.folderPadding) + GRID_CONFIG.imageGap;
+                      const rowsFromHeight = Math.max(1, Math.floor(availableForCells / CELL_SIZE));
+
+                      // But ensure we have enough rows for all images (minimum needed)
+                      const maxRowWithImage = imageCount > 0 ? Math.max(0, ...currentPositions.map(p => p.row)) : 0;
+                      const minRowsNeeded = maxRowWithImage + 1;
+                      const rows = Math.max(rowsFromHeight, minRowsNeeded);
+
+                      // Calculate snapped width: exact fit for columns with proper padding
+                      const snappedWidth = (2 * GRID_CONFIG.folderPadding) + (cols * CELL_SIZE) - GRID_CONFIG.imageGap;
+
+                      // Calculate snapped height: based on rows the user wants (with minimum for images)
+                      const snappedContentHeight = (2 * GRID_CONFIG.folderPadding) + (rows * CELL_SIZE) - GRID_CONFIG.imageGap;
+                      const snappedHeight = 30 + Math.max(snappedContentHeight, 100);
+
+                      // Check if snapped dimensions would cut off any images
+                      const snappedCols = calculateColsFromWidth(snappedWidth);
+                      const snappedMaxRows = Math.max(1, Math.floor((snappedHeight - 30 - 2 * GRID_CONFIG.folderPadding + GRID_CONFIG.imageGap) / CELL_SIZE));
+
+                      // Determine cell assignments - preserve positions if possible
+                      let cellAssignments: CellAssignment[];
+                      const needsRepack = currentPositions.some(p => p.col >= snappedCols || p.row >= snappedMaxRows);
+
+                      if (needsRepack) {
+                        // Some images would be cut off - need to repack
+                        cellAssignments = smartRepackImages(
+                          folderImgs,
+                          currentPositions,
+                          resizedFolder.width,
+                          snappedWidth,
+                          snappedHeight
+                        );
+                      } else {
+                        // No images cut off - keep them in their current cells (PRESERVE POSITIONS)
+                        cellAssignments = currentPositions.map(pos => ({
+                          imageId: pos.imageId,
+                          col: pos.col,
+                          row: pos.row,
+                        }));
+                      }
+
+                      // Update folder with snapped dimensions
+                      const snappedFolders = folders.map(f =>
+                        f.id === resizedFolder.id
+                          ? { ...f, width: snappedWidth, height: snappedHeight }
+                          : f
+                      );
+
+                      // Position images at their cells (preserving positions when expanding)
+                      const positionedImages = positionImagesInCells(
+                        folderImgs,
+                        cellAssignments,
+                        resizedFolder.x,
+                        resizedFolder.y,
+                        snappedWidth
+                      );
+
+                      const snappedImages = images.map(img => {
+                        const positioned = positionedImages.find(p => p.id === img.id);
+                        return positioned ? positioned : img;
+                      });
+
                       // Final overlap resolution to ensure clean state
                       const { folders: finalFolders, images: finalImages } = resolveOverlapsAndReflow(
-                        folders,
-                        images,
+                        snappedFolders,
+                        snappedImages,
                         currentFolder.id
                       );
                       setFolders(finalFolders);
@@ -2820,6 +3314,22 @@ export function CanvasEditor() {
                       }
                     }}
                   />
+
+                  {/* Ghost/placeholder for drag target */}
+                  {dragGhostPosition && dragGhostPosition.folderId === currentFolder.id && (
+                    <Rect
+                      x={dragGhostPosition.x}
+                      y={dragGhostPosition.y}
+                      width={dragGhostPosition.width}
+                      height={dragGhostPosition.height}
+                      fill="rgba(62, 207, 142, 0.2)"
+                      stroke="#3ECF8E"
+                      strokeWidth={2}
+                      dash={[5, 5]}
+                      cornerRadius={8}
+                      listening={false}
+                    />
+                  )}
                 </Group>
               );
             })}
@@ -2857,7 +3367,8 @@ export function CanvasEditor() {
               />
             ))}
 
-            <Transformer
+            {/* Transformer disabled - no selection handles */}
+            {/* <Transformer
               ref={transformerRef}
               boundBoxFunc={(oldBox, newBox) => {
                 // Limit resize
@@ -2866,7 +3377,7 @@ export function CanvasEditor() {
                 }
                 return newBox;
               }}
-            />
+            /> */}
           </Layer>
         </Stage>
         
