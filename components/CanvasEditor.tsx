@@ -1937,7 +1937,7 @@ export function CanvasEditor() {
           height: imgHeight,
           folderId: targetFolderId,
         });
-        
+
         // Update positions in real-time
         setImages((prev) =>
           prev.map((img) => {
@@ -1950,26 +1950,12 @@ export function CanvasEditor() {
             return img;
           })
         );
-        
-        // Animate swapped image position with iOS-like smooth transition
+
+        // Track swapped image for saving later
         if (swapImgId && swapX !== undefined && swapY !== undefined) {
-          const swapNode = node.getStage()?.findOne(`#${swapImgId}`);
-          if (swapNode) {
-            // Smooth 150ms animation (iOS-like)
-            swapNode.to({
-              x: swapX,
-              y: swapY,
-              duration: 0.15,
-              easing: Konva.Easings.EaseOut,
-            });
-            // Track swapped image for saving later
-            lastSwappedImageRef.current = { id: swapImgId, x: swapX, y: swapY };
-          }
+          lastSwappedImageRef.current = { id: swapImgId, x: swapX, y: swapY };
         }
-        // Don't clear lastSwappedImageRef here - when hovering over the target cell after a swap,
-        // the target appears "empty" (other image moved out) so we'd clear it and lose the swap
-        // info. We only clear it in handleObjectDragEnd after saving.
-        
+
         // Update dragged image position using setAttrs
         node.setAttrs({ x: finalX, y: finalY });
       }
@@ -2259,8 +2245,8 @@ export function CanvasEditor() {
                   const swappedImg = resolvedImages.find(img => img.id === lastSwappedImageRef.current!.id);
                   if (swappedImg?.storagePath) {
                     supabase.from('photo_edits')
-                      .update({ 
-                        x: Math.round(swappedImg.x), 
+                      .update({
+                        x: Math.round(swappedImg.x),
                         y: Math.round(swappedImg.y),
                         folder_id: swappedImg.folderId || null
                       })
@@ -2315,7 +2301,7 @@ export function CanvasEditor() {
                 if (swappedImg?.storagePath) {
                   const swappedX = swappedRef.x;
                   const swappedY = swappedRef.y;
-                  
+
                   // Use swappedRef (captured) - the ref may be cleared before the callback runs
                   setImages((prev) =>
                     prev.map((img) =>
@@ -2324,11 +2310,11 @@ export function CanvasEditor() {
                         : img
                     )
                   );
-                  
+
                   supabase.from('photo_edits')
-                    .update({ 
-                      x: Math.round(swappedX), 
-                      y: Math.round(swappedY) 
+                    .update({
+                      x: Math.round(swappedX),
+                      y: Math.round(swappedY)
                     })
                     .eq('storage_path', swappedImg.storagePath)
                     .eq('user_id', user.id)
@@ -3853,6 +3839,36 @@ function ImageNode({
 }) {
   const [img, imgStatus] = useImage(image.src, 'anonymous');
   const imageRef = useRef<Konva.Image>(null);
+  const prevPosRef = useRef({ x: image.x, y: image.y });
+  const isDraggingRef = useRef(false);
+
+  // Smooth position transitions when x/y changes (but not during drag)
+  useEffect(() => {
+    const node = imageRef.current;
+    if (!node || isDraggingRef.current) return;
+
+    const prevX = prevPosRef.current.x;
+    const prevY = prevPosRef.current.y;
+    const newX = image.x;
+    const newY = image.y;
+
+    // Only animate if position actually changed
+    if (Math.abs(newX - prevX) > 0.5 || Math.abs(newY - prevY) > 0.5) {
+      // Set to previous position first
+      node.position({ x: prevX, y: prevY });
+
+      // Then smoothly animate to new position
+      node.to({
+        x: newX,
+        y: newY,
+        duration: 0.2,
+        easing: Konva.Easings.EaseOut,
+      });
+
+      // Update ref
+      prevPosRef.current = { x: newX, y: newY };
+    }
+  }, [image.x, image.y]);
 
   // Check if any channel curves are modified
   const isCurveChannelModified = (points: CurvePoint[]) => {
@@ -4039,7 +4055,16 @@ function ImageNode({
         const container = e.target.getStage()?.container();
         if (container) container.style.cursor = 'default';
       }}
-      onDragEnd={onDragEnd}
+      onDragStart={(e) => {
+        isDraggingRef.current = true;
+        // Move to top layer when dragging starts
+        e.target.moveToTop();
+      }}
+      onDragEnd={(e) => {
+        isDraggingRef.current = false;
+        prevPosRef.current = { x: image.x, y: image.y };
+        onDragEnd(e);
+      }}
       onDragMove={onDragMove}
       onTransformEnd={() => {
         const node = imageRef.current;
