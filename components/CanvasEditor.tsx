@@ -31,6 +31,52 @@ const DEFAULT_CURVES: ChannelCurves = {
   blue: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
 };
 
+interface HSLAdjustments {
+  hue: number; // -100 to +100
+  saturation: number; // -100 to +100
+  luminance: number; // -100 to +100
+}
+
+interface ColorHSL {
+  red: HSLAdjustments;
+  orange: HSLAdjustments;
+  yellow: HSLAdjustments;
+  green: HSLAdjustments;
+  aqua: HSLAdjustments;
+  blue: HSLAdjustments;
+  purple: HSLAdjustments;
+  magenta: HSLAdjustments;
+}
+
+interface SplitToning {
+  shadowHue: number; // 0-360
+  shadowSaturation: number; // 0-100
+  highlightHue: number; // 0-360
+  highlightSaturation: number; // 0-100
+  balance: number; // -100 to +100
+}
+
+interface ColorGrading {
+  shadowLum: number;     // -100 to +100
+  midtoneLum: number;    // -100 to +100
+  highlightLum: number;  // -100 to +100
+  midtoneHue: number;    // 0-360
+  midtoneSat: number;    // 0-100
+  globalHue: number;     // 0-360
+  globalSat: number;     // 0-100
+  globalLum: number;     // -100 to +100
+  blending: number;      // 0-100
+}
+
+interface ColorCalibration {
+  redHue: number;        // -100 to +100
+  redSaturation: number; // -100 to +100
+  greenHue: number;      // -100 to +100
+  greenSaturation: number; // -100 to +100
+  blueHue: number;       // -100 to +100
+  blueSaturation: number; // -100 to +100
+}
+
 interface CanvasImage {
   id: string;
   x: number;
@@ -50,15 +96,27 @@ interface CanvasImage {
   shadows: number;
   whites: number;
   blacks: number;
+  texture?: number;
   // Color adjustments
   temperature: number; // warm/cool
   vibrance: number;
   saturation: number;
+  shadowTint?: number; // -100 to +100
+  // HSL per color
+  colorHSL?: ColorHSL;
+  // Split Toning
+  splitToning?: SplitToning;
+  // Color Grading
+  colorGrading?: ColorGrading;
+  // Color Calibration
+  colorCalibration?: ColorCalibration;
   // Effects
   clarity: number;
   dehaze: number;
   vignette: number;
   grain: number;
+  grainSize?: number; // 0-100
+  grainRoughness?: number; // 0-100
   // Curves
   curves: ChannelCurves;
   // Legacy (keeping for compatibility)
@@ -86,13 +144,19 @@ interface PhotoEdits {
   shadows: number;
   whites: number;
   blacks: number;
+  texture?: number;
   temperature: number;
   vibrance: number;
   saturation: number;
+  shadow_tint?: number;
+  color_hsl?: ColorHSL;
+  split_toning?: SplitToning;
   clarity: number;
   dehaze: number;
   vignette: number;
   grain: number;
+  grain_size?: number;
+  grain_roughness?: number;
   curves: ChannelCurves;
   brightness: number;
   hue: number;
@@ -1008,13 +1072,13 @@ export function CanvasEditor() {
       }
       
       // Validate and COPY files into an array (FileList becomes empty when input is reset)
-      const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
-      const validFiles = Array.from(files).filter(f => validTypes.includes(f.type));
-      
+      const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/x-adobe-dng'];
+      const validFiles = Array.from(files).filter(f => validTypes.includes(f.type) || f.name.toLowerCase().endsWith('.dng'));
+
       console.log('Valid files:', validFiles.length);
-      
+
       if (validFiles.length === 0) {
-        alert('Please upload JPEG, PNG, or WebP files only.');
+        alert('Please upload JPEG, PNG, WebP, or DNG files only.');
         return;
       }
       
@@ -1605,11 +1669,11 @@ export function CanvasEditor() {
       }
 
       // Validate files
-      const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
-      const validFiles = Array.from(e.target.files).filter(f => validTypes.includes(f.type));
+      const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/x-adobe-dng'];
+      const validFiles = Array.from(e.target.files).filter(f => validTypes.includes(f.type) || f.name.toLowerCase().endsWith('.dng'));
 
       if (validFiles.length === 0) {
-        alert('Please upload JPEG, PNG, or WebP files only.');
+        alert('Please upload JPEG, PNG, WebP, or DNG files only.');
         if (folderFileInputRef.current) {
           folderFileInputRef.current.value = '';
         }
@@ -2916,7 +2980,7 @@ export function CanvasEditor() {
         <input
           ref={folderFileInputRef}
           type="file"
-          accept="image/jpeg,image/png,image/webp"
+          accept="image/jpeg,image/png,image/webp,image/x-adobe-dng,.dng"
           multiple
           onChange={handleFolderFileSelect}
           className="hidden"
@@ -3822,6 +3886,344 @@ const createCurvesFilter = (curves: ChannelCurves) => {
   };
 };
 
+// HSL color adjustment filter - applies hue/sat/lum shifts to specific color ranges
+const createHSLColorFilter = (colorHSL: ColorHSL) => {
+  return function(imageData: ImageData) {
+    const data = imageData.data;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i] / 255;
+      const g = data[i + 1] / 255;
+      const b = data[i + 2] / 255;
+
+      // Convert RGB to HSL
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const l = (max + min) / 2;
+      let h = 0;
+      let s = 0;
+
+      if (max !== min) {
+        const d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+
+        switch (max) {
+          case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
+          case g: h = ((b - r) / d + 2) / 6; break;
+          case b: h = ((r - g) / d + 4) / 6; break;
+        }
+      }
+
+      // Determine which color range this pixel belongs to
+      const hue360 = h * 360;
+      let adjustment: HSLAdjustments | null = null;
+
+      if (hue360 >= 345 || hue360 < 15) adjustment = colorHSL.red;
+      else if (hue360 >= 15 && hue360 < 45) adjustment = colorHSL.orange;
+      else if (hue360 >= 45 && hue360 < 75) adjustment = colorHSL.yellow;
+      else if (hue360 >= 75 && hue360 < 165) adjustment = colorHSL.green;
+      else if (hue360 >= 165 && hue360 < 195) adjustment = colorHSL.aqua;
+      else if (hue360 >= 195 && hue360 < 255) adjustment = colorHSL.blue;
+      else if (hue360 >= 255 && hue360 < 285) adjustment = colorHSL.purple;
+      else if (hue360 >= 285 && hue360 < 345) adjustment = colorHSL.magenta;
+
+      if (adjustment) {
+        // Apply hue shift
+        h += adjustment.hue / 360;
+        if (h < 0) h += 1;
+        if (h > 1) h -= 1;
+
+        // Apply saturation shift
+        s += adjustment.saturation / 100;
+        s = Math.max(0, Math.min(1, s));
+
+        // Apply luminance shift - convert to RGB first, then adjust
+        // Convert HSL back to RGB
+        let newR, newG, newB;
+        if (s === 0) {
+          newR = newG = newB = l;
+        } else {
+          const hue2rgb = (p: number, q: number, t: number) => {
+            if (t < 0) t += 1;
+            if (t > 1) t -= 1;
+            if (t < 1/6) return p + (q - p) * 6 * t;
+            if (t < 1/2) return q;
+            if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+            return p;
+          };
+
+          const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+          const p = 2 * l - q;
+          newR = hue2rgb(p, q, h + 1/3);
+          newG = hue2rgb(p, q, h);
+          newB = hue2rgb(p, q, h - 1/3);
+        }
+
+        // Apply luminance adjustment
+        const lumAdjust = adjustment.luminance / 100;
+        newR = Math.max(0, Math.min(1, newR + lumAdjust));
+        newG = Math.max(0, Math.min(1, newG + lumAdjust));
+        newB = Math.max(0, Math.min(1, newB + lumAdjust));
+
+        data[i] = newR * 255;
+        data[i + 1] = newG * 255;
+        data[i + 2] = newB * 255;
+      }
+    }
+  };
+};
+
+// Split Toning filter - adds color to shadows and highlights
+const createSplitToningFilter = (splitToning: SplitToning) => {
+  return function(imageData: ImageData) {
+    const data = imageData.data;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i] / 255;
+      const g = data[i + 1] / 255;
+      const b = data[i + 2] / 255;
+
+      // Calculate luminance
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+      // Determine if this is shadow or highlight based on balance
+      const balanceFactor = (splitToning.balance + 100) / 200; // -100 to +100 -> 0 to 1
+      const isShadow = lum < balanceFactor;
+
+      const hue = isShadow ? splitToning.shadowHue : splitToning.highlightHue;
+      const saturation = (isShadow ? splitToning.shadowSaturation : splitToning.highlightSaturation) / 100;
+
+      if (saturation > 0) {
+        // Convert hue to RGB
+        const h = hue / 360;
+        const hue2rgb = (p: number, q: number, t: number) => {
+          if (t < 0) t += 1;
+          if (t > 1) t -= 1;
+          if (t < 1/6) return p + (q - p) * 6 * t;
+          if (t < 1/2) return q;
+          if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+          return p;
+        };
+
+        const q = lum < 0.5 ? lum * (1 + saturation) : lum + saturation - lum * saturation;
+        const p = 2 * lum - q;
+
+        const toneR = hue2rgb(p, q, h + 1/3);
+        const toneG = hue2rgb(p, q, h);
+        const toneB = hue2rgb(p, q, h - 1/3);
+
+        // Blend with original based on saturation strength
+        const blend = isShadow ? (1 - lum) : lum; // Stronger effect in shadows or highlights
+        const blendAmount = saturation * blend;
+
+        data[i] = Math.max(0, Math.min(255, (r * (1 - blendAmount) + toneR * blendAmount) * 255));
+        data[i + 1] = Math.max(0, Math.min(255, (g * (1 - blendAmount) + toneG * blendAmount) * 255));
+        data[i + 2] = Math.max(0, Math.min(255, (b * (1 - blendAmount) + toneB * blendAmount) * 255));
+      }
+    }
+  };
+};
+
+// Shadow Tint filter - adds green/magenta tint to shadows
+const createShadowTintFilter = (tint: number) => {
+  return function(imageData: ImageData) {
+    const data = imageData.data;
+    const tintAmount = tint; // -100 to +100 (green to magenta)
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i] / 255;
+      const g = data[i + 1] / 255;
+      const b = data[i + 2] / 255;
+
+      // Calculate luminance
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+      // Apply tint more strongly to darker pixels
+      const shadowStrength = Math.max(0, 1 - lum); // 0 in highlights, 1 in shadows
+      const tintStrength = (Math.abs(tintAmount) / 100) * shadowStrength * 0.3; // Max 30% shift
+
+      if (tintAmount > 0) {
+        // Magenta tint (add red and blue, reduce green)
+        data[i] = Math.min(255, data[i] + tintStrength * 255);
+        data[i + 1] = Math.max(0, data[i + 1] - tintStrength * 255);
+        data[i + 2] = Math.min(255, data[i + 2] + tintStrength * 255);
+      } else {
+        // Green tint (add green, reduce red and blue)
+        data[i] = Math.max(0, data[i] - tintStrength * 255);
+        data[i + 1] = Math.min(255, data[i + 1] + tintStrength * 255);
+        data[i + 2] = Math.max(0, data[i + 2] - tintStrength * 255);
+      }
+    }
+  };
+};
+
+// Color Grading filter - applies color grading to shadows, midtones, and highlights
+const createColorGradingFilter = (colorGrading: ColorGrading) => {
+  return function(imageData: ImageData) {
+    const data = imageData.data;
+    const blending = colorGrading.blending / 100; // 0-100 -> 0-1
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i] / 255;
+      const g = data[i + 1] / 255;
+      const b = data[i + 2] / 255;
+
+      // Calculate luminance
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+      // Determine shadow/midtone/highlight weights using smooth curves
+      const shadowWeight = Math.max(0, 1 - lum * 2); // Peaks at 0, fades by 0.5
+      const highlightWeight = Math.max(0, lum * 2 - 1); // Peaks at 1, fades by 0.5
+      const midtoneWeight = 1 - Math.abs(lum - 0.5) * 2; // Peaks at 0.5
+
+      // Apply luminance adjustments
+      let finalLum = lum;
+      finalLum += (colorGrading.shadowLum / 100) * shadowWeight * 0.5;
+      finalLum += (colorGrading.midtoneLum / 100) * midtoneWeight * 0.5;
+      finalLum += (colorGrading.highlightLum / 100) * highlightWeight * 0.5;
+      finalLum += (colorGrading.globalLum / 100) * 0.5;
+
+      // Apply midtone color if saturation > 0
+      if (colorGrading.midtoneSat > 0 && midtoneWeight > 0) {
+        const h = colorGrading.midtoneHue / 360;
+        const s = (colorGrading.midtoneSat / 100) * midtoneWeight;
+
+        const hue2rgb = (p: number, q: number, t: number) => {
+          if (t < 0) t += 1;
+          if (t > 1) t -= 1;
+          if (t < 1/6) return p + (q - p) * 6 * t;
+          if (t < 1/2) return q;
+          if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+          return p;
+        };
+
+        const q = finalLum < 0.5 ? finalLum * (1 + s) : finalLum + s - finalLum * s;
+        const p = 2 * finalLum - q;
+
+        const toneR = hue2rgb(p, q, h + 1/3);
+        const toneG = hue2rgb(p, q, h);
+        const toneB = hue2rgb(p, q, h - 1/3);
+
+        data[i] = Math.max(0, Math.min(255, (r * (1 - s * blending) + toneR * s * blending) * 255));
+        data[i + 1] = Math.max(0, Math.min(255, (g * (1 - s * blending) + toneG * s * blending) * 255));
+        data[i + 2] = Math.max(0, Math.min(255, (b * (1 - s * blending) + toneB * s * blending) * 255));
+      } else {
+        // Just apply luminance changes
+        const lumChange = finalLum - lum;
+        data[i] = Math.max(0, Math.min(255, (r + lumChange) * 255));
+        data[i + 1] = Math.max(0, Math.min(255, (g + lumChange) * 255));
+        data[i + 2] = Math.max(0, Math.min(255, (b + lumChange) * 255));
+      }
+
+      // Apply global color if saturation > 0
+      if (colorGrading.globalSat > 0) {
+        const r = data[i] / 255;
+        const g = data[i + 1] / 255;
+        const b = data[i + 2] / 255;
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+        const h = colorGrading.globalHue / 360;
+        const s = (colorGrading.globalSat / 100) * blending;
+
+        const hue2rgb = (p: number, q: number, t: number) => {
+          if (t < 0) t += 1;
+          if (t > 1) t -= 1;
+          if (t < 1/6) return p + (q - p) * 6 * t;
+          if (t < 1/2) return q;
+          if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+          return p;
+        };
+
+        const q = lum < 0.5 ? lum * (1 + s) : lum + s - lum * s;
+        const p = 2 * lum - q;
+
+        const toneR = hue2rgb(p, q, h + 1/3);
+        const toneG = hue2rgb(p, q, h);
+        const toneB = hue2rgb(p, q, h - 1/3);
+
+        data[i] = Math.max(0, Math.min(255, (r * (1 - s) + toneR * s) * 255));
+        data[i + 1] = Math.max(0, Math.min(255, (g * (1 - s) + toneG * s) * 255));
+        data[i + 2] = Math.max(0, Math.min(255, (b * (1 - s) + toneB * s) * 255));
+      }
+    }
+  };
+};
+
+// Color Calibration filter - adjusts the hue and saturation of RGB primaries
+const createColorCalibrationFilter = (colorCal: ColorCalibration) => {
+  return function(imageData: ImageData) {
+    const data = imageData.data;
+
+    for (let i = 0; i < data.length; i += 4) {
+      let r = data[i] / 255;
+      let g = data[i + 1] / 255;
+      let b = data[i + 2] / 255;
+
+      // Determine which primary color is dominant
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const delta = max - min;
+
+      if (delta > 0.01) { // Only apply to non-gray pixels
+        // Calculate hue (0-360)
+        let hue = 0;
+        if (max === r) {
+          hue = ((g - b) / delta) % 6;
+        } else if (max === g) {
+          hue = (b - r) / delta + 2;
+        } else {
+          hue = (r - g) / delta + 4;
+        }
+        hue = (hue * 60 + 360) % 360;
+
+        // Determine which primary this pixel belongs to and blend weights
+        const redWeight = hue < 60 || hue > 300 ? 1 - Math.abs((hue < 60 ? hue : hue - 360) - 0) / 60 : 0;
+        const greenWeight = hue >= 60 && hue < 180 ? 1 - Math.abs(hue - 120) / 60 : 0;
+        const blueWeight = hue >= 180 && hue < 300 ? 1 - Math.abs(hue - 240) / 60 : 0;
+
+        // Apply hue shifts
+        const hueShift = (redWeight * colorCal.redHue +
+                          greenWeight * colorCal.greenHue +
+                          blueWeight * colorCal.blueHue) / 100 * 30; // Scale to reasonable range
+
+        // Apply saturation adjustments
+        const satShift = (redWeight * colorCal.redSaturation +
+                          greenWeight * colorCal.greenSaturation +
+                          blueWeight * colorCal.blueSaturation) / 100;
+
+        // Convert to HSL
+        const l = (max + min) / 2;
+        const s = delta / (1 - Math.abs(2 * l - 1));
+
+        // Apply adjustments
+        const newHue = (hue + hueShift + 360) % 360;
+        const newSat = Math.max(0, Math.min(1, s * (1 + satShift)));
+
+        // Convert back to RGB
+        const c = (1 - Math.abs(2 * l - 1)) * newSat;
+        const x = c * (1 - Math.abs(((newHue / 60) % 2) - 1));
+        const m = l - c / 2;
+
+        let r1 = 0, g1 = 0, b1 = 0;
+        if (newHue < 60) { r1 = c; g1 = x; b1 = 0; }
+        else if (newHue < 120) { r1 = x; g1 = c; b1 = 0; }
+        else if (newHue < 180) { r1 = 0; g1 = c; b1 = x; }
+        else if (newHue < 240) { r1 = 0; g1 = x; b1 = c; }
+        else if (newHue < 300) { r1 = x; g1 = 0; b1 = c; }
+        else { r1 = c; g1 = 0; b1 = x; }
+
+        r = r1 + m;
+        g = g1 + m;
+        b = b1 + m;
+      }
+
+      data[i] = Math.max(0, Math.min(255, r * 255));
+      data[i + 1] = Math.max(0, Math.min(255, g * 255));
+      data[i + 2] = Math.max(0, Math.min(255, b * 255));
+    }
+  };
+};
+
 // Image node component
 function ImageNode({
   image,
@@ -3889,7 +4291,7 @@ function ImageNode({
   );
 
   // Check if any filters are active
-  const hasActiveFilters = 
+  const hasActiveFilters =
     // Light
     image.exposure !== 0 ||
     image.contrast !== 0 ||
@@ -3897,10 +4299,16 @@ function ImageNode({
     image.shadows !== 0 ||
     image.whites !== 0 ||
     image.blacks !== 0 ||
+    (image.texture !== undefined && image.texture !== 0) ||
     // Color
     image.temperature !== 0 ||
     image.vibrance !== 0 ||
     image.saturation !== 0 ||
+    (image.shadowTint !== undefined && image.shadowTint !== 0) ||
+    image.colorHSL !== undefined ||
+    image.splitToning !== undefined ||
+    image.colorGrading !== undefined ||
+    image.colorCalibration !== undefined ||
     // Effects
     image.clarity !== 0 ||
     image.dehaze !== 0 ||
@@ -3948,6 +4356,31 @@ function ImageNode({
     }
     if (image.vibrance !== 0) {
       filterList.push(createVibranceFilter(image.vibrance));
+    }
+
+    // HSL color adjustments
+    if (image.colorHSL) {
+      filterList.push(createHSLColorFilter(image.colorHSL));
+    }
+
+    // Split Toning
+    if (image.splitToning) {
+      filterList.push(createSplitToningFilter(image.splitToning));
+    }
+
+    // Shadow Tint
+    if (image.shadowTint && image.shadowTint !== 0) {
+      filterList.push(createShadowTintFilter(image.shadowTint));
+    }
+
+    // Color Grading
+    if (image.colorGrading) {
+      filterList.push(createColorGradingFilter(image.colorGrading));
+    }
+
+    // Color Calibration
+    if (image.colorCalibration) {
+      filterList.push(createColorCalibrationFilter(image.colorCalibration));
     }
 
     // Effects

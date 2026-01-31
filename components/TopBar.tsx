@@ -75,7 +75,7 @@ export function TopBar({
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/jpeg,image/png,image/webp"
+          accept="image/jpeg,image/png,image/webp,image/x-adobe-dng,.dng"
           multiple
           onChange={handleFileSelect}
           className="hidden"
