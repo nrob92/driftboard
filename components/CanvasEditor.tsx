@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { Stage, Layer, Image as KonvaImage, Text, Transformer, Rect, Group } from 'react-konva';
 import useImage from 'use-image';
 import Konva from 'konva';
@@ -9,6 +9,106 @@ import { EditPanel } from './EditPanel';
 import { snapToGrid, findNearestPhoto } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
+import { processCamanImage, hasActiveEdits, CamanEditValues } from '@/lib/camanFilters'; // Keep for export
+
+// DNG support - runtime script loading to avoid bundler issues
+const isDNG = (name: string) => name.toLowerCase().endsWith('.dng');
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let LibRawClass: any = null;
+let librawLoading: Promise<void> | null = null;
+
+async function loadLibRaw(): Promise<void> {
+  if (LibRawClass) return;
+  if (librawLoading) return librawLoading;
+
+  librawLoading = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.type = 'module';
+    script.textContent = `
+      import LibRaw from '/libraw/index.js';
+      window.__LibRaw = LibRaw;
+      window.dispatchEvent(new Event('libraw-loaded'));
+    `;
+
+    const handler = () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      LibRawClass = (window as any).__LibRaw;
+      window.removeEventListener('libraw-loaded', handler);
+      resolve();
+    };
+
+    window.addEventListener('libraw-loaded', handler);
+    document.head.appendChild(script);
+
+    // Timeout after 10 seconds
+    setTimeout(() => reject(new Error('LibRaw load timeout')), 10000);
+  });
+
+  return librawLoading;
+}
+
+// Preview max dimension for DNG files (for fast editing)
+const DNG_PREVIEW_MAX_SIZE = 2000;
+
+// Decode DNG using runtime-loaded LibRaw (bypasses bundler)
+const decodeDNG = async (buffer: ArrayBuffer, forPreview = true): Promise<{ dataUrl: string; width: number; height: number }> => {
+  await loadLibRaw();
+
+  const raw = new LibRawClass();
+  await raw.open(new Uint8Array(buffer), {
+    useCameraWb: true,
+    outputColor: 1,
+    outputBps: 8,
+    userQual: forPreview ? 0 : 3,
+    halfSize: forPreview,
+    noAutoBright: false,
+  });
+
+  const imageData = await raw.imageData();
+  const { data, width, height } = imageData;
+
+  // Convert RGB to RGBA
+  const rgba = new Uint8ClampedArray(width * height * 4);
+  for (let i = 0; i < width * height; i++) {
+    rgba[i * 4] = data[i * 3];
+    rgba[i * 4 + 1] = data[i * 3 + 1];
+    rgba[i * 4 + 2] = data[i * 3 + 2];
+    rgba[i * 4 + 3] = 255;
+  }
+
+  let canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+  ctx.putImageData(new ImageData(rgba, width, height), 0, 0);
+
+  let finalWidth = width;
+  let finalHeight = height;
+
+  if (forPreview && (width > DNG_PREVIEW_MAX_SIZE || height > DNG_PREVIEW_MAX_SIZE)) {
+    const scale = Math.min(DNG_PREVIEW_MAX_SIZE / width, DNG_PREVIEW_MAX_SIZE / height);
+    finalWidth = Math.round(width * scale);
+    finalHeight = Math.round(height * scale);
+
+    const resizedCanvas = document.createElement('canvas');
+    resizedCanvas.width = finalWidth;
+    resizedCanvas.height = finalHeight;
+    const resizedCtx = resizedCanvas.getContext('2d', { willReadFrequently: true })!;
+    resizedCtx.imageSmoothingEnabled = true;
+    resizedCtx.imageSmoothingQuality = 'high';
+    resizedCtx.drawImage(canvas, 0, 0, finalWidth, finalHeight);
+    canvas = resizedCanvas;
+  }
+
+  return { dataUrl: canvas.toDataURL('image/jpeg', 0.92), width: finalWidth, height: finalHeight };
+};
+
+const decodeDNGFromUrl = async (url: string): Promise<{ dataUrl: string; width: number; height: number }> => {
+  const response = await fetch(url);
+  const buffer = await response.arrayBuffer();
+  return decodeDNG(buffer);
+};
 
 const GRID_SIZE = 50;
 
@@ -124,6 +224,13 @@ interface CanvasImage {
   hue: number;
   blur: number;
   filters: string[];
+  // DNG/RAW support (server-side processing)
+  originalStoragePath?: string; // Path in 'originals' bucket for full-res export
+  isRaw?: boolean;              // True if this is a RAW/DNG file
+  originalWidth?: number;       // Full resolution width
+  originalHeight?: number;      // Full resolution height
+  // Legacy: DNG original buffer (deprecated - now stored in Supabase)
+  originalDngBuffer?: ArrayBuffer;
 }
 
 // Edit data that gets saved to Supabase
@@ -162,6 +269,11 @@ interface PhotoEdits {
   hue: number;
   blur: number;
   filters: string[];
+  // DNG/RAW support
+  original_storage_path?: string;
+  is_raw?: boolean;
+  original_width?: number;
+  original_height?: number;
 }
 
 interface CanvasText {
@@ -775,146 +887,250 @@ export function CanvasEditor() {
       if (!user) return;
 
       try {
-        // List files in user's folder
-        const { data: files, error } = await supabase.storage
+        // Fetch photo_edits and photo_folders FIRST so positions/folders are authoritative
+        const { data: savedEdits, error: editsError } = await supabase
+          .from('photo_edits')
+          .select('*')
+          .eq('user_id', user.id);
+
+        const { data: savedFolders, error: foldersError } = await supabase
+          .from('photo_folders')
+          .select('*')
+          .eq('user_id', user.id);
+
+        // List files in photos bucket
+        const { data: photosFiles, error: photosError } = await supabase.storage
           .from('photos')
           .list(user.id, {
             limit: 50,
             sortBy: { column: 'created_at', order: 'asc' },
           });
 
-        if (error || !files || files.length === 0) return;
+        // List files in originals bucket (DNG-only may exist only here)
+        const { data: originalsFiles } = await supabase.storage
+          .from('originals')
+          .list(user.id, { limit: 50, sortBy: { column: 'created_at', order: 'asc' } });
 
-        // Filter out hidden files and get URLs
-        const validFiles = files.filter((f) => !f.name.startsWith('.'));
-        
-        // Load each image and add to canvas
+        const photosList = (photosFiles ?? []).filter((f) => !f.name.startsWith('.'));
+        const originalsList = (originalsFiles ?? []).filter((f) => !f.name.startsWith('.'));
+
+        // Base names we already have from photos (preview) - don't duplicate from originals
+        const photosBaseNames = new Set(photosList.map((f) => f.name.replace(/\.[^.]+$/, '').toLowerCase()));
+        const originalsOnly = originalsList.filter(
+          (f) => !photosBaseNames.has(f.name.replace(/\.[^.]+$/, '').toLowerCase())
+        );
+
+        // Combined list: all from photos, plus originals-only files (no preview)
+        type FileEntry = { name: string; bucket: 'photos' | 'originals' };
+        const validFiles: FileEntry[] = [
+          ...photosList.map((f) => ({ name: f.name, bucket: 'photos' as const })),
+          ...originalsOnly.map((f) => ({ name: f.name, bucket: 'originals' as const })),
+        ];
+
+        if (photosError) return;
+        if (validFiles.length === 0) return;
+
         const newImages: CanvasImage[] = [];
-        const cols = 3; // Number of columns in grid
-        const spacing = 420; // Spacing between images
+        const cols = 3;
+        const spacing = 420;
 
         for (let i = 0; i < validFiles.length; i++) {
           const file = validFiles[i];
-          const { data: urlData } = supabase.storage
-            .from('photos')
-            .getPublicUrl(`${user.id}/${file.name}`);
-
+          const storagePath = `${user.id}/${file.name}`;
+          const bucket = file.bucket;
+          const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(storagePath);
           const imageUrl = urlData.publicUrl;
 
-          // Load image to get dimensions
           try {
-            const img = new window.Image();
-            img.crossOrigin = 'anonymous';
-            
-            await new Promise<void>((resolve, reject) => {
-              img.onload = () => resolve();
-              img.onerror = () => reject(new Error('Failed to load'));
-              img.src = imageUrl;
-            });
+            let imgSrc: string;
+            let width: number;
+            let height: number;
 
-            const maxWidth = 400;
-            const maxHeight = 400;
-            let width = img.width;
-            let height = img.height;
+            if (isDNG(file.name)) {
+              const decoded = await decodeDNGFromUrl(imageUrl);
+              imgSrc = decoded.dataUrl;
+              width = decoded.width;
+              height = decoded.height;
+            } else {
+              const img = new window.Image();
+              img.crossOrigin = 'anonymous';
+              await new Promise<void>((resolve, reject) => {
+                img.onload = () => resolve();
+                img.onerror = () => reject(new Error('Failed to load'));
+                img.src = imageUrl;
+              });
+              width = img.width;
+              height = img.height;
+            }
 
-            if (width > maxWidth || height > maxHeight) {
-              const ratio = Math.min(maxWidth / width, maxHeight / height);
+            const maxSize = GRID_CONFIG.imageMaxSize;
+            if (width > maxSize || height > maxSize) {
+              const ratio = Math.min(maxSize / width, maxSize / height);
               width = width * ratio;
               height = height * ratio;
             }
 
-            // Position in grid
             const col = i % cols;
             const row = Math.floor(i / cols);
-            const x = 100 + col * spacing;
-            const y = 100 + row * spacing;
+            const gridX = 100 + col * spacing;
+            const gridY = 100 + row * spacing;
 
-            const storagePath = `${user.id}/${file.name}`;
-            
-            newImages.push({
-              id: `img-${Date.now()}-${Math.random()}`,
+            // Find matching edit so we use saved position from the start (single source of truth)
+            const edit = savedEdits?.find(
+              (e: PhotoEdits) =>
+                e.storage_path === storagePath ||
+                (e.original_storage_path != null && e.original_storage_path === storagePath)
+            );
+
+            // Only use backend position when both x and y exist and are valid numbers
+            const hasValidPosition = edit != null
+              && edit.x != null
+              && edit.y != null
+              && Number.isFinite(Number(edit.x))
+              && Number.isFinite(Number(edit.y));
+            const x = hasValidPosition ? Number(edit.x) : gridX;
+            const y = hasValidPosition ? Number(edit.y) : gridY;
+
+            const canvasImg: CanvasImage = {
+              id: `img-${Date.now()}-${i}-${Math.random()}`,
               x,
               y,
               width,
               height,
-              src: imageUrl,
+              src: imgSrc,
               storagePath,
               rotation: 0,
               scaleX: 1,
               scaleY: 1,
-              // Light
               exposure: 0,
               contrast: 0,
               highlights: 0,
               shadows: 0,
               whites: 0,
               blacks: 0,
-              // Color
               temperature: 0,
               vibrance: 0,
               saturation: 0,
-              // Effects
               clarity: 0,
               dehaze: 0,
               vignette: 0,
               grain: 0,
-              // Curves
               curves: { ...DEFAULT_CURVES },
-              // Legacy
               brightness: 0,
               hue: 0,
               blur: 0,
               filters: [],
-            });
+            };
+
+            if (edit) {
+              if (edit.original_storage_path != null) canvasImg.originalStoragePath = edit.original_storage_path;
+              let savedWidth = edit.width ?? width;
+              let savedHeight = edit.height ?? height;
+              if (savedWidth > maxSize || savedHeight > maxSize) {
+                const ratio = Math.min(maxSize / savedWidth, maxSize / savedHeight);
+                savedWidth = savedWidth * ratio;
+                savedHeight = savedHeight * ratio;
+              }
+              canvasImg.width = savedWidth;
+              canvasImg.height = savedHeight;
+              canvasImg.folderId = edit.folder_id != null ? String(edit.folder_id) : undefined;
+              canvasImg.rotation = edit.rotation ?? 0;
+              canvasImg.scaleX = edit.scale_x ?? 1;
+              canvasImg.scaleY = edit.scale_y ?? 1;
+              canvasImg.exposure = edit.exposure ?? 0;
+              canvasImg.contrast = edit.contrast ?? 0;
+              canvasImg.highlights = edit.highlights ?? 0;
+              canvasImg.shadows = edit.shadows ?? 0;
+              canvasImg.whites = edit.whites ?? 0;
+              canvasImg.blacks = edit.blacks ?? 0;
+              canvasImg.texture = edit.texture ?? 0;
+              canvasImg.temperature = edit.temperature ?? 0;
+              canvasImg.vibrance = edit.vibrance ?? 0;
+              canvasImg.saturation = edit.saturation ?? 0;
+              canvasImg.shadowTint = edit.shadow_tint ?? 0;
+              canvasImg.colorHSL = edit.color_hsl ?? undefined;
+              canvasImg.splitToning = edit.split_toning ?? undefined;
+              canvasImg.colorGrading = edit.color_grading ?? undefined;
+              canvasImg.colorCalibration = edit.color_calibration ?? undefined;
+              canvasImg.clarity = edit.clarity ?? 0;
+              canvasImg.dehaze = edit.dehaze ?? 0;
+              canvasImg.vignette = edit.vignette ?? 0;
+              canvasImg.grain = edit.grain ?? 0;
+              canvasImg.grainSize = edit.grain_size ?? 0;
+              canvasImg.grainRoughness = edit.grain_roughness ?? 0;
+              canvasImg.curves = edit.curves ?? { ...DEFAULT_CURVES };
+              canvasImg.brightness = edit.brightness ?? 0;
+              canvasImg.hue = edit.hue ?? 0;
+              canvasImg.blur = edit.blur ?? 0;
+              canvasImg.filters = edit.filters ?? [];
+            }
+
+            newImages.push(canvasImg);
           } catch {
-            // Skip failed images
             console.log(`Failed to load image: ${file.name}`);
           }
         }
 
-        // Load saved edits from database
-        const { data: savedEdits, error: editsError } = await supabase
-          .from('photo_edits')
-          .select('*')
-          .eq('user_id', user.id);
-        
-        console.log('Loaded edits from DB:', savedEdits, 'Error:', editsError);
-
-        // Load saved folders from database
-        const { data: savedFolders, error: foldersError } = await supabase
-          .from('photo_folders')
-          .select('*')
-          .eq('user_id', user.id);
-        
-        console.log('Loaded folders from DB:', savedFolders, 'Error:', foldersError);
-
-        // Apply saved edits to images
+        // Apply any remaining edit fields to images we might have missed (e.g. originalStoragePath from storage_path key)
         if (savedEdits && savedEdits.length > 0) {
           for (const img of newImages) {
-            const edit = savedEdits.find((e: PhotoEdits) => e.storage_path === img.storagePath);
+            const edit = savedEdits.find(
+              (e: PhotoEdits) =>
+                e.storage_path === img.storagePath ||
+                e.storage_path === (img.originalStoragePath ?? '') ||
+                (e.original_storage_path != null && e.original_storage_path === img.storagePath)
+            );
             if (edit) {
-              img.x = edit.x ?? img.x;
-              img.y = edit.y ?? img.y;
-              img.width = edit.width ?? img.width;
-              img.height = edit.height ?? img.height;
-              img.folderId = edit.folder_id ?? undefined;
+              // Only use backend position when both x and y exist and are valid numbers
+              const hasValidPosition = edit.x != null && edit.y != null
+                && Number.isFinite(Number(edit.x)) && Number.isFinite(Number(edit.y));
+              if (hasValidPosition) {
+                img.x = Number(edit.x);
+                img.y = Number(edit.y);
+              }
+              if (edit.original_storage_path != null) img.originalStoragePath = edit.original_storage_path;
+              // Clamp dimensions to max size (in case old data has larger values)
+              let savedWidth = edit.width ?? img.width;
+              let savedHeight = edit.height ?? img.height;
+              const maxSize = GRID_CONFIG.imageMaxSize;
+              if (savedWidth > maxSize || savedHeight > maxSize) {
+                const ratio = Math.min(maxSize / savedWidth, maxSize / savedHeight);
+                savedWidth = savedWidth * ratio;
+                savedHeight = savedHeight * ratio;
+              }
+              img.width = savedWidth;
+              img.height = savedHeight;
+              img.folderId = edit.folder_id != null ? String(edit.folder_id) : undefined;
               img.rotation = edit.rotation ?? 0;
               img.scaleX = edit.scale_x ?? 1;
               img.scaleY = edit.scale_y ?? 1;
+              // Light
               img.exposure = edit.exposure ?? 0;
               img.contrast = edit.contrast ?? 0;
               img.highlights = edit.highlights ?? 0;
               img.shadows = edit.shadows ?? 0;
               img.whites = edit.whites ?? 0;
               img.blacks = edit.blacks ?? 0;
+              img.texture = edit.texture ?? 0;
+              // Color
               img.temperature = edit.temperature ?? 0;
               img.vibrance = edit.vibrance ?? 0;
               img.saturation = edit.saturation ?? 0;
+              img.shadowTint = edit.shadow_tint ?? 0;
+              img.colorHSL = edit.color_hsl ?? undefined;
+              img.splitToning = edit.split_toning ?? undefined;
+              img.colorGrading = edit.color_grading ?? undefined;
+              img.colorCalibration = edit.color_calibration ?? undefined;
+              // Effects
               img.clarity = edit.clarity ?? 0;
               img.dehaze = edit.dehaze ?? 0;
               img.vignette = edit.vignette ?? 0;
               img.grain = edit.grain ?? 0;
+              img.grainSize = edit.grain_size ?? 0;
+              img.grainRoughness = edit.grain_roughness ?? 0;
+              // Curves
               img.curves = edit.curves ?? { ...DEFAULT_CURVES };
+              // Legacy
               img.brightness = edit.brightness ?? 0;
               img.hue = edit.hue ?? 0;
               img.blur = edit.blur ?? 0;
@@ -923,31 +1139,36 @@ export function CanvasEditor() {
           }
         }
 
-        // Reconstruct folders from saved data
+        // Reconstruct folders from saved data; coerce position/dimensions so folder is tracked correctly
         const loadedFolders: PhotoFolder[] = [];
+        const defaultFolderX = 100;
+        const defaultFolderY = 100;
         if (savedFolders && savedFolders.length > 0) {
-          console.log('Reconstructing folders...');
           for (const sf of savedFolders) {
-            // Find all images that belong to this folder
+            const folderId = String(sf.id);
+            // Find all images that belong to this folder (match by folder_id from photo_edits)
             const folderImageIds = newImages
-              .filter(img => img.folderId === sf.id)
+              .filter(img => img.folderId === folderId)
               .map(img => img.id);
-            
-            console.log(`Folder "${sf.name}" (${sf.id}): found ${folderImageIds.length} images`);
-            
+
+            const sfX = sf.x != null && Number.isFinite(Number(sf.x)) ? Number(sf.x) : defaultFolderX;
+            const sfY = sf.y != null && Number.isFinite(Number(sf.y)) ? Number(sf.y) : defaultFolderY;
+            const sfWidth = sf.width != null && Number.isFinite(Number(sf.width)) ? Number(sf.width) : GRID_CONFIG.defaultFolderWidth;
+            const sfHeight = sf.height != null && Number.isFinite(Number(sf.height)) ? Number(sf.height) : undefined;
+
             loadedFolders.push({
-              id: sf.id,
-              name: sf.name,
-              x: sf.x,
-              y: sf.y,
-              width: sf.width ?? GRID_CONFIG.defaultFolderWidth,
-              height: sf.height,
-              color: sf.color,
+              id: folderId,
+              name: String(sf.name ?? 'Untitled'),
+              x: sfX,
+              y: sfY,
+              width: sfWidth,
+              height: sfHeight,
+              color: String(sf.color ?? FOLDER_COLORS[0]),
               imageIds: folderImageIds,
             });
           }
         }
-        
+
         console.log('Final loaded folders:', loadedFolders);
         console.log('Images with folderIds:', newImages.map(img => ({ id: img.id, folderId: img.folderId })));
 
@@ -1150,6 +1371,7 @@ export function CanvasEditor() {
 
           const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
           let imageSrc = '';
+          let photosUploadSucceeded = false;
 
           if (supabaseUrl && user) {
             console.log('Uploading to Supabase:', filePath);
@@ -1169,6 +1391,7 @@ export function CanvasEditor() {
                 reader.readAsDataURL(file);
               });
             } else {
+              photosUploadSucceeded = true;
               console.log('Upload successful:', uploadData);
               const { data: urlData } = supabase.storage
                 .from('photos')
@@ -1187,23 +1410,103 @@ export function CanvasEditor() {
 
           // Load image to get dimensions
           console.log('Loading image to get dimensions...');
-          const img = new window.Image();
-          img.crossOrigin = 'anonymous';
-          
-          await new Promise<void>((resolve, reject) => {
-            img.onload = () => {
-              console.log('Image loaded:', img.width, 'x', img.height);
-              resolve();
-            };
-            img.onerror = (e) => {
-              console.error('Image load error:', e);
-              reject(new Error('Failed to load image'));
-            };
-            img.src = imageSrc;
-          });
+          let width: number;
+          let height: number;
+          let dngBuffer: ArrayBuffer | undefined;
 
-          let width = img.width;
-          let height = img.height;
+          // DNG/RAW support variables
+          let originalStoragePath: string | undefined;
+          let previewStoragePath: string | undefined;
+          let isRaw = false;
+          let originalWidth: number | undefined;
+          let originalHeight: number | undefined;
+
+          // Check if file is DNG - use server-side processing for better performance
+          if (isDNG(file.name) && user) {
+            console.log('Processing DNG file via server:', file.name);
+            isRaw = true;
+
+            try {
+              // Upload to server API for processing
+              const formData = new FormData();
+              formData.append('file', file);
+              formData.append('userId', user.id);
+
+              const response = await fetch('/api/upload-dng', {
+                method: 'POST',
+                body: formData,
+              });
+
+              if (response.ok) {
+                const result = await response.json();
+                originalStoragePath = result.originalPath;
+                previewStoragePath = result.previewPath ?? undefined;
+                originalWidth = result.originalWidth;
+                originalHeight = result.originalHeight;
+                if (result.previewUrl) {
+                  imageSrc = result.previewUrl;
+                  width = result.width;
+                  height = result.height;
+                  console.log('DNG processed via server:', width, 'x', height, 'original:', originalWidth, 'x', originalHeight);
+                } else {
+                  // Original saved to originals; no server preview — decode client-side for display
+                  console.log('DNG saved to originals, decoding preview client-side');
+                  const buffer = await file.arrayBuffer();
+                  dngBuffer = buffer;
+                  const decoded = await decodeDNG(buffer, true);
+                  imageSrc = decoded.dataUrl;
+                  width = decoded.width;
+                  height = decoded.height;
+                }
+              } else {
+                // Fallback to client-side decoding
+                console.warn('Server DNG processing failed, falling back to client-side');
+                const buffer = await file.arrayBuffer();
+                dngBuffer = buffer;
+                const decoded = await decodeDNG(buffer, true);
+                imageSrc = decoded.dataUrl;
+                width = decoded.width;
+                height = decoded.height;
+              }
+            } catch (apiError) {
+              // Fallback to client-side decoding
+              console.warn('Server DNG API error, falling back to client-side:', apiError);
+              const buffer = await file.arrayBuffer();
+              dngBuffer = buffer;
+              const decoded = await decodeDNG(buffer, true);
+              imageSrc = decoded.dataUrl;
+              width = decoded.width;
+              height = decoded.height;
+            }
+          } else if (isDNG(file.name)) {
+            // Client-side fallback for DNG when not logged in
+            console.log('Decoding DNG file (client-side preview):', file.name);
+            const buffer = await file.arrayBuffer();
+            dngBuffer = buffer;
+            const decoded = await decodeDNG(buffer, true);
+            imageSrc = decoded.dataUrl;
+            width = decoded.width;
+            height = decoded.height;
+            console.log('DNG preview decoded:', width, 'x', height);
+          } else {
+            // Regular image - load normally
+            const img = new window.Image();
+            img.crossOrigin = 'anonymous';
+
+            await new Promise<void>((resolve, reject) => {
+              img.onload = () => {
+                console.log('Image loaded:', img.width, 'x', img.height);
+                resolve();
+              };
+              img.onerror = (e) => {
+                console.error('Image load error:', e);
+                reject(new Error('Failed to load image'));
+              };
+              img.src = imageSrc;
+            });
+            width = img.width;
+            height = img.height;
+          }
 
           if (width > imageMaxSize || height > imageMaxSize) {
             const ratio = Math.min(imageMaxSize / width, imageMaxSize / height);
@@ -1228,8 +1531,7 @@ export function CanvasEditor() {
 
           console.log('Image position:', x, y, 'Size:', width, height);
 
-          const uploadedToSupabase = supabaseUrl && imageSrc.includes('supabase');
-
+          // Use actual photos upload success so DNG with client-side preview still gets photos path (load matches by listing photos)
           const imageId = `img-${Date.now()}-${Math.random()}`;
 
           const newImage: CanvasImage = {
@@ -1239,7 +1541,7 @@ export function CanvasEditor() {
             width,
             height,
             src: imageSrc,
-            storagePath: uploadedToSupabase ? filePath : undefined,
+            storagePath: previewStoragePath || (photosUploadSucceeded ? filePath : undefined),
             folderId: folderId, // Link to folder
             rotation: 0,
             scaleX: 1,
@@ -1262,6 +1564,12 @@ export function CanvasEditor() {
             hue: 0,
             blur: 0,
             filters: [],
+            // DNG/RAW support
+            originalStoragePath,
+            isRaw,
+            originalWidth,
+            originalHeight,
+            originalDngBuffer: dngBuffer, // Legacy: client-side fallback
           };
 
           newImages.push(newImage);
@@ -1287,32 +1595,43 @@ export function CanvasEditor() {
         
         console.log('Creating folder:', newFolder);
         
-        // Save folder and photo edits to Supabase
+        // Resolve overlaps first so we save the final positions the user sees
+        const allImages = [...images, ...newImages];
+        const allFolders = [...folders, newFolder];
+        const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
+          allFolders,
+          allImages,
+          folderId
+        );
+        
+        setImages(resolvedImages);
+        setFolders(resolvedFolders);
+        
+        // Save folder and photo_edits to Supabase after reflow (so x,y match what's on canvas)
         if (user) {
-          // Save the folder
-          const { error: folderError } = await supabase
-            .from('photo_folders')
-            .upsert({
-              id: folderId,
-              user_id: user.id,
-              name: folderName,
-              x: Math.round(folderX),
-              y: Math.round(folderY),
-              width: GRID_CONFIG.defaultFolderWidth,
-              color: folderColor,
-            });
-          
-          if (folderError) {
-            console.error('Error saving folder:', folderError);
-          } else {
-            console.log('Folder saved to Supabase');
+          const resolvedFolder = resolvedFolders.find(f => f.id === folderId);
+          if (resolvedFolder) {
+            const { error: folderError } = await supabase
+              .from('photo_folders')
+              .upsert({
+                id: folderId,
+                user_id: user.id,
+                name: folderName,
+                x: Math.round(resolvedFolder.x),
+                y: Math.round(resolvedFolder.y),
+                width: Math.round(resolvedFolder.width ?? GRID_CONFIG.defaultFolderWidth),
+                height: resolvedFolder.height != null ? Math.round(resolvedFolder.height) : undefined,
+                color: folderColor,
+              });
+            if (folderError) console.error('Error saving folder:', folderError);
           }
 
-          // Also save all images with their folder_id
-          const imagesToSave = newImages.filter(img => img.storagePath);
+          const imagesToSave = resolvedImages.filter(
+            img => (img.storagePath || img.originalStoragePath) && newImages.some(n => n.id === img.id)
+          );
           if (imagesToSave.length > 0) {
             const editsToSave = imagesToSave.map(img => ({
-              storage_path: img.storagePath!,
+              storage_path: img.storagePath || img.originalStoragePath!,
               user_id: user.id,
               folder_id: folderId,
               x: Math.round(img.x),
@@ -1328,47 +1647,38 @@ export function CanvasEditor() {
               shadows: img.shadows,
               whites: img.whites,
               blacks: img.blacks,
+              texture: img.texture ?? 0,
               temperature: img.temperature,
               vibrance: img.vibrance,
               saturation: img.saturation,
+              shadow_tint: img.shadowTint ?? 0,
+              color_hsl: img.colorHSL ?? null,
+              split_toning: img.splitToning ?? null,
+              color_grading: img.colorGrading ?? null,
+              color_calibration: img.colorCalibration ?? null,
               clarity: img.clarity,
               dehaze: img.dehaze,
               vignette: img.vignette,
               grain: img.grain,
+              grain_size: img.grainSize ?? 0,
+              grain_roughness: img.grainRoughness ?? 0,
               curves: img.curves,
               brightness: img.brightness,
               hue: img.hue,
               blur: img.blur,
               filters: img.filters,
+              original_storage_path: img.originalStoragePath ?? null,
+              is_raw: img.isRaw ?? false,
+              original_width: img.originalWidth ?? null,
+              original_height: img.originalHeight ?? null,
             }));
-
             const { error: editsError } = await supabase
               .from('photo_edits')
               .upsert(editsToSave, { onConflict: 'storage_path,user_id' });
-            
-            if (editsError) {
-              console.error('Error saving photo edits:', editsError);
-            } else {
-              console.log('Photo edits saved with folder_id');
-            }
+            if (editsError) console.error('Error saving photo edits:', editsError);
           }
         }
         
-        // Update state all at once, then resolve overlaps
-        const allImages = [...images, ...newImages];
-        const allFolders = [...folders, newFolder];
-        
-        // Resolve any folder overlaps
-        const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
-          allFolders,
-          allImages,
-          folderId
-        );
-        
-        setImages(resolvedImages);
-        setFolders(resolvedFolders);
-        
-        // Small delay before saving to history to ensure state is updated
         setTimeout(() => saveToHistory(), 100);
       } else {
         console.log('No images were processed successfully');
@@ -1409,6 +1719,7 @@ export function CanvasEditor() {
 
           const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
           let imageSrc = '';
+          let photosUploadSucceeded = false;
 
           if (supabaseUrl && user) {
             const { error: uploadError } = await supabase.storage
@@ -1425,6 +1736,7 @@ export function CanvasEditor() {
                 reader.readAsDataURL(file);
               });
             } else {
+              photosUploadSucceeded = true;
               const { data: urlData } = supabase.storage
                 .from('photos')
                 .getPublicUrl(filePath);
@@ -1438,17 +1750,31 @@ export function CanvasEditor() {
             });
           }
 
-          const img = new window.Image();
-          img.crossOrigin = 'anonymous';
-          
-          await new Promise<void>((resolve, reject) => {
-            img.onload = () => resolve();
-            img.onerror = () => reject(new Error('Failed to load image'));
-            img.src = imageSrc;
-          });
+          let width: number;
+          let height: number;
+          let dngBuffer: ArrayBuffer | undefined;
 
-          let width = img.width;
-          let height = img.height;
+          // Check if file is DNG - decode it first (using preview for fast editing)
+          if (isDNG(file.name)) {
+            console.log('Decoding DNG file (preview):', file.name);
+            const buffer = await file.arrayBuffer();
+            dngBuffer = buffer; // Store original for full-res export
+            const decoded = await decodeDNG(buffer, true); // true = preview mode
+            imageSrc = decoded.dataUrl;
+            width = decoded.width;
+            height = decoded.height;
+          } else {
+            const img = new window.Image();
+            img.crossOrigin = 'anonymous';
+
+            await new Promise<void>((resolve, reject) => {
+              img.onload = () => resolve();
+              img.onerror = () => reject(new Error('Failed to load image'));
+              img.src = imageSrc;
+            });
+            width = img.width;
+            height = img.height;
+          }
 
           if (width > imageMaxSize || height > imageMaxSize) {
             const ratio = Math.min(imageMaxSize / width, imageMaxSize / height);
@@ -1470,7 +1796,7 @@ export function CanvasEditor() {
           const x = contentStartX + col * CELL_SIZE + Math.max(0, cellOffsetX);
           const y = contentStartY + row * CELL_SIZE + Math.max(0, cellOffsetY);
 
-          const uploadedToSupabase = supabaseUrl && imageSrc.includes('supabase');
+          // Use actual photos upload success so DNG (client-side decode) gets photos path for load match
           const imageId = `img-${Date.now()}-${Math.random()}`;
 
           const newImage: CanvasImage = {
@@ -1480,7 +1806,7 @@ export function CanvasEditor() {
             width,
             height,
             src: imageSrc,
-            storagePath: uploadedToSupabase ? filePath : undefined,
+            storagePath: photosUploadSucceeded ? filePath : undefined,
             folderId: folderId,
             rotation: 0,
             scaleX: 1,
@@ -1503,6 +1829,7 @@ export function CanvasEditor() {
             hue: 0,
             blur: 0,
             filters: [],
+            originalDngBuffer: dngBuffer, // Store for full-res export (DNG only)
           };
 
           newImages.push(newImage);
@@ -1565,13 +1892,13 @@ export function CanvasEditor() {
         setFolders(resolvedFolders);
         setImages(resolvedImages);
 
-        // Save photo edits and folder dimensions to Supabase
+        // Save photo edits and folder dimensions to Supabase (includes ALL editable fields)
         if (user) {
-          // Save new images
-          const imagesToSave = newImages.filter(img => img.storagePath);
+          // Save new images (canonical key: photos path or originals path)
+          const imagesToSave = newImages.filter(img => img.storagePath || img.originalStoragePath);
           if (imagesToSave.length > 0) {
             const editsToSave = imagesToSave.map(img => ({
-              storage_path: img.storagePath!,
+              storage_path: img.storagePath || img.originalStoragePath!,
               user_id: user.id,
               folder_id: folderId,
               x: Math.round(img.x),
@@ -1581,24 +1908,42 @@ export function CanvasEditor() {
               rotation: img.rotation,
               scale_x: img.scaleX,
               scale_y: img.scaleY,
+              // Light
               exposure: img.exposure,
               contrast: img.contrast,
               highlights: img.highlights,
               shadows: img.shadows,
               whites: img.whites,
               blacks: img.blacks,
+              texture: img.texture ?? 0,
+              // Color
               temperature: img.temperature,
               vibrance: img.vibrance,
               saturation: img.saturation,
+              shadow_tint: img.shadowTint ?? 0,
+              color_hsl: img.colorHSL ?? null,
+              split_toning: img.splitToning ?? null,
+              color_grading: img.colorGrading ?? null,
+              color_calibration: img.colorCalibration ?? null,
+              // Effects
               clarity: img.clarity,
               dehaze: img.dehaze,
               vignette: img.vignette,
               grain: img.grain,
+              grain_size: img.grainSize ?? 0,
+              grain_roughness: img.grainRoughness ?? 0,
+              // Curves
               curves: img.curves,
+              // Legacy
               brightness: img.brightness,
               hue: img.hue,
               blur: img.blur,
               filters: img.filters,
+              // DNG/RAW support
+              original_storage_path: img.originalStoragePath ?? null,
+              is_raw: img.isRaw ?? false,
+              original_width: img.originalWidth ?? null,
+              original_height: img.originalHeight ?? null,
             }));
 
             await supabase
@@ -1621,16 +1966,17 @@ export function CanvasEditor() {
             }
           }
 
-          // Update positions of existing images if folder was reflowed
+          // Update positions of existing images if folder was reflowed (canonical key)
           if (needsResize) {
             const existingFolderImages = resolvedImages.filter(
-              img => img.folderId === folderId && img.storagePath && !newImages.find(n => n.id === img.id)
+              img => img.folderId === folderId && (img.storagePath || img.originalStoragePath) && !newImages.find(n => n.id === img.id)
             );
             for (const img of existingFolderImages) {
+              const canonicalPath = img.storagePath || img.originalStoragePath!;
               await supabase
                 .from('photo_edits')
                 .update({ x: Math.round(img.x), y: Math.round(img.y) })
-                .eq('storage_path', img.storagePath!)
+                .eq('storage_path', canonicalPath)
                 .eq('user_id', user.id);
             }
           }
@@ -2199,11 +2545,12 @@ export function CanvasEditor() {
                   if (error) console.error('Failed to save new folder:', error);
                 });
 
-                // Update photo_edits with new folder_id and centered position
-                if (currentImg.storagePath) {
+                // Update photo_edits with new folder_id and centered position (canonical key)
+                const currentCanonical = currentImg.storagePath || currentImg.originalStoragePath;
+                if (currentCanonical) {
                   supabase.from('photo_edits')
                     .update({ folder_id: newFolderId, x: Math.round(centeredX), y: Math.round(centeredY) })
-                    .eq('storage_path', currentImg.storagePath)
+                    .eq('storage_path', currentCanonical)
                     .eq('user_id', user.id)
                     .then(({ error }) => {
                       if (error) console.error('Failed to update photo folder:', error);
@@ -2293,11 +2640,12 @@ export function CanvasEditor() {
                   }
                 }
                 
-                // Save the dragged image
-                if (currentImg.storagePath && finalImg) {
+                // Save the dragged image (canonical key)
+                const currentCanonical = currentImg.storagePath || currentImg.originalStoragePath;
+                if (currentCanonical && finalImg) {
                   supabase.from('photo_edits')
                     .update({ folder_id: targetFolderId, x: Math.round(finalImg.x), y: Math.round(finalImg.y) })
-                    .eq('storage_path', currentImg.storagePath)
+                    .eq('storage_path', currentCanonical)
                     .eq('user_id', user.id)
                     .then(({ error }) => {
                       if (error) console.error('Failed to update photo folder:', error);
@@ -2347,11 +2695,12 @@ export function CanvasEditor() {
 
             // Save to Supabase if user is logged in
             if (user) {
-              // Save dragged image using state position
-              if (currentImg.storagePath) {
+              // Save dragged image using state position (canonical key)
+              const currentCanonical = currentImg.storagePath || currentImg.originalStoragePath;
+              if (currentCanonical) {
                 supabase.from('photo_edits')
                   .update({ x: Math.round(finalX), y: Math.round(finalY), folder_id: targetFolderId })
-                  .eq('storage_path', currentImg.storagePath)
+                  .eq('storage_path', currentCanonical)
                   .eq('user_id', user.id)
                   .then(({ error }) => {
                     if (error) console.error('Failed to update photo position:', error);
@@ -2362,7 +2711,8 @@ export function CanvasEditor() {
               if (lastSwappedImageRef.current) {
                 const swappedRef = lastSwappedImageRef.current;
                 const swappedImg = images.find(img => img.id === swappedRef.id);
-                if (swappedImg?.storagePath) {
+                const swappedCanonical = swappedImg?.storagePath || swappedImg?.originalStoragePath;
+                if (swappedImg && swappedCanonical) {
                   const swappedX = swappedRef.x;
                   const swappedY = swappedRef.y;
 
@@ -2380,7 +2730,7 @@ export function CanvasEditor() {
                       x: Math.round(swappedX),
                       y: Math.round(swappedY)
                     })
-                    .eq('storage_path', swappedImg.storagePath)
+                    .eq('storage_path', swappedCanonical)
                     .eq('user_id', user.id)
                     .then(({ error }) => {
                       if (error) console.error('Failed to update swapped photo position:', error);
@@ -2401,9 +2751,21 @@ export function CanvasEditor() {
       node.position({ x: newX, y: newY });
 
       if (type === 'image') {
+        const currentImg = images.find((img) => img.id === node.id());
         setImages((prev) =>
           prev.map((img) => (img.id === node.id() ? { ...img, x: newX, y: newY } : img))
         );
+        // Auto-save position to backend so refresh shows correct position
+        if (user && currentImg && (currentImg.storagePath || currentImg.originalStoragePath)) {
+          const canonical = currentImg.storagePath || currentImg.originalStoragePath;
+          supabase.from('photo_edits')
+            .update({ x: Math.round(newX), y: Math.round(newY) })
+            .eq('storage_path', canonical)
+            .eq('user_id', user.id)
+            .then(({ error }) => {
+              if (error) console.error('Failed to save photo position:', error);
+            });
+        }
       } else {
         setTexts((prev) =>
           prev.map((txt) => (txt.id === node.id() ? { ...txt, x: newX, y: newY } : txt))
@@ -2421,17 +2783,17 @@ export function CanvasEditor() {
     }
 
     try {
-      // Only save images that have a storagePath (uploaded to Supabase)
-      const imagesToSave = images.filter(img => img.storagePath);
+      // Save images that have a cloud path (photos or originals bucket)
+      const imagesToSave = images.filter(img => img.storagePath || img.originalStoragePath);
       
       if (imagesToSave.length === 0) {
         alert('No photos to save. Upload some photos first!');
         return;
       }
 
-      // Prepare edit data for each image
+      // Canonical key: prefer photos path, else originals path (for DNG-only)
       const editsToSave = imagesToSave.map(img => ({
-        storage_path: img.storagePath!,
+        storage_path: img.storagePath || img.originalStoragePath!,
         user_id: user.id,
         folder_id: img.folderId || null,
         x: Math.round(img.x),
@@ -2441,24 +2803,42 @@ export function CanvasEditor() {
         rotation: img.rotation,
         scale_x: img.scaleX,
         scale_y: img.scaleY,
+        // Light
         exposure: img.exposure,
         contrast: img.contrast,
         highlights: img.highlights,
         shadows: img.shadows,
         whites: img.whites,
         blacks: img.blacks,
+        texture: img.texture ?? 0,
+        // Color
         temperature: img.temperature,
         vibrance: img.vibrance,
         saturation: img.saturation,
+        shadow_tint: img.shadowTint ?? 0,
+        color_hsl: img.colorHSL ?? null,
+        split_toning: img.splitToning ?? null,
+        color_grading: img.colorGrading ?? null,
+        color_calibration: img.colorCalibration ?? null,
+        // Effects
         clarity: img.clarity,
         dehaze: img.dehaze,
         vignette: img.vignette,
         grain: img.grain,
+        grain_size: img.grainSize ?? 0,
+        grain_roughness: img.grainRoughness ?? 0,
+        // Curves
         curves: img.curves,
+        // Legacy
         brightness: img.brightness,
         hue: img.hue,
         blur: img.blur,
         filters: img.filters,
+        // DNG/RAW support
+        original_storage_path: img.originalStoragePath ?? null,
+        is_raw: img.isRaw ?? false,
+        original_width: img.originalWidth ?? null,
+        original_height: img.originalHeight ?? null,
       }));
 
       // Upsert edits (insert or update)
@@ -2480,6 +2860,184 @@ export function CanvasEditor() {
       alert('Failed to save edits');
     }
   }, [user, images]);
+
+  // Handle export with edits applied
+  const handleExport = useCallback(async () => {
+    if (!selectedId) return;
+
+    const image = images.find(img => img.id === selectedId);
+    const hasCloudPath = image?.storagePath || image?.originalStoragePath;
+    if (!image || !hasCloudPath) {
+      alert('Cannot export: Image not saved to cloud');
+      return;
+    }
+
+    try {
+      // Check if this is a DNG - export at full resolution client-side
+      const pathIsDng = (p: string | undefined) => p?.toLowerCase().endsWith('.dng') ?? false;
+      const isDngSource = image.originalStoragePath && pathIsDng(image.originalStoragePath);
+
+      if (isDngSource && image.originalStoragePath) {
+        console.log('Full-res DNG export starting...');
+        alert('Decoding DNG at full resolution... This may take 10-20 seconds.');
+
+        try {
+          // Get signed URL from server (bypasses RLS using service role)
+          const signedUrlResponse = await fetch('/api/signed-url', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              bucket: 'originals',
+              path: image.originalStoragePath,
+            }),
+          });
+
+          if (!signedUrlResponse.ok) {
+            const err = await signedUrlResponse.json();
+            console.error('Failed to get signed URL:', err);
+            alert('Failed to access original DNG. Falling back to preview quality.');
+            // Fall through to server export
+          } else {
+            const { signedUrl } = await signedUrlResponse.json();
+
+            // Fetch the DNG file using the signed URL
+            const response = await fetch(signedUrl);
+            if (!response.ok) {
+              throw new Error(`Failed to download DNG: ${response.status}`);
+            }
+            const dngBlob = await response.blob();
+            // Decode DNG at full resolution using runtime-loaded LibRaw
+            const arrayBuffer = await dngBlob.arrayBuffer();
+            console.log('Decoding DNG...', { size: arrayBuffer.byteLength });
+
+            // Use decodeDNG with forPreview=false for full resolution
+            const decoded = await decodeDNG(arrayBuffer, false);
+            console.log('DNG decoded:', { width: decoded.width, height: decoded.height });
+
+            // Create a temporary container for Konva Stage (must be a div)
+            const tempContainer = document.createElement('div');
+            tempContainer.style.position = 'absolute';
+            tempContainer.style.left = '-9999px';
+            document.body.appendChild(tempContainer);
+
+            // Build CamanJS edit values from image properties
+            const camanEdits: CamanEditValues = {
+              exposure: image.exposure,
+              contrast: image.contrast,
+              brightness: image.brightness,
+              highlights: image.highlights,
+              shadows: image.shadows,
+              whites: image.whites,
+              blacks: image.blacks,
+              temperature: image.temperature,
+              vibrance: image.vibrance,
+              saturation: image.saturation,
+              clarity: image.clarity,
+              dehaze: image.dehaze,
+              hue: image.hue,
+              vignette: image.vignette,
+              grain: image.grain,
+              blur: image.blur,
+              shadowTint: image.shadowTint,
+              curves: image.curves,
+              colorHSL: image.colorHSL,
+              splitToning: image.splitToning,
+              colorGrading: image.colorGrading,
+              colorCalibration: image.colorCalibration,
+              filters: image.filters,
+            };
+
+            // Check if any edits need to be applied
+            const needsProcessing = hasActiveEdits(camanEdits);
+
+            let dataUrl: string;
+            if (needsProcessing) {
+              // Apply CamanJS filters to the decoded image
+              console.log('Applying CamanJS filters to full-res DNG...');
+              dataUrl = await processCamanImage(decoded.dataUrl, camanEdits);
+            } else {
+              // No edits, use decoded image directly
+              dataUrl = decoded.dataUrl;
+            }
+
+            // Cleanup temp container (no longer needed since we use CamanJS directly)
+            document.body.removeChild(tempContainer);
+
+            // Download
+            const a = document.createElement('a');
+            a.href = dataUrl;
+            a.download = `${image.id || 'export'}-fullres-${Date.now()}.jpg`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            alert(`Exported at full resolution: ${decoded.width}x${decoded.height}px`);
+            console.log('Full-res DNG export completed');
+            return;
+          }
+        } catch (dngError) {
+          console.error('DNG export error:', dngError);
+          alert(`DNG export failed: ${dngError instanceof Error ? dngError.message : 'Unknown error'}. Falling back to server export.`);
+          // Fall through to server export
+        }
+      }
+
+      // Server export (photos bucket or regular images)
+      const edits = {
+        exposure: image.exposure,
+        contrast: image.contrast,
+        highlights: image.highlights,
+        shadows: image.shadows,
+        whites: image.whites,
+        blacks: image.blacks,
+        brightness: image.brightness,
+        temperature: image.temperature,
+        vibrance: image.vibrance,
+        saturation: image.saturation,
+        clarity: image.clarity,
+        dehaze: image.dehaze,
+        vignette: image.vignette,
+        grain: image.grain,
+        curves: image.curves,
+        colorHSL: image.colorHSL,
+        splitToning: image.splitToning,
+        shadowTint: image.shadowTint,
+        colorGrading: image.colorGrading,
+        colorCalibration: image.colorCalibration,
+      };
+
+      const response = await fetch('/api/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storagePath: image.storagePath || undefined,
+          originalStoragePath: image.originalStoragePath || undefined,
+          edits,
+          format: 'jpeg',
+          quality: 95,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Export failed');
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `export-${Date.now()}.jpg`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+    } catch (error) {
+      console.error('Export error:', error);
+      alert(`Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }, [selectedId, images]);
 
   // Handle folder click to edit
   const handleFolderDoubleClick = useCallback((folder: PhotoFolder) => {
@@ -2539,19 +3097,29 @@ export function CanvasEditor() {
     const folderImageIds = editingFolder.imageIds;
 
     if (deleteImages) {
-      // Delete images from Supabase storage
+      // Delete images via API (service role) so originals bucket is removed
       if (user) {
         for (const imgId of folderImageIds) {
           const img = images.find(i => i.id === imgId);
-          if (img?.storagePath) {
-            try {
-              await supabase.storage.from('photos').remove([img.storagePath]);
-              await supabase.from('photo_edits').delete()
-                .eq('storage_path', img.storagePath)
-                .eq('user_id', user.id);
-            } catch (error) {
-              console.error('Failed to delete image:', error);
+          if (!img) continue;
+          const canonicalPath = img.storagePath || img.originalStoragePath;
+          if (!canonicalPath) continue;
+          try {
+            const res = await fetch('/api/delete-photo', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                storagePath: img.storagePath ?? undefined,
+                originalStoragePath: img.originalStoragePath ?? undefined,
+                userId: user.id,
+              }),
+            });
+            if (!res.ok) {
+              const data = await res.json();
+              console.error('Failed to delete image:', data);
             }
+          } catch (error) {
+            console.error('Failed to delete image:', error);
           }
         }
       }
@@ -2703,11 +3271,12 @@ export function CanvasEditor() {
           });
       }
       
-      const folderImages = recenteredImages.filter(img => img.storagePath && img.folderId);
+      const folderImages = recenteredImages.filter(img => (img.storagePath || img.originalStoragePath) && img.folderId);
       for (const img of folderImages) {
+        const canonicalPath = img.storagePath || img.originalStoragePath!;
         supabase.from('photo_edits')
           .update({ x: Math.round(img.x), y: Math.round(img.y) })
-          .eq('storage_path', img.storagePath!)
+          .eq('storage_path', canonicalPath)
           .eq('user_id', user.id)
           .then(({ error }) => {
             if (error) console.error('Failed to update image position:', error);
@@ -3129,12 +3698,13 @@ export function CanvasEditor() {
                             });
                         }
 
-                        // Save all images positions
-                        const allFolderImages = finalImages.filter((img: CanvasImage) => img.storagePath && img.folderId);
+                        // Save all images positions (canonical key)
+                        const allFolderImages = finalImages.filter((img: CanvasImage) => (img.storagePath || img.originalStoragePath) && img.folderId);
                         for (const img of allFolderImages) {
+                          const canonicalPath = img.storagePath || img.originalStoragePath!;
                           supabase.from('photo_edits')
                             .update({ x: Math.round(img.x), y: Math.round(img.y) })
-                            .eq('storage_path', img.storagePath!)
+                            .eq('storage_path', canonicalPath)
                             .eq('user_id', user.id)
                             .then(({ error }) => {
                               if (error) console.error('Failed to update image position:', error);
@@ -3414,12 +3984,13 @@ export function CanvasEditor() {
                             });
                         }
                         
-                        // Save all images positions
-                        const allFolderImages = finalImages.filter((img: CanvasImage) => img.storagePath && img.folderId);
+                        // Save all images positions (canonical key)
+                        const allFolderImages = finalImages.filter((img: CanvasImage) => (img.storagePath || img.originalStoragePath) && img.folderId);
                         for (const img of allFolderImages) {
+                          const canonicalPath = img.storagePath || img.originalStoragePath!;
                           supabase.from('photo_edits')
                             .update({ x: Math.round(img.x), y: Math.round(img.y) })
-                            .eq('storage_path', img.storagePath!)
+                            .eq('storage_path', canonicalPath)
                             .eq('user_id', user.id)
                             .then(({ error }) => {
                               if (error) console.error('Failed to update image position:', error);
@@ -3566,27 +4137,26 @@ export function CanvasEditor() {
             if ('src' in selectedObject) {
               const imageToDelete = selectedObject as CanvasImage;
               
-              // Try to delete from Supabase Storage
-              try {
-                // Extract the path from the Supabase URL
-                // URL format: https://[project].supabase.co/storage/v1/object/public/photos/[user_id]/[filename]
-                const url = new URL(imageToDelete.src);
-                const pathMatch = url.pathname.match(/\/storage\/v1\/object\/public\/photos\/(.+)/);
-                
-                if (pathMatch && pathMatch[1]) {
-                  const filePath = decodeURIComponent(pathMatch[1]);
-                  const { error } = await supabase.storage
-                    .from('photos')
-                    .remove([filePath]);
-                  
-                  if (error) {
-                    console.error('Failed to delete from Supabase:', error);
-                  } else {
-                    console.log('Deleted from Supabase:', filePath);
+              // Delete from Supabase via API (service role) so originals bucket is removed
+              const canonicalPath = imageToDelete.storagePath || imageToDelete.originalStoragePath;
+              if (user && canonicalPath) {
+                try {
+                  const res = await fetch('/api/delete-photo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      storagePath: imageToDelete.storagePath ?? undefined,
+                      originalStoragePath: imageToDelete.originalStoragePath ?? undefined,
+                      userId: user.id,
+                    }),
+                  });
+                  if (!res.ok) {
+                    const data = await res.json();
+                    console.error('Delete photo failed:', data);
                   }
+                } catch (err) {
+                  console.error('Error deleting photo:', err);
                 }
-              } catch (err) {
-                console.error('Error deleting from Supabase:', err);
               }
               
               setImages((prev) => prev.filter((img) => img.id !== selectedId));
@@ -3597,27 +4167,40 @@ export function CanvasEditor() {
             saveToHistory();
           }}
           onResetToOriginal={'src' in selectedObject ? () => {
-            // Reset all edits to default values
+            // Reset ALL edits to default values
             setImages((prev) =>
               prev.map((img) => img.id === selectedId ? {
                 ...img,
                 rotation: 0,
                 scaleX: 1,
                 scaleY: 1,
+                // Light
                 exposure: 0,
                 contrast: 0,
                 highlights: 0,
                 shadows: 0,
                 whites: 0,
                 blacks: 0,
+                texture: 0,
+                // Color
                 temperature: 0,
                 vibrance: 0,
                 saturation: 0,
+                shadowTint: 0,
+                colorHSL: undefined,
+                splitToning: undefined,
+                colorGrading: undefined,
+                colorCalibration: undefined,
+                // Effects
                 clarity: 0,
                 dehaze: 0,
                 vignette: 0,
                 grain: 0,
+                grainSize: 0,
+                grainRoughness: 0,
+                // Curves
                 curves: { ...DEFAULT_CURVES },
+                // Legacy
                 brightness: 0,
                 hue: 0,
                 blur: 0,
@@ -3627,6 +4210,7 @@ export function CanvasEditor() {
             saveToHistory();
           } : undefined}
           onSave={'src' in selectedObject ? handleSave : undefined}
+          onExport={'src' in selectedObject ? handleExport : undefined}
         />
       )}
 
@@ -3635,192 +4219,360 @@ export function CanvasEditor() {
 }
 
 // Custom brightness filter that multiplies instead of adds (prevents black screens)
+// Uses pre-computed LUT for maximum performance
 const createBrightnessFilter = (brightness: number) => {
+  // Pre-compute 256-entry lookup table
+  const lut = new Uint8ClampedArray(256);
+  const factor = 1 + brightness;
+  for (let i = 0; i < 256; i++) {
+    lut[i] = i * factor; // Uint8ClampedArray auto-clamps to 0-255
+  }
+
   return function(imageData: ImageData) {
     const data = imageData.data;
-    const factor = 1 + brightness;
-    for (let i = 0; i < data.length; i += 4) {
-      data[i] = Math.min(255, Math.max(0, data[i] * factor));
-      data[i + 1] = Math.min(255, Math.max(0, data[i + 1] * factor));
-      data[i + 2] = Math.min(255, Math.max(0, data[i + 2] * factor));
+    const len = data.length;
+    for (let i = 0; i < len; i += 4) {
+      data[i] = lut[data[i]];
+      data[i + 1] = lut[data[i + 1]];
+      data[i + 2] = lut[data[i + 2]];
     }
   };
 };
 
 // Exposure filter - like brightness but uses power curve for more natural look
+// Uses pre-computed LUT for maximum performance
 const createExposureFilter = (exposure: number) => {
+  // Pre-compute 256-entry lookup table
+  const lut = new Uint8ClampedArray(256);
+  const factor = Math.pow(2, exposure);
+  for (let i = 0; i < 256; i++) {
+    lut[i] = i * factor; // Uint8ClampedArray auto-clamps to 0-255
+  }
+
   return function(imageData: ImageData) {
     const data = imageData.data;
-    // Exposure uses 2^exposure as multiplier (like stops in photography)
-    const factor = Math.pow(2, exposure);
-    for (let i = 0; i < data.length; i += 4) {
-      data[i] = Math.min(255, Math.max(0, data[i] * factor));
-      data[i + 1] = Math.min(255, Math.max(0, data[i + 1] * factor));
-      data[i + 2] = Math.min(255, Math.max(0, data[i + 2] * factor));
+    const len = data.length;
+    for (let i = 0; i < len; i += 4) {
+      data[i] = lut[data[i]];
+      data[i + 1] = lut[data[i + 1]];
+      data[i + 2] = lut[data[i + 2]];
     }
   };
 };
 
 // Tonal filter for highlights, shadows, whites, blacks
+// Calibrated to match Lightroom behavior
 const createTonalFilter = (highlights: number, shadows: number, whites: number, blacks: number) => {
+  // Pre-compute 256-entry lookup table
+  const lut = new Uint8ClampedArray(256);
+
+  for (let i = 0; i < 256; i++) {
+    let val = i / 255;
+
+    // Blacks: Affects tones 0-25%, strongest at 0%
+    // Lightroom +100 blacks lifts darkest tones significantly
+    if (val < 0.25) {
+      const blackMask = 1 - val / 0.25; // 1 at 0%, 0 at 25%
+      val += blacks * 0.4 * blackMask;
+    }
+
+    // Shadows: Affects tones 0-50%, peaks around 25%
+    // Lightroom +100 shadows brightens dark areas
+    const shadowMask = val < 0.5 ? Math.sin(val * Math.PI) : 0;
+    val += shadows * 0.5 * shadowMask;
+
+    // Highlights: Affects tones 50-100%, peaks around 75%
+    // Lightroom -100 highlights recovers blown highlights
+    const highlightMask = val > 0.5 ? Math.sin((val - 0.5) * Math.PI) : 0;
+    val += highlights * 0.5 * highlightMask;
+
+    // Whites: Affects tones 75-100%, strongest at 100%
+    // Lightroom +100 whites pushes bright tones to white
+    if (val > 0.75) {
+      const whiteMask = (val - 0.75) / 0.25; // 0 at 75%, 1 at 100%
+      val += whites * 0.4 * whiteMask;
+    }
+
+    // Clamp before LUT assignment
+    lut[i] = Math.max(0, Math.min(1, val)) * 255;
+  }
+
   return function(imageData: ImageData) {
     const data = imageData.data;
-    for (let i = 0; i < data.length; i += 4) {
-      for (let c = 0; c < 3; c++) {
-        let val = data[i + c] / 255;
-        
-        // Blacks (affects darkest tones)
-        if (val < 0.25) {
-          val += blacks * 0.5 * (0.25 - val);
-        }
-        
-        // Shadows (affects dark-mid tones)
-        if (val < 0.5) {
-          const shadowMask = Math.sin(val * Math.PI);
-          val += shadows * 0.3 * shadowMask * (0.5 - val);
-        }
-        
-        // Highlights (affects light-mid tones)
-        if (val > 0.5) {
-          const highlightMask = Math.sin((val - 0.5) * Math.PI);
-          val += highlights * 0.3 * highlightMask * (val - 0.5);
-        }
-        
-        // Whites (affects brightest tones)
-        if (val > 0.75) {
-          val += whites * 0.5 * (val - 0.75);
-        }
-        
-        data[i + c] = Math.min(255, Math.max(0, val * 255));
-      }
+    const len = data.length;
+    for (let i = 0; i < len; i += 4) {
+      data[i] = lut[data[i]];
+      data[i + 1] = lut[data[i + 1]];
+      data[i + 2] = lut[data[i + 2]];
     }
   };
 };
 
 // Temperature filter - warm/cool white balance
+// Calibrated to match Lightroom: +1 = warm (orange/yellow), -1 = cool (blue)
+// Uses color temperature shift similar to Lightroom's algorithm
 const createTemperatureFilter = (temperature: number) => {
+  // Pre-compute lookup tables for R, G, B channels
+  // Warm: boost R, slight G reduction, reduce B
+  // Cool: reduce R, slight G boost, boost B
+  const warmR = temperature > 0 ? temperature * 25 : temperature * 15;
+  const warmG = temperature > 0 ? temperature * -5 : temperature * 5;
+  const warmB = temperature > 0 ? temperature * -30 : temperature * -25;
+
+  const redLut = new Uint8ClampedArray(256);
+  const greenLut = new Uint8ClampedArray(256);
+  const blueLut = new Uint8ClampedArray(256);
+
+  for (let i = 0; i < 256; i++) {
+    redLut[i] = i + warmR;
+    greenLut[i] = i + warmG;
+    blueLut[i] = i - warmB;
+  }
+
   return function(imageData: ImageData) {
     const data = imageData.data;
-    // Positive = warmer (more red/yellow), Negative = cooler (more blue)
-    const tempFactor = temperature * 30; // Scale to reasonable RGB shift
-    for (let i = 0; i < data.length; i += 4) {
-      // Warm: boost red, reduce blue
-      // Cool: boost blue, reduce red
-      data[i] = Math.min(255, Math.max(0, data[i] + tempFactor));       // R
-      data[i + 2] = Math.min(255, Math.max(0, data[i + 2] - tempFactor)); // B
+    const len = data.length;
+    for (let i = 0; i < len; i += 4) {
+      data[i] = redLut[data[i]];         // R
+      data[i + 1] = greenLut[data[i + 1]]; // G
+      data[i + 2] = blueLut[data[i + 2]]; // B
     }
   };
 };
 
 // Vibrance filter - smart saturation that protects skin tones
+// Calibrated to match Lightroom: boosts muted colors, protects saturated & skin tones
 const createVibranceFilter = (vibrance: number) => {
+  // Stronger effect to match Lightroom
+  const amt = vibrance * 2.0;
+  const rCoef = 0.299;
+  const gCoef = 0.587;
+  const bCoef = 0.114;
+
   return function(imageData: ImageData) {
     const data = imageData.data;
-    const amt = vibrance * 1.5;
-    for (let i = 0; i < data.length; i += 4) {
+    const len = data.length;
+
+    for (let i = 0; i < len; i += 4) {
       const r = data[i], g = data[i + 1], b = data[i + 2];
-      const max = Math.max(r, g, b);
-      const min = Math.min(r, g, b);
-      const sat = max === 0 ? 0 : (max - min) / max;
-      
-      // Less saturation boost for already saturated colors
-      const factor = 1 + amt * (1 - sat);
-      const gray = 0.299 * r + 0.587 * g + 0.114 * b;
-      
-      data[i] = Math.min(255, Math.max(0, gray + (r - gray) * factor));
-      data[i + 1] = Math.min(255, Math.max(0, gray + (g - gray) * factor));
-      data[i + 2] = Math.min(255, Math.max(0, gray + (b - gray) * factor));
+
+      // Fast max/min using ternary
+      const max = r > g ? (r > b ? r : b) : (g > b ? g : b);
+      const min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+
+      // Skip if max is 0 (black pixel)
+      if (max === 0) continue;
+
+      const sat = (max - min) / max;
+      const gray = rCoef * r + gCoef * g + bCoef * b;
+
+      // Skin tone detection: orange-red hues with moderate saturation
+      // Skin tones typically have R > G > B with specific ratios
+      let skinProtection = 1;
+      if (r > g && g > b && sat > 0.1 && sat < 0.7) {
+        // Calculate rough hue (0-60 range for red-yellow)
+        const hueEstimate = (g - b) / (max - min) * 60;
+        // Protect orange/red-orange skin tones (hue ~15-45)
+        if (hueEstimate > 10 && hueEstimate < 50) {
+          // Reduce effect on skin tones by 60%
+          skinProtection = 0.4;
+        }
+      }
+
+      // Vibrance: boost low-saturation colors more, protect high-saturation
+      const factor = 1 + amt * (1 - sat) * skinProtection;
+
+      let nr = gray + (r - gray) * factor;
+      let ng = gray + (g - gray) * factor;
+      let nb = gray + (b - gray) * factor;
+
+      data[i] = nr < 0 ? 0 : nr > 255 ? 255 : nr;
+      data[i + 1] = ng < 0 ? 0 : ng > 255 ? 255 : ng;
+      data[i + 2] = nb < 0 ? 0 : nb > 255 ? 255 : nb;
     }
   };
 };
 
 // Clarity filter - midtone contrast enhancement
+// Calibrated to match Lightroom: +100 = strong midtone contrast
 const createClarityFilter = (clarity: number) => {
+  // Pre-compute 256-entry lookup table
+  const lut = new Uint8ClampedArray(256);
+  // Stronger effect: clarity * 0.8 gives noticeable change
+  const factor = 1 + clarity * 0.8;
+  const midtone = 0.5;
+
+  for (let i = 0; i < 256; i++) {
+    const val = i / 255;
+    // Apply S-curve contrast centered on midtones
+    const diff = val - midtone;
+    // Smoothly weight the effect to be stronger in midtones
+    const weight = 1 - Math.abs(diff) * 1.5; // Reduces effect at extremes
+    const newVal = midtone + diff * (1 + (factor - 1) * Math.max(0, weight));
+    lut[i] = Math.max(0, Math.min(1, newVal)) * 255;
+  }
+
   return function(imageData: ImageData) {
     const data = imageData.data;
-    const factor = 1 + clarity * 0.5;
-    for (let i = 0; i < data.length; i += 4) {
-      for (let c = 0; c < 3; c++) {
-        const val = data[i + c] / 255;
-        // Apply S-curve centered on midtones
-        const midtone = 0.5;
-        const diff = val - midtone;
-        const newVal = midtone + diff * factor;
-        data[i + c] = Math.min(255, Math.max(0, newVal * 255));
-      }
+    const len = data.length;
+    for (let i = 0; i < len; i += 4) {
+      data[i] = lut[data[i]];
+      data[i + 1] = lut[data[i + 1]];
+      data[i + 2] = lut[data[i + 2]];
     }
   };
 };
 
 // Dehaze filter - remove atmospheric haze
+// Calibrated to match Lightroom: +100 = strong haze removal
 const createDehazeFilter = (dehaze: number) => {
+  // Stronger effect for dehaze
+  const contrastBoost = 1 + dehaze * 0.7;
+  const satBoost = 1 + dehaze * 0.5;
+  const blackPoint = dehaze * 0.15; // Lift black point to cut through haze
+  const rCoef = 0.299, gCoef = 0.587, bCoef = 0.114;
+
   return function(imageData: ImageData) {
     const data = imageData.data;
-    // Increase contrast and saturation in a haze-aware way
-    const contrastBoost = 1 + dehaze * 0.5;
-    const satBoost = 1 + dehaze * 0.3;
-    
-    for (let i = 0; i < data.length; i += 4) {
+    const len = data.length;
+
+    for (let i = 0; i < len; i += 4) {
       const r = data[i], g = data[i + 1], b = data[i + 2];
-      
+
       // Contrast
       let nr = 128 + (r - 128) * contrastBoost;
       let ng = 128 + (g - 128) * contrastBoost;
       let nb = 128 + (b - 128) * contrastBoost;
-      
+
       // Saturation
-      const ngray = 0.299 * nr + 0.587 * ng + 0.114 * nb;
+      const ngray = rCoef * nr + gCoef * ng + bCoef * nb;
       nr = ngray + (nr - ngray) * satBoost;
       ng = ngray + (ng - ngray) * satBoost;
       nb = ngray + (nb - ngray) * satBoost;
-      
-      data[i] = Math.min(255, Math.max(0, nr));
-      data[i + 1] = Math.min(255, Math.max(0, ng));
-      data[i + 2] = Math.min(255, Math.max(0, nb));
+
+      // Fast clamping
+      data[i] = nr < 0 ? 0 : nr > 255 ? 255 : nr;
+      data[i + 1] = ng < 0 ? 0 : ng > 255 ? 255 : ng;
+      data[i + 2] = nb < 0 ? 0 : nb > 255 ? 255 : nb;
     }
   };
 };
 
-// Vignette filter - darken edges
+// Vignette filter - darken or lighten edges
+// Calibrated to match Lightroom: smooth power-curve falloff with feathering
+// Positive values darken edges, negative values lighten edges
 const createVignetteFilter = (vignette: number) => {
+  let falloffMap: Float32Array | null = null;
+  let lastWidth = 0;
+  let lastHeight = 0;
+
   return function(imageData: ImageData) {
     const data = imageData.data;
     const w = imageData.width;
     const h = imageData.height;
-    const cx = w / 2;
-    const cy = h / 2;
-    const maxDist = Math.sqrt(cx * cx + cy * cy);
-    
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const i = (y * w + x) * 4;
-        const dx = x - cx;
+
+    // Recompute falloff map only if dimensions changed
+    if (w !== lastWidth || h !== lastHeight) {
+      lastWidth = w;
+      lastHeight = h;
+      falloffMap = new Float32Array(w * h);
+
+      const cx = w * 0.5;
+      const cy = h * 0.5;
+      // Use actual distance (not squared) for smoother falloff
+      const maxDist = Math.sqrt(cx * cx + cy * cy);
+      // Feather: how quickly the vignette fades (higher = softer edge)
+      const feather = 0.5;
+
+      for (let y = 0; y < h; y++) {
         const dy = y - cy;
-        const dist = Math.sqrt(dx * dx + dy * dy) / maxDist;
-        
-        // Smooth falloff
-        const falloff = Math.pow(dist, 2) * vignette;
-        const factor = Math.max(0, 1 - falloff);
-        
+        const dySq = dy * dy;
+        const rowOffset = y * w;
+
+        for (let x = 0; x < w; x++) {
+          const dx = x - cx;
+          const dist = Math.sqrt(dx * dx + dySq) / maxDist;
+          // Power curve for smooth falloff (matches Lightroom's feather)
+          // Start effect at 30% from center, full effect at edge
+          const normalizedDist = Math.max(0, (dist - 0.3) / 0.7);
+          const falloff = Math.pow(normalizedDist, 1.5 + feather);
+          falloffMap[rowOffset + x] = falloff;
+        }
+      }
+    }
+
+    const map = falloffMap!;
+    const pixelCount = w * h;
+    const amount = Math.abs(vignette);
+    const isDarkening = vignette > 0;
+
+    for (let p = 0; p < pixelCount; p++) {
+      const i = p * 4;
+      const falloff = map[p] * amount;
+
+      if (isDarkening) {
+        // Darken edges
+        const factor = 1 - falloff * 0.8;
         data[i] *= factor;
         data[i + 1] *= factor;
         data[i + 2] *= factor;
+      } else {
+        // Lighten edges
+        data[i] = data[i] + (255 - data[i]) * falloff * 0.5;
+        data[i + 1] = data[i + 1] + (255 - data[i + 1]) * falloff * 0.5;
+        data[i + 2] = data[i + 2] + (255 - data[i + 2]) * falloff * 0.5;
       }
     }
   };
 };
 
 // Grain filter - add film-like noise
+// Calibrated to match Lightroom: luminance-based grain (more visible in midtones)
 const createGrainFilter = (grain: number) => {
+  // Slightly stronger base intensity
+  const intensity = grain * 60;
+
+  // Pre-compute a noise pattern (faster than calling Math.random per pixel)
+  const patternSize = 4096;
+  const noisePattern = new Int8Array(patternSize);
+  for (let i = 0; i < patternSize; i++) {
+    noisePattern[i] = ((Math.random() - 0.5) * intensity) | 0;
+  }
+
+  const rCoef = 0.299;
+  const gCoef = 0.587;
+  const bCoef = 0.114;
+
   return function(imageData: ImageData) {
     const data = imageData.data;
-    const intensity = grain * 50;
-    
-    for (let i = 0; i < data.length; i += 4) {
-      const noise = (Math.random() - 0.5) * intensity;
-      data[i] = Math.min(255, Math.max(0, data[i] + noise));
-      data[i + 1] = Math.min(255, Math.max(0, data[i + 1] + noise));
-      data[i + 2] = Math.min(255, Math.max(0, data[i + 2] + noise));
+    const len = data.length;
+
+    // Use pattern with offset to vary grain per frame
+    let offset = (Math.random() * patternSize) | 0;
+
+    for (let i = 0; i < len; i += 4) {
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+
+      // Calculate luminance (0-1 range)
+      const lum = (rCoef * r + gCoef * g + bCoef * b) / 255;
+
+      // Film grain is more visible in midtones, less in shadows and highlights
+      // Use sine curve to reduce grain at extremes
+      const midtoneMask = Math.sin(lum * Math.PI);
+
+      const baseNoise = noisePattern[offset];
+      offset = (offset + 1) % patternSize;
+
+      // Apply luminance-weighted noise
+      const noise = baseNoise * midtoneMask;
+
+      let nr = r + noise;
+      let ng = g + noise;
+      let nb = b + noise;
+
+      data[i] = nr < 0 ? 0 : nr > 255 ? 255 : nr;
+      data[i + 1] = ng < 0 ? 0 : ng > 255 ? 255 : ng;
+      data[i + 2] = nb < 0 ? 0 : nb > 255 ? 255 : nb;
     }
   };
 };
@@ -3886,89 +4638,170 @@ const createCurvesFilter = (curves: ChannelCurves) => {
   };
 };
 
-// HSL color adjustment filter - applies hue/sat/lum shifts to specific color ranges
+// HSL color adjustment filter - applies hue/sat/lum shifts with smooth color blending like Lightroom
+// Optimized with pre-computed lookup tables for all 360 hue values
 const createHSLColorFilter = (colorHSL: ColorHSL) => {
+  // Color center hues (in degrees) - matches Lightroom's HSL panel
+  const colorCenters: { name: keyof ColorHSL; center: number }[] = [
+    { name: 'red', center: 0 },
+    { name: 'orange', center: 30 },
+    { name: 'yellow', center: 60 },
+    { name: 'green', center: 120 },
+    { name: 'aqua', center: 180 },
+    { name: 'blue', center: 225 },
+    { name: 'purple', center: 270 },
+    { name: 'magenta', center: 315 },
+  ];
+
+  // Calculate weight for a color based on hue distance (smooth falloff)
+  const getColorWeight = (hue360: number, centerHue: number): number => {
+    let diff = Math.abs(hue360 - centerHue);
+    if (diff > 180) diff = 360 - diff; // Handle wrap-around
+    // Use a smooth falloff - full weight within 15°, fades to 0 at 45°
+    if (diff <= 15) return 1;
+    if (diff >= 45) return 0;
+    return 1 - (diff - 15) / 30; // Linear falloff between 15° and 45°
+  };
+
+  // PRE-COMPUTE: Build lookup tables for all 360 hue values
+  // This moves the expensive per-color weight calculation out of the hot loop
+  const hueLUT = new Float32Array(360); // Pre-computed hue adjustments
+  const satLUT = new Float32Array(360); // Pre-computed saturation adjustments
+  const lumLUT = new Float32Array(360); // Pre-computed luminance adjustments
+
+  for (let hue = 0; hue < 360; hue++) {
+    let totalHueAdj = 0;
+    let totalSatAdj = 0;
+    let totalLumAdj = 0;
+    let totalWeight = 0;
+
+    for (const { name, center } of colorCenters) {
+      const weight = getColorWeight(hue, center);
+      if (weight <= 0) continue;
+
+      const adj = colorHSL[name];
+      if (!adj) continue;
+
+      totalHueAdj += (adj.hue ?? 0) * weight;
+      totalSatAdj += (adj.saturation ?? 0) * weight;
+      totalLumAdj += (adj.luminance ?? 0) * weight;
+      totalWeight += weight;
+    }
+
+    if (totalWeight > 0) {
+      hueLUT[hue] = totalHueAdj / totalWeight;
+      satLUT[hue] = totalSatAdj / totalWeight;
+      lumLUT[hue] = totalLumAdj / totalWeight;
+    }
+  }
+
+  // Lightroom calibration: +100 = full effect
+  const hueStrength = 0.3; // Lightroom +100 hue = ~30° shift
+  const satStrength = 0.8; // Stronger saturation effect
+  const lumStrength = 0.5; // Stronger luminance effect
+
   return function(imageData: ImageData) {
     const data = imageData.data;
+    const len = data.length;
 
-    for (let i = 0; i < data.length; i += 4) {
+    for (let i = 0; i < len; i += 4) {
       const r = data[i] / 255;
       const g = data[i + 1] / 255;
       const b = data[i + 2] / 255;
 
-      // Convert RGB to HSL
-      const max = Math.max(r, g, b);
-      const min = Math.min(r, g, b);
-      const l = (max + min) / 2;
-      let h = 0;
-      let s = 0;
+      // Convert RGB to HSL (optimized)
+      const max = r > g ? (r > b ? r : b) : (g > b ? g : b);
+      const min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+      const l = (max + min) * 0.5;
 
-      if (max !== min) {
-        const d = max - min;
-        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      if (max === min) continue; // Skip grays
 
-        switch (max) {
-          case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
-          case g: h = ((b - r) / d + 2) / 6; break;
-          case b: h = ((r - g) / d + 4) / 6; break;
-        }
+      const d = max - min;
+      const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+
+      // Skip low-saturation pixels
+      if (s < 0.05) continue;
+
+      let h: number;
+      if (max === r) {
+        h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+      } else if (max === g) {
+        h = ((b - r) / d + 2) / 6;
+      } else {
+        h = ((r - g) / d + 4) / 6;
       }
 
-      // Determine which color range this pixel belongs to
-      const hue360 = h * 360;
-      let adjustment: HSLAdjustments | null = null;
+      // Use integer hue for LUT lookup (0-359)
+      const hueIdx = (h * 360) | 0; // Fast floor using bitwise OR
 
-      if (hue360 >= 345 || hue360 < 15) adjustment = colorHSL.red;
-      else if (hue360 >= 15 && hue360 < 45) adjustment = colorHSL.orange;
-      else if (hue360 >= 45 && hue360 < 75) adjustment = colorHSL.yellow;
-      else if (hue360 >= 75 && hue360 < 165) adjustment = colorHSL.green;
-      else if (hue360 >= 165 && hue360 < 195) adjustment = colorHSL.aqua;
-      else if (hue360 >= 195 && hue360 < 255) adjustment = colorHSL.blue;
-      else if (hue360 >= 255 && hue360 < 285) adjustment = colorHSL.purple;
-      else if (hue360 >= 285 && hue360 < 345) adjustment = colorHSL.magenta;
+      // Get pre-computed adjustments from LUT
+      const hueAdj = hueLUT[hueIdx];
+      const satAdj = satLUT[hueIdx];
+      const lumAdj = lumLUT[hueIdx];
 
-      if (adjustment) {
-        // Apply hue shift
-        h += adjustment.hue / 360;
-        if (h < 0) h += 1;
-        if (h > 1) h -= 1;
+      // Skip if adjustments are negligible
+      if (hueAdj === 0 && satAdj === 0 && lumAdj === 0) continue;
 
-        // Apply saturation shift
-        s += adjustment.saturation / 100;
-        s = Math.max(0, Math.min(1, s));
+      // Apply hue shift (Lightroom +100 = ~30° shift = 30/360 = 0.083)
+      let newH = h + hueAdj / 1200; // +100 -> 30° shift
+      if (newH < 0) newH += 1;
+      else if (newH > 1) newH -= 1;
 
-        // Apply luminance shift - convert to RGB first, then adjust
-        // Convert HSL back to RGB
-        let newR, newG, newB;
-        if (s === 0) {
-          newR = newG = newB = l;
-        } else {
-          const hue2rgb = (p: number, q: number, t: number) => {
-            if (t < 0) t += 1;
-            if (t > 1) t -= 1;
-            if (t < 1/6) return p + (q - p) * 6 * t;
-            if (t < 1/2) return q;
-            if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
-            return p;
-          };
-
-          const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-          const p = 2 * l - q;
-          newR = hue2rgb(p, q, h + 1/3);
-          newG = hue2rgb(p, q, h);
-          newB = hue2rgb(p, q, h - 1/3);
-        }
-
-        // Apply luminance adjustment
-        const lumAdjust = adjustment.luminance / 100;
-        newR = Math.max(0, Math.min(1, newR + lumAdjust));
-        newG = Math.max(0, Math.min(1, newG + lumAdjust));
-        newB = Math.max(0, Math.min(1, newB + lumAdjust));
-
-        data[i] = newR * 255;
-        data[i + 1] = newG * 255;
-        data[i + 2] = newB * 255;
+      // Apply saturation adjustment
+      let newS = s;
+      if (satAdj > 0) {
+        newS = s + (1 - s) * (satAdj / 100) * satStrength;
+      } else {
+        newS = s * (1 + (satAdj / 100) * satStrength);
       }
+      // Clamp saturation
+      if (newS < 0) newS = 0;
+      else if (newS > 1) newS = 1;
+
+      // Apply luminance adjustment
+      let newL = l;
+      if (lumAdj > 0) {
+        newL = l + (1 - l) * (lumAdj / 100) * lumStrength;
+      } else if (lumAdj < 0) {
+        newL = l * (1 + (lumAdj / 100) * lumStrength);
+      }
+      // Clamp luminance
+      if (newL < 0) newL = 0;
+      else if (newL > 1) newL = 1;
+
+      // Convert HSL back to RGB (optimized)
+      let newR: number, newG: number, newB: number;
+      if (newS === 0) {
+        newR = newG = newB = newL;
+      } else {
+        const q = newL < 0.5 ? newL * (1 + newS) : newL + newS - newL * newS;
+        const p = 2 * newL - q;
+
+        // Inline hue2rgb for performance
+        let t = newH + 1/3;
+        if (t > 1) t -= 1;
+        if (t < 1/6) newR = p + (q - p) * 6 * t;
+        else if (t < 1/2) newR = q;
+        else if (t < 2/3) newR = p + (q - p) * (2/3 - t) * 6;
+        else newR = p;
+
+        t = newH;
+        if (t < 1/6) newG = p + (q - p) * 6 * t;
+        else if (t < 1/2) newG = q;
+        else if (t < 2/3) newG = p + (q - p) * (2/3 - t) * 6;
+        else newG = p;
+
+        t = newH - 1/3;
+        if (t < 0) t += 1;
+        if (t < 1/6) newB = p + (q - p) * 6 * t;
+        else if (t < 1/2) newB = q;
+        else if (t < 2/3) newB = p + (q - p) * (2/3 - t) * 6;
+        else newB = p;
+      }
+
+      data[i] = newR * 255;
+      data[i + 1] = newG * 255;
+      data[i + 2] = newB * 255;
     }
   };
 };
@@ -4224,8 +5057,9 @@ const createColorCalibrationFilter = (colorCal: ColorCalibration) => {
   };
 };
 
-// Image node component
-function ImageNode({
+// Image node component - memoized to prevent unnecessary re-renders
+// Uses fast Konva filters with pre-computed LUTs for real-time editing
+const ImageNode = React.memo(function ImageNode({
   image,
   onClick,
   onDragEnd,
@@ -4254,90 +5088,71 @@ function ImageNode({
     const newX = image.x;
     const newY = image.y;
 
-    // Only animate if position actually changed
     if (Math.abs(newX - prevX) > 0.5 || Math.abs(newY - prevY) > 0.5) {
-      // Set to previous position first
       node.position({ x: prevX, y: prevY });
-
-      // Then smoothly animate to new position
       node.to({
         x: newX,
         y: newY,
         duration: 0.2,
         easing: Konva.Easings.EaseOut,
       });
-
-      // Update ref
       prevPosRef.current = { x: newX, y: newY };
     }
   }, [image.x, image.y]);
 
-  // Check if any channel curves are modified
-  const isCurveChannelModified = (points: CurvePoint[]) => {
-    if (!points || points.length === 0) return false;
-    if (points.length > 2) return true;
-    return points.some((p, i) => {
-      if (i === 0) return p.x !== 0 || p.y !== 0;
-      if (i === points.length - 1) return p.x !== 255 || p.y !== 255;
-      return true;
-    });
-  };
-
-  const isCurvesModified = image.curves && (
-    isCurveChannelModified(image.curves.rgb) ||
-    isCurveChannelModified(image.curves.red) ||
-    isCurveChannelModified(image.curves.green) ||
-    isCurveChannelModified(image.curves.blue)
-  );
+  // Check if curves are modified
+  const isCurvesModified = useMemo(() => {
+    if (!image.curves) return false;
+    const isChannelModified = (points: CurvePoint[]) => {
+      if (!points || points.length === 0) return false;
+      if (points.length > 2) return true;
+      return points.some((p, i) => {
+        if (i === 0) return p.x !== 0 || p.y !== 0;
+        if (i === points.length - 1) return p.x !== 255 || p.y !== 255;
+        return true;
+      });
+    };
+    return (
+      isChannelModified(image.curves.rgb) ||
+      isChannelModified(image.curves.red) ||
+      isChannelModified(image.curves.green) ||
+      isChannelModified(image.curves.blue)
+    );
+  }, [image.curves]);
 
   // Check if any filters are active
-  const hasActiveFilters =
-    // Light
-    image.exposure !== 0 ||
-    image.contrast !== 0 ||
-    image.highlights !== 0 ||
-    image.shadows !== 0 ||
-    image.whites !== 0 ||
-    image.blacks !== 0 ||
-    (image.texture !== undefined && image.texture !== 0) ||
-    // Color
-    image.temperature !== 0 ||
-    image.vibrance !== 0 ||
-    image.saturation !== 0 ||
-    (image.shadowTint !== undefined && image.shadowTint !== 0) ||
-    image.colorHSL !== undefined ||
-    image.splitToning !== undefined ||
-    image.colorGrading !== undefined ||
-    image.colorCalibration !== undefined ||
-    // Effects
-    image.clarity !== 0 ||
-    image.dehaze !== 0 ||
-    image.vignette !== 0 ||
-    image.grain !== 0 ||
-    // Legacy
-    image.brightness !== 0 ||
-    image.hue !== 0 ||
-    image.blur > 0 ||
-    image.filters.length > 0 ||
-    // Curves
-    isCurvesModified;
+  const hasActiveFilters = useMemo(() =>
+    image.exposure !== 0 || image.contrast !== 0 || image.highlights !== 0 ||
+    image.shadows !== 0 || image.whites !== 0 || image.blacks !== 0 ||
+    image.temperature !== 0 || image.vibrance !== 0 || image.saturation !== 0 ||
+    image.clarity !== 0 || image.dehaze !== 0 || image.vignette !== 0 ||
+    image.grain !== 0 || image.brightness !== 0 || image.hue !== 0 ||
+    image.blur > 0 || image.filters.length > 0 || isCurvesModified ||
+    image.colorHSL !== undefined || image.splitToning !== undefined ||
+    image.colorGrading !== undefined || image.colorCalibration !== undefined ||
+    (image.shadowTint !== undefined && image.shadowTint !== 0)
+  , [image.exposure, image.contrast, image.highlights, image.shadows,
+     image.whites, image.blacks, image.temperature, image.vibrance,
+     image.saturation, image.clarity, image.dehaze, image.vignette,
+     image.grain, image.brightness, image.hue, image.blur, image.filters,
+     isCurvesModified, image.colorHSL, image.splitToning, image.colorGrading,
+     image.colorCalibration, image.shadowTint]);
 
+  // Apply Konva filters
   useEffect(() => {
     if (!imageRef.current || !img) return;
-    
     const node = imageRef.current;
 
-    // If no filters are active, clear everything and don't cache
     if (!hasActiveFilters) {
       node.clearCache();
       node.filters([]);
       return;
     }
 
-    // Build filter list - using array of filter functions
+    // Build filter list using fast LUT-based filters
     const filterList: ((imageData: ImageData) => void)[] = [];
 
-    // Apply curves filter first (if modified)
+    // Curves
     if (isCurvesModified && image.curves) {
       filterList.push(createCurvesFilter(image.curves));
     }
@@ -4349,67 +5164,62 @@ function ImageNode({
     if (image.highlights !== 0 || image.shadows !== 0 || image.whites !== 0 || image.blacks !== 0) {
       filterList.push(createTonalFilter(image.highlights, image.shadows, image.whites, image.blacks));
     }
-
-    // Color adjustments
     if (image.temperature !== 0) {
       filterList.push(createTemperatureFilter(image.temperature));
     }
-    if (image.vibrance !== 0) {
-      filterList.push(createVibranceFilter(image.vibrance));
-    }
-
-    // HSL color adjustments
-    if (image.colorHSL) {
-      filterList.push(createHSLColorFilter(image.colorHSL));
-    }
-
-    // Split Toning
-    if (image.splitToning) {
-      filterList.push(createSplitToningFilter(image.splitToning));
-    }
-
-    // Shadow Tint
-    if (image.shadowTint && image.shadowTint !== 0) {
-      filterList.push(createShadowTintFilter(image.shadowTint));
-    }
-
-    // Color Grading
-    if (image.colorGrading) {
-      filterList.push(createColorGradingFilter(image.colorGrading));
-    }
-
-    // Color Calibration
-    if (image.colorCalibration) {
-      filterList.push(createColorCalibrationFilter(image.colorCalibration));
-    }
-
-    // Effects
     if (image.clarity !== 0) {
       filterList.push(createClarityFilter(image.clarity));
     }
-    if (image.dehaze !== 0) {
-      filterList.push(createDehazeFilter(image.dehaze));
-    }
-    if (image.vignette !== 0) {
-      filterList.push(createVignetteFilter(image.vignette));
-    }
-    if (image.grain !== 0) {
-      filterList.push(createGrainFilter(image.grain));
-    }
-
-    // Legacy filters
     if (image.brightness !== 0) {
       filterList.push(createBrightnessFilter(image.brightness));
     }
+
+    // Konva built-in filters
     if (image.contrast !== 0) {
       filterList.push(Konva.Filters.Contrast as unknown as (imageData: ImageData) => void);
     }
     if (image.saturation !== 0 || image.hue !== 0) {
       filterList.push(Konva.Filters.HSV as unknown as (imageData: ImageData) => void);
     }
+
+    // Color adjustments
+    if (image.vibrance !== 0) {
+      filterList.push(createVibranceFilter(image.vibrance));
+    }
+    if (image.dehaze !== 0) {
+      filterList.push(createDehazeFilter(image.dehaze));
+    }
+    if (image.colorHSL) {
+      const hasHSL = Object.values(image.colorHSL).some(
+        (adj) => adj && ((adj.hue ?? 0) !== 0 || (adj.saturation ?? 0) !== 0 || (adj.luminance ?? 0) !== 0)
+      );
+      if (hasHSL) filterList.push(createHSLColorFilter(image.colorHSL));
+    }
+    if (image.splitToning) {
+      filterList.push(createSplitToningFilter(image.splitToning));
+    }
+    if (image.shadowTint && image.shadowTint !== 0) {
+      filterList.push(createShadowTintFilter(image.shadowTint));
+    }
+    if (image.colorGrading) {
+      filterList.push(createColorGradingFilter(image.colorGrading));
+    }
+    if (image.colorCalibration) {
+      filterList.push(createColorCalibrationFilter(image.colorCalibration));
+    }
+
+    // Effects
+    if (image.vignette !== 0) {
+      filterList.push(createVignetteFilter(image.vignette));
+    }
+    if (image.grain !== 0) {
+      filterList.push(createGrainFilter(image.grain));
+    }
     if (image.blur > 0) {
       filterList.push(Konva.Filters.Blur as unknown as (imageData: ImageData) => void);
     }
+
+    // Legacy filters
     if (image.filters.includes('grayscale')) {
       filterList.push(Konva.Filters.Grayscale as unknown as (imageData: ImageData) => void);
     }
@@ -4419,49 +5229,36 @@ function ImageNode({
     if (image.filters.includes('invert')) {
       filterList.push(Konva.Filters.Invert as unknown as (imageData: ImageData) => void);
     }
-    if (image.filters.includes('noise')) {
-      filterList.push(Konva.Filters.Noise as unknown as (imageData: ImageData) => void);
-    }
 
-    // Apply Konva filter values
-    node.contrast(image.contrast);
+    // Set Konva filter values
+    node.contrast(image.contrast * 100);
     node.saturation(image.saturation);
-    node.hue(image.hue);
-    node.blurRadius(image.blur);
-    node.noise(image.filters.includes('noise') ? 0.2 : 0);
+    node.hue(image.hue * 180);
+    node.blurRadius(image.blur * 20);
 
-    // Calculate optimal pixelRatio for high quality rendering
-    // Use the ratio of original image size to display size to maintain full resolution quality
+    // Apply filters and cache with adaptive quality
+    node.filters(filterList);
+
+    // Calculate optimal pixelRatio based on image vs display size
     const naturalWidth = img.naturalWidth || img.width;
     const naturalHeight = img.naturalHeight || img.height;
     const displayWidth = image.width * Math.abs(image.scaleX || 1);
     const displayHeight = image.height * Math.abs(image.scaleY || 1);
-    
-    // Calculate scale factor from original to display
-    // This tells us how much the image was downscaled for display
     const widthRatio = displayWidth > 0 ? naturalWidth / displayWidth : 1;
     const heightRatio = displayHeight > 0 ? naturalHeight / displayHeight : 1;
-    const scaleRatio = Math.min(widthRatio, heightRatio);
-    
-    // Use a high pixelRatio to maintain quality:
-    // - At least 4x for general quality
-    // - Match or exceed the downscale ratio to preserve original detail
-    // - Cap at 10x to balance quality and performance
-    const basePixelRatio = window.devicePixelRatio || 2;
-    const qualityPixelRatio = Math.min(
-      Math.max(scaleRatio * 0.8, 4), // Use 80% of scale ratio, minimum 4x
-      10 // Cap at 10x for performance
-    );
+    const scaleRatio = Math.max(widthRatio, heightRatio);
+    // Higher quality cache - min 3, max 6 for sharp results
+    const pixelRatio = Math.min(Math.max(scaleRatio, 3), 6);
 
-    // Apply filters and cache with high pixel ratio for quality
-    node.filters(filterList);
-    node.cache({
-      pixelRatio: qualityPixelRatio,
-      imageSmoothingEnabled: true,
-    });
-  }, [img, hasActiveFilters, isCurvesModified, image]);
+    node.cache({ pixelRatio, imageSmoothingEnabled: true });
+  }, [img, hasActiveFilters, isCurvesModified, image.exposure, image.contrast,
+      image.highlights, image.shadows, image.whites, image.blacks,
+      image.temperature, image.vibrance, image.saturation, image.clarity,
+      image.dehaze, image.vignette, image.grain, image.brightness, image.hue,
+      image.blur, image.filters, image.curves, image.colorHSL, image.splitToning,
+      image.shadowTint, image.colorGrading, image.colorCalibration,
+      image.width, image.height, image.scaleX, image.scaleY]);
 
-  // Don't render until image is loaded
   if (!img || imgStatus === 'loading') {
     return null;
   }
@@ -4490,7 +5287,6 @@ function ImageNode({
       }}
       onDragStart={(e) => {
         isDraggingRef.current = true;
-        // Move to top layer when dragging starts
         e.target.moveToTop();
       }}
       onDragEnd={(e) => {
@@ -4502,14 +5298,18 @@ function ImageNode({
       onTransformEnd={() => {
         const node = imageRef.current;
         if (!node) return;
-        const scaleX = node.scaleX();
-        const scaleY = node.scaleY();
-        const rotation = node.rotation();
-        onUpdate({ scaleX, scaleY, rotation });
+        onUpdate({ scaleX: node.scaleX(), scaleY: node.scaleY(), rotation: node.rotation() });
       }}
     />
   );
-}
+}, (prevProps, nextProps) => {
+  // Custom comparison - only re-render if relevant props changed
+  // This prevents re-renders when other images in the array change
+  return (
+    prevProps.image === nextProps.image &&
+    prevProps.isSelected === nextProps.isSelected
+  );
+});
 
 // Text node component
 function TextNode({

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState, useRef, useEffect } from 'react';
+import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { CurvesEditor } from './CurvesEditor';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
@@ -137,26 +137,74 @@ interface EditPanelProps {
   onDelete: () => void;
   onResetToOriginal?: () => void;
   onSave?: () => void;
+  onExport?: () => void;
 }
 
-// Slider component with double-click reset
-function Slider({ 
-  label, 
-  value, 
-  min, 
-  max, 
-  step, 
+// Slider component with throttled updates for performance
+function Slider({
+  label,
+  value,
+  min,
+  max,
+  step,
   defaultValue,
-  onChange 
-}: { 
-  label: string; 
-  value: number; 
-  min: number; 
-  max: number; 
-  step: number; 
+  onChange
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
   defaultValue: number;
   onChange: (v: number) => void;
 }) {
+  // Local state for immediate visual feedback
+  const [localValue, setLocalValue] = useState(value);
+  const rafRef = useRef<number>();
+  const lastUpdateRef = useRef(0);
+  const isDraggingRef = useRef(false);
+
+  // Sync local value when prop changes (from undo/reset/etc)
+  useEffect(() => {
+    if (!isDraggingRef.current) {
+      setLocalValue(value);
+    }
+  }, [value]);
+
+  // Throttled update - max 30fps during drag for better performance
+  const handleChange = useCallback((newValue: number) => {
+    setLocalValue(newValue);
+
+    const now = performance.now();
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+    }
+
+    // Throttle to ~30fps (33ms) during drag
+    if (now - lastUpdateRef.current >= 33) {
+      lastUpdateRef.current = now;
+      onChange(newValue);
+    } else {
+      rafRef.current = requestAnimationFrame(() => {
+        lastUpdateRef.current = performance.now();
+        onChange(newValue);
+      });
+    }
+  }, [onChange]);
+
+  const handleMouseDown = useCallback(() => {
+    isDraggingRef.current = true;
+  }, []);
+
+  const handleMouseUp = useCallback(() => {
+    isDraggingRef.current = false;
+    // Ensure final value is committed
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+    }
+    onChange(localValue);
+  }, [onChange, localValue]);
+
   return (
     <div className="flex items-center justify-between gap-3">
       <span className="text-xs text-[#888] w-20">{label}</span>
@@ -166,20 +214,27 @@ function Slider({
           min={min}
           max={max}
           step={step}
-          value={value}
-          onChange={(e) => onChange(parseFloat(e.target.value))}
-          onDoubleClick={() => onChange(defaultValue)}
+          value={localValue}
+          onChange={(e) => handleChange(parseFloat(e.target.value))}
+          onMouseDown={handleMouseDown}
+          onMouseUp={handleMouseUp}
+          onTouchStart={handleMouseDown}
+          onTouchEnd={handleMouseUp}
+          onDoubleClick={() => {
+            setLocalValue(defaultValue);
+            onChange(defaultValue);
+          }}
           className="flex-1 h-1 bg-[#333] rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#3ECF8E] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:transition-transform [&::-webkit-slider-thumb]:hover:scale-125"
         />
         <span className="text-[10px] text-[#666] w-8 text-right tabular-nums">
-          {value > 0 ? '+' : ''}{Math.round(value * 100)}
+          {localValue > 0 ? '+' : ''}{Math.round(localValue * 100)}
         </span>
       </div>
     </div>
   );
 }
 
-export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSave }: EditPanelProps) {
+export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSave, onExport }: EditPanelProps) {
   const isImage = 'src' in object;
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
@@ -305,15 +360,28 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
     const grainSize = extractValue('GrainSize');
     const grainRoughness = extractValue('GrainFrequency');
 
-    // Apply basic adjustments
-    if (exposure !== null) settings.exposure = exposure / 100;
+    // Apply basic adjustments with proper Lightroom-to-app conversion
+    // Lightroom Exposure2012 is in stops (-5 to +5), our filter uses Math.pow(2, exposure)
+    // so we pass through directly (both use stops)
+    if (exposure !== null) settings.exposure = exposure;
+
+    // Lightroom uses -100 to +100, our app uses -1 to +1
     if (contrast !== null) settings.contrast = contrast / 100;
     if (highlights !== null) settings.highlights = highlights / 100;
     if (shadows !== null) settings.shadows = shadows / 100;
     if (whites !== null) settings.whites = whites / 100;
     if (blacks !== null) settings.blacks = blacks / 100;
     if (texture !== null) settings.texture = texture / 100;
-    if (temperature !== null) settings.temperature = (temperature - 5500) / 5500;
+
+    // Temperature: Lightroom uses Kelvin (2000-50000), neutral ~5500
+    // Convert to relative scale where 0 = neutral, negative = cooler, positive = warmer
+    if (temperature !== null) {
+      // Map Kelvin to -1 to +1 range (roughly)
+      // Lower Kelvin = warmer (orange), Higher Kelvin = cooler (blue)
+      // 2000K -> ~+1 (very warm), 5500K -> 0 (neutral), 10000K -> ~-1 (cool)
+      settings.temperature = Math.max(-1, Math.min(1, (5500 - temperature) / 3500));
+    }
+
     if (vibrance !== null) settings.vibrance = vibrance / 100;
     if (saturation !== null) settings.saturation = saturation / 100;
     if (shadowTint !== null) settings.shadowTint = shadowTint / 100;
@@ -1270,6 +1338,19 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
                     >
                       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 13l4 4L19 7" />
+                      </svg>
+                    </button>
+                  )}
+
+                  {/* Export */}
+                  {onExport && (
+                    <button
+                      onClick={onExport}
+                      className="p-2 rounded-lg bg-[#6366f1]/20 text-[#6366f1] hover:bg-[#6366f1]/30 transition-colors cursor-pointer"
+                      title="Export with Edits"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                       </svg>
                     </button>
                   )}

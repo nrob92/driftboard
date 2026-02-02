@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState, useEffect } from 'react';
+import React, { useCallback, useRef, useState, useEffect } from 'react';
 
 interface CurvePoint {
   x: number;
@@ -310,6 +310,7 @@ export function CurvesEditor({ curves, onChange, onClose }: CurvesEditorProps) {
           ref={canvasRef}
           width={220}
           height={220}
+
           className="rounded-lg cursor-crosshair"
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}

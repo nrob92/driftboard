@@ -1,9 +1,13 @@
 'use client';
 
-import { CanvasEditor } from '@/components/CanvasEditor';
+import dynamic from 'next/dynamic';
 import { useAuth } from '@/lib/auth';
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
+
+const CanvasEditor = dynamic(() => import('@/components/CanvasEditor').then((m) => m.CanvasEditor), {
+  ssr: false,
+});
 
 export default function Home() {
   const { user, loading } = useAuth();
