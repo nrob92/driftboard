@@ -1186,17 +1186,16 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
-              className={`mb-4 border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
+              className={`mb-3 border-2 border-dashed rounded-lg py-3 px-4 text-center cursor-pointer transition-colors ${
                 isDraggingOver
                   ? 'border-[#3ECF8E] bg-[#3ECF8E]/10'
                   : 'border-[#333] bg-[#252525] hover:border-[#3ECF8E]/50'
               }`}
             >
-              <svg className="w-10 h-10 mx-auto mb-2 text-[#666]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-6 h-6 mx-auto mb-1 text-[#666]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
               </svg>
-              <p className="text-sm text-[#888] mb-1">Drop .xmp files here</p>
-              <p className="text-xs text-[#666]">or click to browse</p>
+              <p className="text-xs text-[#888]">Drop .xmp or click</p>
             </div>
 
             {/* Presets list */}

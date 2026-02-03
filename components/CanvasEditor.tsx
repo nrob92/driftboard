@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react'
 import { Stage, Layer, Image as KonvaImage, Text, Transformer, Rect, Group } from 'react-konva';
 import useImage from 'use-image';
 import Konva from 'konva';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { TopBar } from './TopBar';
 import { EditPanel } from './EditPanel';
 import { snapToGrid, findNearestPhoto } from '@/lib/utils';
@@ -866,6 +866,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const [copiedEdit, setCopiedEdit] = useState<Partial<CanvasImage> | null>(null);
   const [imageContextMenu, setImageContextMenu] = useState<{ x: number; y: number; imageId: string } | null>(null);
   const imageContextMenuRef = useRef<HTMLDivElement>(null);
+  const [createPresetFromImageId, setCreatePresetFromImageId] = useState<string | null>(null);
+  const [createPresetName, setCreatePresetName] = useState('');
+  const queryClient = useQueryClient();
   const [hoveredFolderBorder, setHoveredFolderBorder] = useState<string | null>(null);
   const [dragGhostPosition, setDragGhostPosition] = useState<{
     x: number;
@@ -2355,6 +2358,40 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     saveToHistory();
     setImageContextMenu(null);
   }, [imageContextMenu, copiedEdit, saveToHistory]);
+
+  const handleCreatePresetClick = useCallback(() => {
+    if (!imageContextMenu) return;
+    setCreatePresetFromImageId(imageContextMenu.imageId);
+    setCreatePresetName('');
+    setImageContextMenu(null);
+  }, [imageContextMenu]);
+
+  const handleCreatePresetSave = useCallback(async () => {
+    const name = createPresetName.trim();
+    if (!name || !createPresetFromImageId || !user) return;
+    const img = images.find((i) => i.id === createPresetFromImageId);
+    if (!img) return;
+    const settings = JSON.parse(JSON.stringify(getEditSnapshot(img))) as Partial<CanvasImage>;
+    const { error } = await supabase
+      .from('presets')
+      .insert({
+        user_id: user.id,
+        name,
+        settings,
+      });
+    if (error) {
+      console.error('Error saving preset:', error);
+    } else {
+      queryClient.invalidateQueries({ queryKey: ['presets', user.id] });
+    }
+    setCreatePresetFromImageId(null);
+    setCreatePresetName('');
+  }, [createPresetFromImageId, createPresetName, images, user, queryClient]);
+
+  const handleCreatePresetCancel = useCallback(() => {
+    setCreatePresetFromImageId(null);
+    setCreatePresetName('');
+  }, []);
 
   // Close image context menu on click outside or escape
   useEffect(() => {
@@ -4361,6 +4398,54 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           >
             Paste edit
           </button>
+          {user && (
+            <button
+              type="button"
+              onClick={handleCreatePresetClick}
+              className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors border-t border-[#2a2a2a]"
+            >
+              Create preset…
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Create preset modal: name the preset from current image edits */}
+      {createPresetFromImageId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96">
+            <h3 className="text-lg font-semibold text-white mb-2">Create preset</h3>
+            <p className="text-sm text-[#888] mb-4">Save this image’s edits as a preset you can apply to other photos.</p>
+            <input
+              type="text"
+              value={createPresetName}
+              onChange={(e) => setCreatePresetName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleCreatePresetSave();
+                if (e.key === 'Escape') handleCreatePresetCancel();
+              }}
+              placeholder="Preset name"
+              className="w-full px-4 py-3 bg-[#252525] border border-[#333] rounded-xl text-white placeholder-[#666] focus:outline-none focus:border-[#3ECF8E] focus:ring-1 focus:ring-[#3ECF8E]/20 mb-4"
+              autoFocus
+            />
+            <div className="flex gap-2 justify-end">
+              <button
+                type="button"
+                onClick={handleCreatePresetCancel}
+                className="px-4 py-2.5 text-sm text-[#888] hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreatePresetSave}
+                disabled={!createPresetName.trim()}
+                className="px-4 py-2.5 text-sm font-medium text-[#0d0d0d] bg-[#3ECF8E] hover:bg-[#35b87d] rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                Save preset
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
