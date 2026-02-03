@@ -18,8 +18,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Only allow originals bucket for security
-    if (bucket !== 'originals') {
+    // Only allow originals and photos buckets for security
+    if (bucket !== 'originals' && bucket !== 'photos') {
       return NextResponse.json(
         { error: 'Invalid bucket' },
         { status: 400 }

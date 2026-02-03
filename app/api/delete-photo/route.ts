@@ -46,6 +46,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Delete photo_edits row (storage_path is the row key: preview path or originals path)
     const { error: dbErr } = await supabase
       .from('photo_edits')
       .delete()

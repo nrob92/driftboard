@@ -49,8 +49,8 @@ async function loadLibRaw(): Promise<void> {
   return librawLoading;
 }
 
-// Preview max dimension for DNG files (for fast editing)
-const DNG_PREVIEW_MAX_SIZE = 2000;
+// Preview max dimension for DNG files (best preview: no downscale; use large cap so we keep full res)
+const DNG_PREVIEW_MAX_SIZE = 99999;
 
 // Decode DNG using runtime-loaded LibRaw (bypasses bundler)
 const decodeDNG = async (buffer: ArrayBuffer, forPreview = true): Promise<{ dataUrl: string; width: number; height: number }> => {
@@ -61,8 +61,8 @@ const decodeDNG = async (buffer: ArrayBuffer, forPreview = true): Promise<{ data
     useCameraWb: true,
     outputColor: 1,
     outputBps: 8,
-    userQual: forPreview ? 0 : 3,
-    halfSize: forPreview,
+    userQual: 3,
+    halfSize: false,
     noAutoBright: false,
   });
 
@@ -102,7 +102,7 @@ const decodeDNG = async (buffer: ArrayBuffer, forPreview = true): Promise<{ data
     canvas = resizedCanvas;
   }
 
-  return { dataUrl: canvas.toDataURL('image/jpeg', 0.92), width: finalWidth, height: finalHeight };
+  return { dataUrl: canvas.toDataURL('image/jpeg', 0.98), width: finalWidth, height: finalHeight };
 };
 
 const decodeDNGFromUrl = async (url: string): Promise<{ dataUrl: string; width: number; height: number }> => {
@@ -232,6 +232,23 @@ interface CanvasImage {
   originalHeight?: number;      // Full resolution height
   // Legacy: DNG original buffer (deprecated - now stored in Supabase)
   originalDngBuffer?: ArrayBuffer;
+}
+
+// Build delete-photo API payload: storagePath = path in photos bucket, originalStoragePath = path in originals bucket
+function getDeletePhotoPayload(img: CanvasImage): { storagePath?: string; originalStoragePath?: string } {
+  if (img.originalStoragePath) {
+    // DNG with preview: storagePath is preview (photos), originalStoragePath is originals
+    return {
+      storagePath: img.storagePath ?? undefined,
+      originalStoragePath: img.originalStoragePath,
+    };
+  }
+  if (img.storagePath?.toLowerCase().endsWith('.dng')) {
+    // Originals-only DNG: only in originals bucket
+    return { originalStoragePath: img.storagePath };
+  }
+  // JPG/PNG/WebP in photos bucket
+  return { storagePath: img.storagePath ?? undefined };
 }
 
 // Keys that define "edit" (appearance) - copied/pasted between images, excluding id/position/source
@@ -958,11 +975,11 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         supabase.from('photo_edits').select('*').eq('user_id', user.id),
         supabase.from('photo_folders').select('*').eq('user_id', user.id),
         supabase.storage.from('photos').list(user.id, {
-          limit: 50,
+          limit: 500,
           sortBy: { column: 'created_at', order: 'asc' },
         }),
         supabase.storage.from('originals').list(user.id, {
-          limit: 50,
+          limit: 500,
           sortBy: { column: 'created_at', order: 'asc' },
         }),
       ]);
@@ -1021,23 +1038,44 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         if (photosError) return;
         if (validFiles.length === 0) return;
 
-        const newImages: CanvasImage[] = [];
         const cols = 3;
         const spacing = 420;
+        const maxSize = GRID_CONFIG.imageMaxSize;
 
-        for (let i = 0; i < validFiles.length; i++) {
-          const file = validFiles[i];
+        // Load all images in parallel; signed URLs cached by React Query (4 min) to avoid repeat API calls
+        const SIGNED_URL_STALE_MS = 4 * 60 * 1000; // signed URLs last 5 min
+        const loadOne = async (file: FileEntry, i: number): Promise<CanvasImage | null> => {
           const storagePath = `${user.id}/${file.name}`;
           const bucket = file.bucket;
-          const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(storagePath);
-          const imageUrl = urlData.publicUrl;
+          let imageUrl: string;
+          try {
+            imageUrl = await queryClient.ensureQueryData({
+              queryKey: ['signed-url', bucket, storagePath],
+              queryFn: async () => {
+                const res = await fetch('/api/signed-url', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ bucket, path: storagePath }),
+                });
+                if (!res.ok) {
+                  const err = await res.json().catch(() => ({}));
+                  throw new Error(err?.error ?? 'Signed URL failed');
+                }
+                const { signedUrl } = await res.json();
+                return signedUrl as string;
+              },
+              staleTime: SIGNED_URL_STALE_MS,
+            });
+          } catch (e) {
+            console.warn(`Signed URL failed for ${file.name}:`, e);
+            return null;
+          }
 
           try {
             let imgSrc: string;
             let width: number;
             let height: number;
 
-            // Only decode as DNG if from originals bucket (photos bucket has JPG previews)
             if (isDNG(file.name) && file.bucket === 'originals') {
               const decoded = await decodeDNGFromUrl(imageUrl);
               imgSrc = decoded.dataUrl;
@@ -1056,7 +1094,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               height = img.height;
             }
 
-            const maxSize = GRID_CONFIG.imageMaxSize;
             if (width > maxSize || height > maxSize) {
               const ratio = Math.min(maxSize / width, maxSize / height);
               width = width * ratio;
@@ -1068,14 +1105,12 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             const gridX = 100 + col * spacing;
             const gridY = 100 + row * spacing;
 
-            // Find matching edit so we use saved position from the start (single source of truth)
             const edit = savedEdits?.find(
               (e: PhotoEdits) =>
                 e.storage_path === storagePath ||
                 (e.original_storage_path != null && e.original_storage_path === storagePath)
             );
 
-            // Only use backend position when both x and y exist and are valid numbers
             const hasValidPosition = edit != null
               && edit.x != null
               && edit.y != null
@@ -1158,11 +1193,15 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               canvasImg.filters = edit.filters ?? [];
             }
 
-            newImages.push(canvasImg);
-          } catch {
-            console.log(`Failed to load image: ${file.name}`);
+            return canvasImg;
+          } catch (e) {
+            console.warn(`Failed to load image: ${file.name}`, e);
+            return null;
           }
-        }
+        };
+
+        const results = await Promise.all(validFiles.map((file, i) => loadOne(file, i)));
+        const newImages: CanvasImage[] = results.filter((img): img is CanvasImage => img != null);
 
         // Apply any remaining edit fields to images we might have missed (e.g. originalStoragePath from storage_path key)
         if (savedEdits && savedEdits.length > 0) {
@@ -1315,7 +1354,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     };
 
     loadUserPhotos();
-  }, [user, photoData, onPhotosLoadStateChange]);
+  }, [user, photoData, onPhotosLoadStateChange, queryClient]);
 
   // Save state to history
   const saveToHistory = useCallback(() => {
@@ -1828,6 +1867,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           }
         }
         
+        if (user) queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
         setTimeout(() => saveToHistory(), 100);
       } else {
         console.log('No images were processed successfully');
@@ -1836,7 +1876,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       pendingFilesRef.current = [];
       setIsUploading(false);
     },
-    [folders, images, saveToHistory, user, resolveOverlapsAndReflow]
+    [folders, images, saveToHistory, user, resolveOverlapsAndReflow, queryClient]
   );
 
   // Add files to an existing folder
@@ -1869,8 +1909,75 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
           let imageSrc = '';
           let photosUploadSucceeded = false;
+          let storagePath: string | undefined;
+          let originalStoragePath: string | undefined;
+          let isRaw = false;
+          let originalWidth: number | undefined;
+          let originalHeight: number | undefined;
+          let dngBuffer: ArrayBuffer | undefined;
 
-          if (supabaseUrl && user) {
+          // DNG: use upload-dng API so raw goes to originals, preview to photos (never put raw DNG in photos)
+          if (isDNG(file.name) && user) {
+            try {
+              const formData = new FormData();
+              formData.append('file', file);
+              formData.append('userId', user.id);
+              const response = await fetch('/api/upload-dng', {
+                method: 'POST',
+                body: formData,
+              });
+              if (response.ok) {
+                const result = await response.json();
+                originalStoragePath = result.originalPath;
+                storagePath = result.previewPath ?? undefined;
+                originalWidth = result.originalWidth;
+                originalHeight = result.originalHeight;
+                isRaw = true;
+                if (result.previewUrl) {
+                  imageSrc = result.previewUrl;
+                  photosUploadSucceeded = !!result.previewPath;
+                } else {
+                  const buffer = await file.arrayBuffer();
+                  dngBuffer = buffer;
+                  const decoded = await decodeDNG(buffer, true);
+                  imageSrc = decoded.dataUrl;
+                  const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
+                  const previewFilePath = `${user.id}/${previewFileName}`;
+                  const previewBlob = await fetch(decoded.dataUrl).then(r => r.blob());
+                  const { error: previewUploadError } = await supabase.storage
+                    .from('photos')
+                    .upload(previewFilePath, previewBlob, {
+                      contentType: 'image/jpeg',
+                      cacheControl: '3600',
+                    });
+                  if (!previewUploadError) {
+                    storagePath = previewFilePath;
+                    photosUploadSucceeded = true;
+                  }
+                }
+              }
+            } catch {
+              // Fallback: decode client-side, upload preview only; original stays only in memory (no originals bucket)
+              const buffer = await file.arrayBuffer();
+              dngBuffer = buffer;
+              const decoded = await decodeDNG(buffer, true);
+              imageSrc = decoded.dataUrl;
+              const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
+              const previewFilePath = `${user.id}/${previewFileName}`;
+              const previewBlob = await fetch(decoded.dataUrl).then(r => r.blob());
+              const { error: previewUploadError } = await supabase.storage
+                .from('photos')
+                .upload(previewFilePath, previewBlob, {
+                  contentType: 'image/jpeg',
+                  cacheControl: '3600',
+                });
+              if (!previewUploadError) {
+                storagePath = previewFilePath;
+                photosUploadSucceeded = true;
+              }
+              isRaw = true;
+            }
+          } else if (supabaseUrl && user && !isDNG(file.name)) {
             const { error: uploadError } = await supabase.storage
               .from('photos')
               .upload(filePath, file, {
@@ -1886,6 +1993,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               });
             } else {
               photosUploadSucceeded = true;
+              storagePath = filePath;
               const { data: urlData } = supabase.storage
                 .from('photos')
                 .getPublicUrl(filePath);
@@ -1901,17 +2009,16 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
           let width: number;
           let height: number;
-          let dngBuffer: ArrayBuffer | undefined;
 
-          // Check if file is DNG - decode it first (using preview for fast editing)
           if (isDNG(file.name)) {
-            console.log('Decoding DNG file (preview):', file.name);
-            const buffer = await file.arrayBuffer();
-            dngBuffer = buffer; // Store original for full-res export
-            const decoded = await decodeDNG(buffer, true); // true = preview mode
-            imageSrc = decoded.dataUrl;
-            width = decoded.width;
-            height = decoded.height;
+            const dims = await new Promise<{ w: number; h: number }>((resolve) => {
+              const img = new window.Image();
+              img.onload = () => resolve({ w: img.width, h: img.height });
+              img.onerror = () => resolve({ w: 0, h: 0 });
+              img.src = imageSrc;
+            });
+            width = dims.w;
+            height = dims.h;
           } else {
             const img = new window.Image();
             img.crossOrigin = 'anonymous';
@@ -1945,7 +2052,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           const x = contentStartX + col * CELL_SIZE + Math.max(0, cellOffsetX);
           const y = contentStartY + row * CELL_SIZE + Math.max(0, cellOffsetY);
 
-          // Use actual photos upload success so DNG (client-side decode) gets photos path for load match
           const imageId = `img-${Date.now()}-${Math.random()}`;
 
           const newImage: CanvasImage = {
@@ -1955,7 +2061,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             width,
             height,
             src: imageSrc,
-            storagePath: photosUploadSucceeded ? filePath : undefined,
+            storagePath: storagePath ?? (photosUploadSucceeded ? filePath : undefined),
             folderId: folderId,
             rotation: 0,
             scaleX: 1,
@@ -1978,7 +2084,11 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             hue: 0,
             blur: 0,
             filters: [],
-            originalDngBuffer: dngBuffer, // Store for full-res export (DNG only)
+            originalStoragePath: originalStoragePath ?? undefined,
+            isRaw: isRaw || undefined,
+            originalWidth,
+            originalHeight,
+            originalDngBuffer: dngBuffer,
           };
 
           newImages.push(newImage);
@@ -2131,13 +2241,14 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           }
         }
         
+        if (user) queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
         setTimeout(() => saveToHistory(), 100);
       }
       
       pendingFilesRef.current = [];
       setIsUploading(false);
     },
-    [folders, images, saveToHistory, user, resolveOverlapsAndReflow]
+    [folders, images, saveToHistory, user, resolveOverlapsAndReflow, queryClient]
   );
 
   // Handle adding photos to a specific folder via plus button
@@ -3381,20 +3492,19 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     const folderImageIds = editingFolder.imageIds;
 
     if (deleteImages) {
-      // Delete images via API (service role) so originals bucket is removed
+      // Delete images via API (service role) so photos + originals buckets are removed
       if (user) {
         for (const imgId of folderImageIds) {
           const img = images.find(i => i.id === imgId);
           if (!img) continue;
-          const canonicalPath = img.storagePath || img.originalStoragePath;
-          if (!canonicalPath) continue;
+          const payload = getDeletePhotoPayload(img);
+          if (!payload.storagePath && !payload.originalStoragePath) continue;
           try {
             const res = await fetch('/api/delete-photo', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                storagePath: img.storagePath ?? undefined,
-                originalStoragePath: img.originalStoragePath ?? undefined,
+                ...payload,
                 userId: user.id,
               }),
             });
@@ -3437,8 +3547,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     setEditingFolder(null);
     setEditingFolderName('');
     setFolderNameError('');
+    if (user) queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
     saveToHistory();
-  }, [editingFolder, images, user, saveToHistory]);
+  }, [editingFolder, images, user, saveToHistory, queryClient]);
 
   // Add empty folder at viewport center
   const handleAddEmptyFolder = useCallback(async () => {
@@ -4466,23 +4577,22 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           onDelete={async () => {
             if ('src' in selectedObject) {
               const imageToDelete = selectedObject as CanvasImage;
-              
-              // Delete from Supabase via API (service role) so originals bucket is removed
-              const canonicalPath = imageToDelete.storagePath || imageToDelete.originalStoragePath;
-              if (user && canonicalPath) {
+              const payload = getDeletePhotoPayload(imageToDelete);
+              if (user && (payload.storagePath || payload.originalStoragePath)) {
                 try {
                   const res = await fetch('/api/delete-photo', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                      storagePath: imageToDelete.storagePath ?? undefined,
-                      originalStoragePath: imageToDelete.originalStoragePath ?? undefined,
+                      ...payload,
                       userId: user.id,
                     }),
                   });
                   if (!res.ok) {
                     const data = await res.json();
                     console.error('Delete photo failed:', data);
+                  } else if (user) {
+                    queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
                   }
                 } catch (err) {
                   console.error('Error deleting photo:', err);
