@@ -4370,9 +4370,9 @@ const createVibranceFilter = (vibrance: number) => {
       const factor = 1 + amt * (1 - sat);
       const gray = rCoef * r + gCoef * g + bCoef * b;
 
-      let nr = gray + (r - gray) * factor;
-      let ng = gray + (g - gray) * factor;
-      let nb = gray + (b - gray) * factor;
+      const nr = gray + (r - gray) * factor;
+      const ng = gray + (g - gray) * factor;
+      const nb = gray + (b - gray) * factor;
 
       data[i] = nr < 0 ? 0 : nr > 255 ? 255 : nr;
       data[i + 1] = ng < 0 ? 0 : ng > 255 ? 255 : ng;
