@@ -45,10 +45,14 @@ export function CurvesEditor({ curves, onChange, onClose }: CurvesEditorProps) {
   const currentPoints = localCurves[activeChannel];
   const curveColor = channelColors[activeChannel];
 
-  // Interpolate curve using monotone cubic spline
+  // Interpolate curve using monotone cubic spline (identity = pass-through when default two points)
   const interpolateCurve = useCallback((pts: CurvePoint[], x: number): number => {
     if (pts.length === 0) return x;
     if (pts.length === 1) return pts[0].y;
+    if (pts.length === 2) {
+      const sorted = [...pts].sort((a, b) => a.x - b.x);
+      if (sorted[0].x === 0 && sorted[0].y === 0 && sorted[1].x === 255 && sorted[1].y === 255) return x;
+    }
 
     const sorted = [...pts].sort((a, b) => a.x - b.x);
 

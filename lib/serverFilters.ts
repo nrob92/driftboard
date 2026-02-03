@@ -90,9 +90,16 @@ export interface EditValues {
 // Helper: Clamp value to 0-255
 const clamp = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v);
 
-// Helper: Build lookup table from curve points (Catmull-Rom spline)
+// Helper: Build lookup table from curve points (identity = no change when default two points)
 function buildLUT(points: CurvePoint[]): Uint8Array {
   const lut = new Uint8Array(256);
+  if (points.length === 2) {
+    const sorted = [...points].sort((a, b) => a.x - b.x);
+    if (sorted[0].x === 0 && sorted[0].y === 0 && sorted[1].x === 255 && sorted[1].y === 255) {
+      for (let i = 0; i < 256; i++) lut[i] = i;
+      return lut;
+    }
+  }
   const sorted = [...points].sort((a, b) => a.x - b.x);
 
   const interpolate = (x: number): number => {
@@ -175,17 +182,25 @@ export function applyEdits(
 
   // Apply edits in order (matching client-side pipeline)
 
-  // 1. Curves (if any)
+  // 1. Curves (if any) – applied at reduced strength so edits are less aggressive
+  const CURVES_STRENGTH = 0.6;
   if (edits.curves) {
     const rgbLUT = buildLUT(edits.curves.rgb);
     const redLUT = buildLUT(edits.curves.red);
     const greenLUT = buildLUT(edits.curves.green);
     const blueLUT = buildLUT(edits.curves.blue);
+    const s = CURVES_STRENGTH;
 
     for (let i = 0; i < pixelCount * 3; i += 3) {
-      result[i] = redLUT[rgbLUT[result[i]]];
-      result[i + 1] = greenLUT[rgbLUT[result[i + 1]]];
-      result[i + 2] = blueLUT[rgbLUT[result[i + 2]]];
+      const origR = result[i];
+      const origG = result[i + 1];
+      const origB = result[i + 2];
+      const curvedR = redLUT[rgbLUT[origR]];
+      const curvedG = greenLUT[rgbLUT[origG]];
+      const curvedB = blueLUT[rgbLUT[origB]];
+      result[i] = Math.round((1 - s) * origR + s * curvedR);
+      result[i + 1] = Math.round((1 - s) * origG + s * curvedG);
+      result[i + 2] = Math.round((1 - s) * origB + s * curvedB);
     }
   }
 
@@ -222,7 +237,7 @@ export function applyEdits(
       }
       if (val < 0.5) {
         const shadowMask = Math.sin(val * Math.PI);
-        val += shadows * 0.3 * shadowMask * (0.5 - val);
+        val += shadows * 0.4 * shadowMask * (0.5 - val);
       }
       if (val > 0.5) {
         const highlightMask = Math.sin((val - 0.5) * Math.PI);

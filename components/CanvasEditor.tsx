@@ -234,6 +234,26 @@ interface CanvasImage {
   originalDngBuffer?: ArrayBuffer;
 }
 
+// Keys that define "edit" (appearance) - copied/pasted between images, excluding id/position/source
+const EDIT_KEYS: (keyof CanvasImage)[] = [
+  'rotation', 'scaleX', 'scaleY',
+  'exposure', 'contrast', 'highlights', 'shadows', 'whites', 'blacks', 'texture',
+  'temperature', 'vibrance', 'saturation', 'shadowTint', 'colorHSL', 'splitToning', 'colorGrading', 'colorCalibration',
+  'clarity', 'dehaze', 'vignette', 'grain', 'grainSize', 'grainRoughness',
+  'curves', 'brightness', 'hue', 'blur', 'filters',
+];
+
+function getEditSnapshot(img: CanvasImage): Partial<CanvasImage> {
+  const out: Partial<CanvasImage> = {};
+  for (const key of EDIT_KEYS) {
+    if (key in img) {
+      const v = img[key as keyof CanvasImage];
+      if (v !== undefined) (out as Record<string, unknown>)[key] = v;
+    }
+  }
+  return out;
+}
+
 // Edit data that gets saved to Supabase
 interface PhotoEdits {
   storage_path: string;
@@ -843,6 +863,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const [dragSourceFolderBorderHovered, setDragSourceFolderBorderHovered] = useState<string | null>(null);
   const [dragBorderBlink, setDragBorderBlink] = useState(false);
   const [resizingFolderId, setResizingFolderId] = useState<string | null>(null);
+  const [copiedEdit, setCopiedEdit] = useState<Partial<CanvasImage> | null>(null);
+  const [imageContextMenu, setImageContextMenu] = useState<{ x: number; y: number; imageId: string } | null>(null);
+  const imageContextMenuRef = useRef<HTMLDivElement>(null);
   const [hoveredFolderBorder, setHoveredFolderBorder] = useState<string | null>(null);
   const [dragGhostPosition, setDragGhostPosition] = useState<{
     x: number;
@@ -2305,6 +2328,51 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     const id = e.target.id();
     setSelectedId(id);
   }, []);
+
+  // Right-click context menu for images: copy / paste edit
+  const handleImageContextMenu = useCallback((e: Konva.KonvaEventObject<PointerEvent>, imageId: string) => {
+    e.evt.preventDefault();
+    setImageContextMenu({ x: e.evt.clientX, y: e.evt.clientY, imageId });
+  }, []);
+
+  const handleCopyEdit = useCallback(() => {
+    if (!imageContextMenu) return;
+    const img = images.find((i) => i.id === imageContextMenu.imageId);
+    if (img) {
+      const snapshot = getEditSnapshot(img);
+      setCopiedEdit(JSON.parse(JSON.stringify(snapshot)) as Partial<CanvasImage>);
+    }
+    setImageContextMenu(null);
+  }, [imageContextMenu, images]);
+
+  const handlePasteEdit = useCallback(() => {
+    if (!imageContextMenu || !copiedEdit) return;
+    setImages((prev) =>
+      prev.map((img) =>
+        img.id === imageContextMenu.imageId ? { ...img, ...copiedEdit } : img
+      )
+    );
+    saveToHistory();
+    setImageContextMenu(null);
+  }, [imageContextMenu, copiedEdit, saveToHistory]);
+
+  // Close image context menu on click outside or escape
+  useEffect(() => {
+    if (!imageContextMenu) return;
+    const close = (e?: MouseEvent) => {
+      if (e?.target && imageContextMenuRef.current?.contains(e.target as Node)) return;
+      setImageContextMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setImageContextMenu(null); };
+    window.addEventListener('click', close, true);
+    window.addEventListener('contextmenu', close, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('click', close, true);
+      window.removeEventListener('contextmenu', close, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [imageContextMenu]);
 
   // Handle object drag end with smart snapping (only if near another photo)
   // Handle real-time grid snapping and shuffling during drag
@@ -4226,6 +4294,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 isSelected={selectedId === img.id}
                 bypassedTabs={bypassedTabs}
                 onClick={handleObjectClick}
+                onContextMenu={handleImageContextMenu}
                 onDragEnd={(e) => {
                   setDragHoveredFolderId(null);
                   setDragSourceFolderBorderHovered(null);
@@ -4269,6 +4338,31 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         </Stage>
         
       </div>
+
+      {/* Right-click context menu for images: copy / paste edit */}
+      {imageContextMenu && (
+        <div
+          ref={imageContextMenuRef}
+          className="fixed z-50 min-w-[160px] py-1 bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50"
+          style={{ left: imageContextMenu.x, top: imageContextMenu.y }}
+        >
+          <button
+            type="button"
+            onClick={handleCopyEdit}
+            className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors"
+          >
+            Copy edit
+          </button>
+          <button
+            type="button"
+            onClick={handlePasteEdit}
+            disabled={!copiedEdit}
+            className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            Paste edit
+          </button>
+        </div>
+      )}
 
       {selectedObject && (
         <EditPanel
@@ -4436,9 +4530,9 @@ const createTonalFilter = (highlights: number, shadows: number, whites: number, 
       val += blacks * 0.3 * blackMask;
     }
 
-    // Shadows: 0-50%
+    // Shadows: 0-50% (slightly more aggressive than other tonals)
     const shadowMask = val < 0.5 ? Math.sin(val * Math.PI) : 0;
-    val += shadows * 0.08 * shadowMask;
+    val += shadows * 0.12 * shadowMask;
 
     // Highlights: 50-100%
     const highlightMask = val > 0.5 ? Math.sin((val - 0.5) * Math.PI) : 0;
@@ -4647,9 +4741,16 @@ const createGrainFilter = (grain: number) => {
   };
 };
 
-// Build a lookup table from curve points
+// Build a lookup table from curve points (identity = no change when default two points)
 const buildLUT = (points: CurvePoint[]): Uint8Array => {
   const lut = new Uint8Array(256);
+  if (points.length === 2) {
+    const sorted = [...points].sort((a, b) => a.x - b.x);
+    if (sorted[0].x === 0 && sorted[0].y === 0 && sorted[1].x === 255 && sorted[1].y === 255) {
+      for (let i = 0; i < 256; i++) lut[i] = i;
+      return lut;
+    }
+  }
   const sorted = [...points].sort((a, b) => a.x - b.x);
 
   // Interpolation function using Catmull-Rom spline
@@ -4689,6 +4790,9 @@ const buildLUT = (points: CurvePoint[]): Uint8Array => {
   return lut;
 };
 
+// Curve strength: 1 = full effect, lower = gentler (blend with original)
+const CURVES_STRENGTH = 0.6;
+
 // Custom curves filter using lookup tables for RGB + individual channels
 const createCurvesFilter = (curves: ChannelCurves) => {
   // Pre-compute lookup tables for each channel
@@ -4696,14 +4800,20 @@ const createCurvesFilter = (curves: ChannelCurves) => {
   const redLUT = buildLUT(curves.red);
   const greenLUT = buildLUT(curves.green);
   const blueLUT = buildLUT(curves.blue);
+  const s = CURVES_STRENGTH;
 
   return function(imageData: ImageData) {
     const data = imageData.data;
     for (let i = 0; i < data.length; i += 4) {
-      // Apply RGB curve first, then individual channel curves
-      data[i] = redLUT[rgbLUT[data[i]]];         // R
-      data[i + 1] = greenLUT[rgbLUT[data[i + 1]]]; // G
-      data[i + 2] = blueLUT[rgbLUT[data[i + 2]]]; // B
+      const origR = data[i];
+      const origG = data[i + 1];
+      const origB = data[i + 2];
+      const curvedR = redLUT[rgbLUT[origR]];
+      const curvedG = greenLUT[rgbLUT[origG]];
+      const curvedB = blueLUT[rgbLUT[origB]];
+      data[i] = Math.round((1 - s) * origR + s * curvedR);
+      data[i + 1] = Math.round((1 - s) * origG + s * curvedG);
+      data[i + 2] = Math.round((1 - s) * origB + s * curvedB);
     }
   };
 };
@@ -5132,6 +5242,7 @@ const createColorCalibrationFilter = (colorCal: ColorCalibration) => {
 const ImageNode = React.memo(function ImageNode({
   image,
   onClick,
+  onContextMenu,
   onDragEnd,
   onDragMove,
   onUpdate,
@@ -5140,6 +5251,7 @@ const ImageNode = React.memo(function ImageNode({
   image: CanvasImage;
   isSelected: boolean;
   onClick: (e: Konva.KonvaEventObject<MouseEvent>) => void;
+  onContextMenu?: (e: Konva.KonvaEventObject<PointerEvent>, imageId: string) => void;
   onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) => void;
   onDragMove?: (e: Konva.KonvaEventObject<DragEvent>) => void;
   onUpdate: (updates: Partial<CanvasImage>) => void;
@@ -5364,6 +5476,10 @@ const ImageNode = React.memo(function ImageNode({
       scaleY={image.scaleY}
       draggable
       onClick={onClick}
+      onContextMenu={(e) => {
+        e.evt.preventDefault();
+        onContextMenu?.(e as Konva.KonvaEventObject<PointerEvent>, image.id);
+      }}
       onMouseEnter={(e) => {
         const container = e.target.getStage()?.container();
         if (container) container.style.cursor = 'pointer';
