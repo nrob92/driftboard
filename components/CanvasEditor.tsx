@@ -890,6 +890,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const [zoomedImageId, setZoomedImageId] = useState<string | null>(null);
   const preZoomViewRef = useRef<{ scale: number; x: number; y: number } | null>(null);
   const zoomAnimationRef = useRef<number | null>(null);
+  const lastMouseDownButtonRef = useRef<number>(0);
+  const prevMouseDownButtonRef = useRef<number>(0);
   const queryClient = useQueryClient();
   const [hoveredFolderBorder, setHoveredFolderBorder] = useState<string | null>(null);
   const [dragGhostPosition, setDragGhostPosition] = useState<{
@@ -3693,8 +3695,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     }
   }, [folders, images, dimensions, stagePosition, stageScale, user, saveToHistory]);
 
-  // Add text at double-click position
+  // Add text at double-click position (left button only)
   const handleStageDoubleClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+    if (e.evt.button !== 0) return;
     // Don't add text if clicking on an object
     const clickedOnEmpty = e.target === e.target.getStage();
     if (!clickedOnEmpty) return;
@@ -3767,7 +3770,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     zoomAnimationRef.current = requestAnimationFrame(tick);
   }, []);
 
-  const handleImageDoubleClick = useCallback((image: CanvasImage) => {
+  const handleImageDoubleClick = useCallback((image: CanvasImage, e?: Konva.KonvaEventObject<MouseEvent>) => {
+    if (e != null && e.evt.button !== 0) return;
+    if (prevMouseDownButtonRef.current !== 0 || lastMouseDownButtonRef.current !== 0) return;
     const imgW = image.width * image.scaleX;
     const imgH = image.height * image.scaleY;
     const centerX = image.x + imgW / 2;
@@ -3806,10 +3811,12 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     );
   }, [zoomedImageId, stageScale, stagePosition, dimensions.width, dimensions.height, animateView]);
 
-  // Clicking stage background when zoomed: zoom back out
+  // Clicking stage background when zoomed: zoom back out (left button only)
   const handleStageMouseDownWithZoom = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+    prevMouseDownButtonRef.current = lastMouseDownButtonRef.current;
+    lastMouseDownButtonRef.current = e.evt.button;
     const clickedOnEmpty = e.target === e.target.getStage();
-    if (zoomedImageId && clickedOnEmpty) {
+    if (zoomedImageId && clickedOnEmpty && e.evt.button === 0) {
       const pre = preZoomViewRef.current;
       if (pre) {
         animateView(
@@ -4560,7 +4567,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 isSelected={selectedId === img.id}
                 bypassedTabs={bypassedTabs}
                 onClick={handleObjectClick}
-                onDblClick={() => handleImageDoubleClick(img)}
+                onDblClick={(e) => handleImageDoubleClick(img, e)}
                 onContextMenu={handleImageContextMenu}
                 onDragEnd={(e) => {
                   setDragHoveredFolderId(null);
@@ -5573,7 +5580,7 @@ const ImageNode = React.memo(function ImageNode({
   image: CanvasImage;
   isSelected: boolean;
   onClick: (e: Konva.KonvaEventObject<MouseEvent>) => void;
-  onDblClick?: () => void;
+  onDblClick?: (e: Konva.KonvaEventObject<MouseEvent>) => void;
   onContextMenu?: (e: Konva.KonvaEventObject<PointerEvent>, imageId: string) => void;
   onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) => void;
   onDragMove?: (e: Konva.KonvaEventObject<DragEvent>) => void;
@@ -5801,7 +5808,7 @@ const ImageNode = React.memo(function ImageNode({
       onClick={onClick}
       onDblClick={(e) => {
         e.cancelBubble = true;
-        onDblClick?.();
+        onDblClick?.(e);
       }}
       onContextMenu={(e) => {
         e.evt.preventDefault();
