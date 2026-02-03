@@ -859,6 +859,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const [texts, setTexts] = useState<CanvasText[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const lastSelectedIdRef = useRef<string | null>(null);
+  const lastMultiSelectionRef = useRef<string[] | null>(null);
   const [stageScale, setStageScale] = useState(1);
   const [stagePosition, setStagePosition] = useState({ x: 0, y: 0 });
   const [history, setHistory] = useState<{ images: CanvasImage[]; texts: CanvasText[]; folders: PhotoFolder[] }[]>([{ images: [], texts: [], folders: [] }]);
@@ -2466,8 +2467,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     setIsDragging(false);
   }, []);
 
-  // Handle stage drag
+  // Handle stage drag — clear selection when left-clicking empty (Stage only). Right-click must not clear so paste-to-selection sees full selection.
   const handleStageMouseDown = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+    if (e.evt.button !== 0) return;
     const clickedOnEmpty = e.target === e.target.getStage();
     if (clickedOnEmpty) {
       setSelectedIds([]);
@@ -2493,8 +2495,15 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     }
   }, [selectedIds]);
 
-  // Handle object selection: plain = single, Ctrl = toggle, Shift = range (photos only)
+  // Remember last multi-selection so context menu can use it even if a spurious click overwrote selectedIds. Only clear when selection is empty, not when it becomes single.
+  useEffect(() => {
+    if (selectedIds.length > 1) lastMultiSelectionRef.current = selectedIds.slice();
+    else if (selectedIds.length === 0) lastMultiSelectionRef.current = null;
+  }, [selectedIds]);
+
+  // Handle object selection: plain = single, Ctrl = toggle, Shift = range (photos only). Ignore right-click so range selection is kept for context menu.
   const handleObjectClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+    if (e.evt.button !== 0) return; // only left-click changes selection; right-click keeps current selection for paste/create folder
     e.cancelBubble = true;
     const id = e.target.id();
     const ctrl = e.evt.ctrlKey || e.evt.metaKey;
@@ -2563,10 +2572,13 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   // Right-click context menu for images: copy / paste edit; multi-select: paste to selection, create folder
   const handleImageContextMenu = useCallback((e: Konva.KonvaEventObject<PointerEvent>, imageId: string) => {
     e.evt.preventDefault();
-    const isInSelection = selectedIds.includes(imageId);
-    const menuSelectedIds = isInSelection && selectedIds.length > 1
-      ? selectedIds.filter((id) => images.some((img) => img.id === id))
-      : [imageId];
+    const imageIdsOnly = (ids: string[]) => ids.filter((id) => images.some((img) => img.id === id));
+    const multi = selectedIds.length > 1
+      ? imageIdsOnly(selectedIds)
+      : (lastMultiSelectionRef.current && lastMultiSelectionRef.current.includes(imageId)
+          ? imageIdsOnly(lastMultiSelectionRef.current)
+          : null);
+    const menuSelectedIds = multi && multi.length > 1 ? multi : [imageId];
     setImageContextMenu({ x: e.evt.clientX, y: e.evt.clientY, imageId, selectedIds: menuSelectedIds });
   }, [selectedIds, images]);
 
@@ -2588,6 +2600,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     );
     saveToHistory();
     setImageContextMenu(null);
+    if (ids.size > 1) {
+      setSelectedIds([]);
+      lastSelectedIdRef.current = null;
+    }
   }, [imageContextMenu, copiedEdit, saveToHistory]);
 
   const handleCreatePresetClick = useCallback(() => {
@@ -4830,15 +4846,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               );
             })}
 
-            {images.map((img) => {
-              const folder = folders.find(f => f.id === img.folderId || f.imageIds.includes(img.id));
-              const selectedStrokeColor = folder ? hexToRgba(folder.color, 0.4) : hexToRgba('#3ECF8E', 0.4);
-              return (
+            {images.map((img) => (
               <ImageNode
                 key={img.id}
                 image={img}
-                isSelected={selectedIds.includes(img.id)}
-                selectedStrokeColor={selectedStrokeColor}
                 bypassedTabs={bypassedTabs}
                 onClick={handleObjectClick}
                 onDblClick={(e) => handleImageDoubleClick(img, e)}
@@ -4855,7 +4866,27 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                   );
                 }}
               />
-            );})}
+            ))}
+            {/* Selection outlines at parent level so they don't affect image cache/edits */}
+            {images
+              .filter((img) => selectedIds.includes(img.id))
+              .map((img) => {
+                const folder = folders.find(f => f.id === img.folderId || f.imageIds.includes(img.id));
+                const strokeColor = folder ? hexToRgba(folder.color, 0.4) : hexToRgba('#3ECF8E', 0.4);
+                return (
+                  <Rect
+                    key={`outline-${img.id}`}
+                    x={img.x}
+                    y={img.y}
+                    width={img.width * img.scaleX}
+                    height={img.height * img.scaleY}
+                    rotation={img.rotation}
+                    stroke={strokeColor}
+                    strokeWidth={2}
+                    listening={false}
+                  />
+                );
+              })}
             {texts.map((txt) => (
               <TextNode
                 key={txt.id}
@@ -4902,7 +4933,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 disabled={!copiedEdit}
                 className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                Paste edit to selection
+                Paste edit to selection ({imageContextMenu.selectedIds.length} photos)
               </button>
               <button
                 type="button"
@@ -5865,8 +5896,6 @@ const createColorCalibrationFilter = (colorCal: ColorCalibration) => {
 // Uses fast Konva filters with pre-computed LUTs for real-time editing
 const ImageNode = React.memo(function ImageNode({
   image,
-  isSelected,
-  selectedStrokeColor,
   onClick,
   onDblClick,
   onContextMenu,
@@ -5876,8 +5905,6 @@ const ImageNode = React.memo(function ImageNode({
   bypassedTabs,
 }: {
   image: CanvasImage;
-  isSelected: boolean;
-  selectedStrokeColor: string;
   onClick: (e: Konva.KonvaEventObject<MouseEvent>) => void;
   onDblClick?: (e: Konva.KonvaEventObject<MouseEvent>) => void;
   onContextMenu?: (e: Konva.KonvaEventObject<PointerEvent>, imageId: string) => void;
@@ -6103,8 +6130,6 @@ const ImageNode = React.memo(function ImageNode({
       rotation={image.rotation}
       scaleX={image.scaleX}
       scaleY={image.scaleY}
-      stroke={isSelected ? selectedStrokeColor : undefined}
-      strokeWidth={isSelected ? 2 : 0}
       draggable
       onClick={onClick}
       onDblClick={(e) => {
@@ -6142,11 +6167,8 @@ const ImageNode = React.memo(function ImageNode({
   );
 }, (prevProps, nextProps) => {
   // Custom comparison - only re-render if relevant props changed
-  // This prevents re-renders when other images in the array change
   return (
     prevProps.image === nextProps.image &&
-    prevProps.isSelected === nextProps.isSelected &&
-    prevProps.selectedStrokeColor === nextProps.selectedStrokeColor &&
     prevProps.bypassedTabs === nextProps.bypassedTabs
   );
 });
