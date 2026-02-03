@@ -440,6 +440,24 @@ const getFolderBorderHeight = (folder: PhotoFolder, imageCount: number): number 
   return Math.max(contentHeight, 100);
 };
 
+// Distance from point to a rectangle's border (perimeter)
+function distanceToRectBorder(
+  px: number,
+  py: number,
+  left: number,
+  top: number,
+  width: number,
+  height: number
+): number {
+  const right = left + width;
+  const bottom = top + height;
+  const distToLeft = py >= top && py <= bottom ? Math.abs(px - left) : Math.min(Math.hypot(px - left, py - top), Math.hypot(px - left, py - bottom));
+  const distToRight = py >= top && py <= bottom ? Math.abs(px - right) : Math.min(Math.hypot(px - right, py - top), Math.hypot(px - right, py - bottom));
+  const distToTop = px >= left && px <= right ? Math.abs(py - top) : Math.min(Math.hypot(px - left, py - top), Math.hypot(px - right, py - top));
+  const distToBottom = px >= left && px <= right ? Math.abs(py - bottom) : Math.min(Math.hypot(px - left, py - bottom), Math.hypot(px - right, py - bottom));
+  return Math.min(distToLeft, distToRight, distToTop, distToBottom);
+}
+
 // Interface for image cell positions
 interface ImageCellPosition {
   imageId: string;
@@ -791,6 +809,8 @@ type CanvasEditorProps = {
 export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}) {
   const stageRef = useRef<Konva.Stage>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
+  const folderLabelRefs = useRef<Record<string, Konva.Text>>({});
+  const [folderLabelWidths, setFolderLabelWidths] = useState<Record<string, number>>({});
   const [images, setImages] = useState<CanvasImage[]>([]);
   const [texts, setTexts] = useState<CanvasText[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -820,6 +840,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const [folderNameError, setFolderNameError] = useState('');
   const [bypassedTabs, setBypassedTabs] = useState<Set<'curves' | 'light' | 'color' | 'effects'>>(new Set());
   const [dragHoveredFolderId, setDragHoveredFolderId] = useState<string | null>(null);
+  const [dragSourceFolderBorderHovered, setDragSourceFolderBorderHovered] = useState<string | null>(null);
+  const [dragBorderBlink, setDragBorderBlink] = useState(false);
   const [resizingFolderId, setResizingFolderId] = useState<string | null>(null);
   const [hoveredFolderBorder, setHoveredFolderBorder] = useState<string | null>(null);
   const [dragGhostPosition, setDragGhostPosition] = useState<{
@@ -841,6 +863,18 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     window.addEventListener('resize', updateDimensions);
     return () => window.removeEventListener('resize', updateDimensions);
   }, []);
+
+  // Blink folder border when image center is over the folder border (dragging out)
+  useEffect(() => {
+    if (!dragSourceFolderBorderHovered) {
+      setDragBorderBlink(false);
+      return;
+    }
+    const interval = setInterval(() => {
+      setDragBorderBlink((prev) => !prev);
+    }, 110);
+    return () => clearInterval(interval);
+  }, [dragSourceFolderBorderHovered]);
 
   // Handle keyboard events for Spacebar
   useEffect(() => {
@@ -2285,6 +2319,24 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       const currentCenterX = currentX + currentImg.width / 2;
       const currentCenterY = currentY + currentImg.height / 2;
 
+      // Blink source folder border only when image center is over the border line
+      const BORDER_BLINK_THRESHOLD = 28;
+      if (currentImg.folderId) {
+        const sourceFolder = folders.find((f) => f.id === currentImg.folderId);
+        if (sourceFolder) {
+          const folderImageCount = images.filter((img) => sourceFolder.imageIds.includes(img.id)).length;
+          const borderH = getFolderBorderHeight(sourceFolder, folderImageCount);
+          const left = sourceFolder.x;
+          const top = sourceFolder.y + 30;
+          const dist = distanceToRectBorder(currentCenterX, currentCenterY, left, top, sourceFolder.width, borderH);
+          setDragSourceFolderBorderHovered(dist <= BORDER_BLINK_THRESHOLD ? currentImg.folderId : null);
+        } else {
+          setDragSourceFolderBorderHovered(null);
+        }
+      } else {
+        setDragSourceFolderBorderHovered(null);
+      }
+
       // Detect which folder is being hovered
       let targetFolderId: string | undefined = currentImg.folderId;
       let targetFolder: PhotoFolder | undefined = folders.find(f => f.id === currentImg.folderId);
@@ -2458,7 +2510,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         // Update dragged image position using setAttrs
         node.setAttrs({ x: finalX, y: finalY });
       }
-      
+
       // Update folder hover state for visual feedback
       setDragHoveredFolderId(targetFolderId || null);
     },
@@ -3708,14 +3760,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
               return (
                 <Group key={folder.id}>
-                  {/* Folder Label - visible and draggable (for drag functionality) */}
-                  <Text
+                  {/* Folder Label (name + plus) - one Group so they scale and move together */}
+                  <Group
                     x={currentFolder.x}
                     y={currentFolder.y}
-                    text={currentFolder.name}
-                    fontSize={16}
-                    fontStyle="600"
-                    fill={currentFolder.color}
                     draggable
                     listening={true}
                     onMouseEnter={(e) => {
@@ -3726,10 +3774,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                       const container = e.target.getStage()?.container();
                       if (container && !isDragging) container.style.cursor = 'default';
                     }}
-                    onClick={() => handleFolderDoubleClick(currentFolder)}
-                    onTap={() => handleFolderDoubleClick(currentFolder)}
                     onDragStart={() => {
-                      // Track that we're dragging the folder name to prevent click from firing
                       folderNameDragRef.current = true;
                     }}
                     onDragMove={(e) => {
@@ -3737,12 +3782,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                       const newY = e.target.y();
                       const now = Date.now();
 
-                      // Always update dragged folder position for smooth movement
                       const updatedFolders = folders.map((f) =>
                         f.id === currentFolder.id ? { ...f, x: newX, y: newY } : f
                       );
 
-                      // Always reflow images for the dragged folder
                       const folderImgs = images.filter(img => currentFolder.imageIds.includes(img.id));
                       let updatedImages = [...images];
                       if (folderImgs.length > 0) {
@@ -3753,7 +3796,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                         });
                       }
 
-                      // Throttle overlap resolution for smooth performance
                       if (now - lastOverlapCheckRef.current >= overlapThrottleMs) {
                         lastOverlapCheckRef.current = now;
                         const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
@@ -3764,18 +3806,15 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                         setFolders(resolvedFolders);
                         setImages(resolvedImages);
                       } else {
-                        // Just update the dragged folder without overlap check
                         setFolders(updatedFolders);
                         setImages(updatedImages);
                       }
                     }}
                     onDragEnd={async () => {
-                      // Reset drag flag after a short delay to prevent click from firing
                       setTimeout(() => {
                         folderNameDragRef.current = false;
                       }, 100);
 
-                      // Final overlap resolution to ensure clean state
                       const { folders: finalFolders, images: finalImages } = resolveOverlapsAndReflow(
                         folders,
                         images,
@@ -3785,9 +3824,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                       setImages(finalImages);
                       saveToHistory();
 
-                      // Persist folder and image positions to Supabase
                       if (user) {
-                        // Save all folder positions (some may have been pushed)
                         for (const f of finalFolders) {
                           supabase.from('photo_folders')
                             .update({ x: Math.round(f.x), y: Math.round(f.y) })
@@ -3798,7 +3835,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                             });
                         }
 
-                        // Save all images positions (canonical key)
                         const allFolderImages = finalImages.filter((img: CanvasImage) => (img.storagePath || img.originalStoragePath) && img.folderId);
                         for (const img of allFolderImages) {
                           const canonicalPath = img.storagePath || img.originalStoragePath!;
@@ -3812,23 +3848,60 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                         }
                       }
                     }}
-                  />
-                  
-                  
-                  {/* Folder Border - Below the label */}
+                  >
+                    <Text
+                      ref={(el) => {
+                        if (el) {
+                          folderLabelRefs.current[currentFolder.id] = el;
+                          requestAnimationFrame(() => {
+                            const w = el.width();
+                            setFolderLabelWidths(prev => prev[currentFolder.id] === w ? prev : { ...prev, [currentFolder.id]: w });
+                          });
+                        }
+                      }}
+                      x={0}
+                      y={0}
+                      text={currentFolder.name}
+                      fontSize={16}
+                      fontStyle="600"
+                      fill={currentFolder.color}
+                      listening={true}
+                      onClick={() => handleFolderDoubleClick(currentFolder)}
+                      onTap={() => handleFolderDoubleClick(currentFolder)}
+                    />
+                    <Text
+                      x={folderLabelWidths[currentFolder.id] ?? 0}
+                      y={2}
+                      text=" +"
+                      fontSize={16}
+                      fontStyle="600"
+                      fill={currentFolder.color}
+                      listening={true}
+                      onClick={(e) => {
+                        e.cancelBubble = true;
+                        handleAddPhotosToFolder(currentFolder.id);
+                      }}
+                      onTap={(e) => {
+                        e.cancelBubble = true;
+                        handleAddPhotosToFolder(currentFolder.id);
+                      }}
+                    />
+                  </Group>
+
+                  {/* Folder Border - blinks when image center is over this folder's border (dragging out); solid on hover or when dragging over to drop */}
                   <Rect
                     x={borderX}
                     y={borderY}
                     width={borderWidth}
                     height={Math.max(borderHeight, 80)}
                     stroke={currentFolder.color}
-                    strokeWidth={dragHoveredFolderId === currentFolder.id || isHovered ? 3 : 1}
+                    strokeWidth={dragSourceFolderBorderHovered === currentFolder.id ? (dragBorderBlink ? 3 : 2) : (dragHoveredFolderId === currentFolder.id || isHovered ? 3 : 1)}
                     cornerRadius={12}
-                    dash={dragHoveredFolderId === currentFolder.id || isHovered ? undefined : [8, 4]}
-                    opacity={dragHoveredFolderId === currentFolder.id || isHovered ? 0.9 : 0.4}
+                    dash={dragSourceFolderBorderHovered === currentFolder.id ? (dragBorderBlink ? undefined : [8, 4]) : (dragHoveredFolderId === currentFolder.id || isHovered ? undefined : [8, 4])}
+                    opacity={dragSourceFolderBorderHovered === currentFolder.id ? (dragBorderBlink ? 0.36 : 0.9) : (dragHoveredFolderId === currentFolder.id || isHovered ? 0.9 : 0.4)}
                     shadowColor={currentFolder.color}
-                    shadowBlur={dragHoveredFolderId === currentFolder.id || isHovered ? 20 : 0}
-                    shadowOpacity={dragHoveredFolderId === currentFolder.id || isHovered ? 0.6 : 0}
+                    shadowBlur={dragSourceFolderBorderHovered === currentFolder.id ? (dragBorderBlink ? 20 : 0) : (dragHoveredFolderId === currentFolder.id || isHovered ? 20 : 0)}
+                    shadowOpacity={dragSourceFolderBorderHovered === currentFolder.id ? (dragBorderBlink ? 0.2 : 0) : (dragHoveredFolderId === currentFolder.id || isHovered ? 0.6 : 0)}
                     onMouseEnter={() => setHoveredFolderBorder(currentFolder.id)}
                     onMouseLeave={() => {
                       if (!resizingFolderId) setHoveredFolderBorder(null);
@@ -4128,6 +4201,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 onClick={handleObjectClick}
                 onDragEnd={(e) => {
                   setDragHoveredFolderId(null);
+                  setDragSourceFolderBorderHovered(null);
                   handleObjectDragEnd(e, 'image');
                 }}
                 onDragMove={handleImageDragMove}
@@ -4167,57 +4241,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           </Layer>
         </Stage>
         
-        {/* Plus buttons for folders - positioned using flexbox */}
-        {folders.map((folder) => {
-          // Get the current folder from state to ensure we have the latest position
-          const currentFolder = folders.find(f => f.id === folder.id) || folder;
-
-          // Convert stage coordinates to screen coordinates
-          const screenX = currentFolder.x * stageScale + stagePosition.x;
-          const screenY = currentFolder.y * stageScale + stagePosition.y;
-
-          return (
-            <div
-              key={`folder-controls-${currentFolder.id}`}
-              className="absolute pointer-events-none flex items-center gap-3 z-10"
-              style={{
-                left: `${screenX}px`,
-                top: `${screenY}px`,
-              }}
-            >
-              {/* Spacer for folder name - same size as Konva text */}
-              <div
-                className="font-semibold pointer-events-none opacity-0"
-                style={{
-                  fontSize: `${16 * stageScale}px`,
-                }}
-              >
-                {currentFolder.name}
-              </div>
-              {/* Plus button */}
-              <button
-                onClick={() => handleAddPhotosToFolder(currentFolder.id)}
-                className="pointer-events-auto cursor-pointer bg-transparent p-0 m-0 rounded-full flex items-center justify-center border border-dashed flex-shrink-0"
-                style={{
-                  width: `${24 * stageScale}px`,
-                  height: `${24 * stageScale}px`,
-                  borderWidth: `${1 * stageScale}px`,
-                  borderColor: currentFolder.color,
-                }}
-              >
-                <span
-                  className="font-bold leading-none"
-                  style={{
-                    fontSize: `${16 * stageScale}px`,
-                    color: currentFolder.color,
-                  }}
-                >
-                  +
-                </span>
-              </button>
-            </div>
-          );
-        })}
       </div>
 
       {selectedObject && (
