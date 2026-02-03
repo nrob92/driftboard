@@ -2945,34 +2945,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               return; // Exit early since we already updated images
             }
             
-            // Moving between existing folders or into a folder
+            // Moving between existing folders or into a folder — use snapped drop position (newX, newY from above)
             if (targetFolderId) {
-              // Find target folder and calculate grid position
-              const targetFolder = folders.find(f => f.id === targetFolderId);
-              let gridX = newX;
-              let gridY = newY;
-              
-              if (targetFolder) {
-                // Count existing images in target folder (excluding current image if it was already in this folder)
-                const existingCount = targetFolder.imageIds.filter(id => id !== currentImg.id).length;
-                
-                // Dynamic columns based on folder width
-                const cols = calculateColsFromWidth(targetFolder.width);
-                const col = existingCount % cols;
-                const row = Math.floor(existingCount / cols);
-                
-                // Center image in cell for consistent spacing
-                // Border starts at folder.x, content starts at folder.x + padding
-                const contentStartX = targetFolder.x + GRID_CONFIG.folderPadding;
-                const contentStartY = targetFolder.y + 30 + GRID_CONFIG.folderPadding;
-                const imgWidth = currentImg.width * currentImg.scaleX;
-                const imgHeight = currentImg.height * currentImg.scaleY;
-                const cellOffsetX = Math.max(0, (GRID_CONFIG.imageMaxSize - imgWidth) / 2);
-                const cellOffsetY = Math.max(0, (GRID_CONFIG.imageMaxSize - imgHeight) / 2);
-                
-                gridX = contentStartX + col * CELL_SIZE + cellOffsetX;
-                gridY = contentStartY + row * CELL_SIZE + cellOffsetY;
-              }
+              const gridX = newX;
+              const gridY = newY;
 
               // Update folders
               const updatedFolders = folders.map((f) => {
