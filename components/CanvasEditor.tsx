@@ -758,25 +758,25 @@ const resolveFolderOverlaps = (
   changedFolderId?: string
 ): PhotoFolder[] => {
   if (folders.length < 2) return folders;
-  
+
   const { folderGap } = GRID_CONFIG;
   const updated = [...folders];
   let hasOverlap = true;
   let iterations = 0;
-  const maxIterations = 20; // Reduced for smoother performance
-  
+  const maxIterations = 20;
+
   while (hasOverlap && iterations < maxIterations) {
     hasOverlap = false;
     iterations++;
-    
+
     for (let i = 0; i < updated.length; i++) {
       const folderA = updated[i];
-      const imageCountA = images.filter(img => folderA.imageIds.includes(img.id)).length;
+      const imageCountA = images.filter((img) => folderA.imageIds.includes(img.id)).length;
       const boundsA = getFolderBounds(folderA, imageCountA);
-      
+
       for (let j = i + 1; j < updated.length; j++) {
         const folderB = updated[j];
-        const imageCountB = images.filter(img => folderB.imageIds.includes(img.id)).length;
+        const imageCountB = images.filter((img) => folderB.imageIds.includes(img.id)).length;
         const boundsB = getFolderBounds(folderB, imageCountB);
         
         if (rectsOverlap(boundsA, boundsB, folderGap)) {
@@ -857,7 +857,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const [folderLabelWidths, setFolderLabelWidths] = useState<Record<string, number>>({});
   const [images, setImages] = useState<CanvasImage[]>([]);
   const [texts, setTexts] = useState<CanvasText[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const lastSelectedIdRef = useRef<string | null>(null);
   const [stageScale, setStageScale] = useState(1);
   const [stagePosition, setStagePosition] = useState({ x: 0, y: 0 });
   const [history, setHistory] = useState<{ images: CanvasImage[]; texts: CanvasText[]; folders: PhotoFolder[] }[]>([{ images: [], texts: [], folders: [] }]);
@@ -882,13 +883,16 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const [editingFolderName, setEditingFolderName] = useState('');
   const [selectedExistingFolderId, setSelectedExistingFolderId] = useState<string | null>(null);
   const [folderNameError, setFolderNameError] = useState('');
+  const [createFolderFromSelectionIds, setCreateFolderFromSelectionIds] = useState<string[] | null>(null);
+  const [createFolderFromSelectionName, setCreateFolderFromSelectionName] = useState('');
+  const [createFolderFromSelectionNameError, setCreateFolderFromSelectionNameError] = useState('');
   const [bypassedTabs, setBypassedTabs] = useState<Set<'curves' | 'light' | 'color' | 'effects'>>(new Set());
   const [dragHoveredFolderId, setDragHoveredFolderId] = useState<string | null>(null);
   const [dragSourceFolderBorderHovered, setDragSourceFolderBorderHovered] = useState<string | null>(null);
   const [dragBorderBlink, setDragBorderBlink] = useState(false);
   const [resizingFolderId, setResizingFolderId] = useState<string | null>(null);
   const [copiedEdit, setCopiedEdit] = useState<Partial<CanvasImage> | null>(null);
-  const [imageContextMenu, setImageContextMenu] = useState<{ x: number; y: number; imageId: string } | null>(null);
+  const [imageContextMenu, setImageContextMenu] = useState<{ x: number; y: number; imageId: string; selectedIds: string[] } | null>(null);
   const imageContextMenuRef = useRef<HTMLDivElement>(null);
   const [createPresetFromImageId, setCreatePresetFromImageId] = useState<string | null>(null);
   const [createPresetName, setCreatePresetName] = useState('');
@@ -1431,7 +1435,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       setTexts([...prevState.texts]);
       setFolders([...(prevState.folders || [])]);
       setHistoryIndex(historyIndex - 1);
-      setSelectedId(null);
+      setSelectedIds([]);
     }
   }, [history, historyIndex]);
 
@@ -1443,7 +1447,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       setTexts([...nextState.texts]);
       setFolders([...(nextState.folders || [])]);
       setHistoryIndex(historyIndex + 1);
-      setSelectedId(null);
+      setSelectedIds([]);
     }
   }, [history, historyIndex]);
 
@@ -2466,11 +2470,12 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const handleStageMouseDown = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
     const clickedOnEmpty = e.target === e.target.getStage();
     if (clickedOnEmpty) {
-      setSelectedId(null);
+      setSelectedIds([]);
+      lastSelectedIdRef.current = null;
     }
   }, []);
 
-  // Update transformer when selection changes
+  // Update transformer when selection changes (single selection only)
   useEffect(() => {
     if (!transformerRef.current) return;
 
@@ -2478,27 +2483,92 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     const stage = transformer.getStage();
     if (!stage) return;
 
-    const selectedNode = stage.findOne(`#${selectedId}`);
+    const singleId = selectedIds.length === 1 ? selectedIds[0] : null;
+    const selectedNode = singleId ? stage.findOne(`#${singleId}`) : null;
     if (selectedNode) {
       transformer.nodes([selectedNode]);
       transformer.getLayer()?.batchDraw();
     } else {
       transformer.nodes([]);
     }
-  }, [selectedId]);
+  }, [selectedIds]);
 
-  // Handle object selection
+  // Handle object selection: plain = single, Ctrl = toggle, Shift = range (photos only)
   const handleObjectClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
     e.cancelBubble = true;
     const id = e.target.id();
-    setSelectedId(id);
-  }, []);
+    const ctrl = e.evt.ctrlKey || e.evt.metaKey;
+    const shift = e.evt.shiftKey;
 
-  // Right-click context menu for images: copy / paste edit
+    if (ctrl) {
+      setSelectedIds((prev) => {
+        const has = prev.includes(id);
+        const next = has ? prev.filter((x) => x !== id) : [...prev, id];
+        lastSelectedIdRef.current = id;
+        return next;
+      });
+      return;
+    }
+
+    if (shift) {
+      const lastId = lastSelectedIdRef.current;
+      const clickedImg = images.find((img) => img.id === id);
+      const lastImg = lastId != null ? images.find((img) => img.id === lastId) : null;
+
+      if (clickedImg && lastImg) {
+        const folderFor = (img: CanvasImage) => folders.find((f) => f.imageIds.includes(img.id));
+        const folderClicked = folderFor(clickedImg);
+        const folderLast = folderFor(lastImg);
+
+        if (folderClicked && folderClicked.id === folderLast?.id) {
+          const folderImages = images
+            .filter((img) => folderClicked.imageIds.includes(img.id))
+            .sort((a, b) => {
+              const rowA = Math.round(a.y / CELL_SIZE);
+              const rowB = Math.round(b.y / CELL_SIZE);
+              if (rowA !== rowB) return rowA - rowB;
+              return a.x - b.x;
+            });
+          const idxClicked = folderImages.findIndex((img) => img.id === id);
+          const idxLast = folderImages.findIndex((img) => img.id === lastId);
+          if (idxClicked >= 0 && idxLast >= 0) {
+            const lo = Math.min(idxClicked, idxLast);
+            const hi = Math.max(idxClicked, idxLast);
+            const rangeIds = folderImages.slice(lo, hi + 1).map((img) => img.id);
+            setSelectedIds(rangeIds);
+            lastSelectedIdRef.current = id;
+            return;
+          }
+        }
+      }
+
+      const imageIndex = images.findIndex((img) => img.id === id);
+      const lastImageIndex = lastId != null ? images.findIndex((img) => img.id === lastId) : -1;
+      if (imageIndex >= 0 && lastImageIndex >= 0) {
+        const lo = Math.min(imageIndex, lastImageIndex);
+        const hi = Math.max(imageIndex, lastImageIndex);
+        const rangeIds = images.slice(lo, hi + 1).map((img) => img.id);
+        setSelectedIds(rangeIds);
+      } else {
+        setSelectedIds([id]);
+      }
+      lastSelectedIdRef.current = id;
+      return;
+    }
+
+    setSelectedIds([id]);
+    lastSelectedIdRef.current = id;
+  }, [images, folders]);
+
+  // Right-click context menu for images: copy / paste edit; multi-select: paste to selection, create folder
   const handleImageContextMenu = useCallback((e: Konva.KonvaEventObject<PointerEvent>, imageId: string) => {
     e.evt.preventDefault();
-    setImageContextMenu({ x: e.evt.clientX, y: e.evt.clientY, imageId });
-  }, []);
+    const isInSelection = selectedIds.includes(imageId);
+    const menuSelectedIds = isInSelection && selectedIds.length > 1
+      ? selectedIds.filter((id) => images.some((img) => img.id === id))
+      : [imageId];
+    setImageContextMenu({ x: e.evt.clientX, y: e.evt.clientY, imageId, selectedIds: menuSelectedIds });
+  }, [selectedIds, images]);
 
   const handleCopyEdit = useCallback(() => {
     if (!imageContextMenu) return;
@@ -2512,10 +2582,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
   const handlePasteEdit = useCallback(() => {
     if (!imageContextMenu || !copiedEdit) return;
+    const ids = new Set(imageContextMenu.selectedIds);
     setImages((prev) =>
-      prev.map((img) =>
-        img.id === imageContextMenu.imageId ? { ...img, ...copiedEdit } : img
-      )
+      prev.map((img) => (ids.has(img.id) ? { ...img, ...copiedEdit } : img))
     );
     saveToHistory();
     setImageContextMenu(null);
@@ -2553,6 +2622,154 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const handleCreatePresetCancel = useCallback(() => {
     setCreatePresetFromImageId(null);
     setCreatePresetName('');
+  }, []);
+
+  // Open modal to name folder when creating from multi-select
+  const handleCreateFolderFromSelection = useCallback(() => {
+    if (!imageContextMenu || imageContextMenu.selectedIds.length === 0) return;
+    const ids = imageContextMenu.selectedIds.filter((id) => images.some((img) => img.id === id));
+    if (ids.length === 0) return;
+    setCreateFolderFromSelectionIds(ids);
+    setCreateFolderFromSelectionName('New Folder');
+    setCreateFolderFromSelectionNameError('');
+    setImageContextMenu(null);
+  }, [imageContextMenu, images]);
+
+  // Create folder from selection after user enters name and saves; resolve overlaps so it doesn't sit on others
+  const handleCreateFolderFromSelectionSave = useCallback(async () => {
+    if (!createFolderFromSelectionIds || createFolderFromSelectionIds.length === 0) return;
+    const name = createFolderFromSelectionName.trim();
+    if (!name) {
+      setCreateFolderFromSelectionNameError('Enter a folder name');
+      return;
+    }
+    const isDuplicate = folders.some(
+      (f) => f.name.toLowerCase() === name.toLowerCase()
+    );
+    if (isDuplicate) {
+      setCreateFolderFromSelectionNameError('A folder with this name already exists');
+      return;
+    }
+
+    const ids = createFolderFromSelectionIds;
+    const selectedImages = images.filter((img) => ids.includes(img.id));
+    if (selectedImages.length === 0) {
+      setCreateFolderFromSelectionIds(null);
+      setCreateFolderFromSelectionName('');
+      return;
+    }
+
+    const centerX = (dimensions.width / 2 - stagePosition.x) / stageScale;
+    const centerY = (dimensions.height / 2 - stagePosition.y) / stageScale;
+    const folderId = `folder-${Date.now()}`;
+    const colorIndex = folders.length % FOLDER_COLORS.length;
+
+    const newFolder: PhotoFolder = {
+      id: folderId,
+      name,
+      x: centerX,
+      y: centerY,
+      width: GRID_CONFIG.defaultFolderWidth,
+      imageIds: ids,
+      color: FOLDER_COLORS[colorIndex],
+    };
+
+    const foldersWithoutOld = folders.map((f) => ({
+      ...f,
+      imageIds: f.imageIds.filter((id) => !ids.includes(id)),
+    }));
+    const foldersWithNewFolder = [...foldersWithoutOld, newFolder];
+
+    const reflowed = reflowImagesInFolder(selectedImages, newFolder.x, newFolder.y, newFolder.width);
+    const imagesWithReflow = images.map((img) => {
+      if (!ids.includes(img.id)) return img;
+      const r = reflowed.find((ri) => ri.id === img.id);
+      return r ? { ...r, folderId } : { ...img, folderId };
+    });
+
+    const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
+      foldersWithNewFolder,
+      imagesWithReflow,
+      folderId
+    );
+
+    setFolders(resolvedFolders);
+    setImages(resolvedImages);
+    setCreateFolderFromSelectionIds(null);
+    setCreateFolderFromSelectionName('');
+    setCreateFolderFromSelectionNameError('');
+
+    if (user) {
+      try {
+        await supabase.from('photo_folders').insert({
+          id: folderId,
+          user_id: user.id,
+          name,
+          x: Math.round(newFolder.x),
+          y: Math.round(newFolder.y),
+          width: GRID_CONFIG.defaultFolderWidth,
+          color: FOLDER_COLORS[colorIndex],
+        });
+        const finalReflowed = resolvedImages.filter((img) => img.folderId === folderId);
+        for (const img of finalReflowed) {
+          const path = img.storagePath || img.originalStoragePath;
+          if (path) {
+            await supabase
+              .from('photo_edits')
+              .update({ folder_id: folderId, x: Math.round(img.x), y: Math.round(img.y) })
+              .eq('storage_path', path)
+              .eq('user_id', user.id);
+          }
+        }
+        const movedFolders = resolvedFolders.filter((f) => {
+          if (f.id === folderId) return false;
+          const prev = foldersWithNewFolder.find((of) => of.id === f.id);
+          return prev && (prev.x !== f.x || prev.y !== f.y);
+        });
+        for (const f of movedFolders) {
+          await supabase
+            .from('photo_folders')
+            .update({ x: Math.round(f.x), y: Math.round(f.y) })
+            .eq('id', f.id)
+            .eq('user_id', user.id);
+          const movedFolderImgIds = new Set(f.imageIds);
+          for (const img of resolvedImages) {
+            if (!movedFolderImgIds.has(img.id)) continue;
+            const path = img.storagePath || img.originalStoragePath;
+            if (path) {
+              await supabase
+                .from('photo_edits')
+                .update({ x: Math.round(img.x), y: Math.round(img.y) })
+                .eq('storage_path', path)
+                .eq('user_id', user.id);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Failed to create folder / update edits:', err);
+      }
+      queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
+    }
+
+    saveToHistory();
+  }, [
+    createFolderFromSelectionIds,
+    createFolderFromSelectionName,
+    images,
+    folders,
+    dimensions,
+    stagePosition,
+    stageScale,
+    user,
+    resolveOverlapsAndReflow,
+    saveToHistory,
+    queryClient,
+  ]);
+
+  const handleCreateFolderFromSelectionCancel = useCallback(() => {
+    setCreateFolderFromSelectionIds(null);
+    setCreateFolderFromSelectionName('');
+    setCreateFolderFromSelectionNameError('');
   }, []);
 
   // Close image context menu on click outside or escape
@@ -3268,9 +3485,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
   // Handle export with edits applied
   const handleExport = useCallback(async () => {
-    if (!selectedId) return;
+    const singleId = selectedIds.length === 1 ? selectedIds[0] : null;
+    if (!singleId) return;
 
-    const image = images.find(img => img.id === selectedId);
+    const image = images.find(img => img.id === singleId);
     const hasCloudPath = image?.storagePath || image?.originalStoragePath;
     if (!image || !hasCloudPath) {
       alert('Cannot export: Image not saved to cloud');
@@ -3453,7 +3671,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       console.error('Export error:', error);
       alert(`Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-  }, [selectedId, images]);
+  }, [selectedIds, images]);
 
   // Handle folder click to edit
   const handleFolderDoubleClick = useCallback((folder: PhotoFolder) => {
@@ -3729,7 +3947,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       saveToHistory();
       return updated;
     });
-    setSelectedId(newText.id);
+    setSelectedIds([newText.id]);
   }, [stagePosition, stageScale, saveToHistory]);
 
   // Zoom animation: single RAF loop, update Stage directly (no React re-renders per frame)
@@ -3833,9 +4051,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     handleStageMouseDown(e);
   }, [zoomedImageId, stageScale, stagePosition, animateView, handleStageMouseDown]);
 
-  // Get selected object
-  const selectedObject = selectedId
-    ? [...images, ...texts].find((obj) => obj.id === selectedId)
+  // Get selected object (only when exactly one selected, for edit panel)
+  const selectedObject = selectedIds.length === 1
+    ? [...images, ...texts].find((obj) => obj.id === selectedIds[0]) ?? null
     : null;
 
   return (
@@ -4051,6 +4269,57 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                   )}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create folder from selection: name modal, then create and push others out of the way */}
+      {createFolderFromSelectionIds && createFolderFromSelectionIds.length > 0 && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96">
+            <h2 className="text-lg font-semibold text-white mb-1">Create folder</h2>
+            <p className="text-sm text-[#888] mb-4">
+              Name your folder ({createFolderFromSelectionIds.length} photo{createFolderFromSelectionIds.length !== 1 ? 's' : ''} selected). Existing folders will be pushed aside if needed.
+            </p>
+            <label className="block text-xs uppercase tracking-wide text-[#666] mb-2">Folder name</label>
+            <input
+              type="text"
+              value={createFolderFromSelectionName}
+              onChange={(e) => {
+                setCreateFolderFromSelectionName(e.target.value);
+                setCreateFolderFromSelectionNameError('');
+              }}
+              placeholder="e.g., Beach Trip 2024"
+              className={`w-full px-4 py-3 text-white bg-[#252525] border rounded-xl focus:outline-none transition-colors mb-1 ${
+                createFolderFromSelectionNameError ? 'border-red-500 focus:border-red-500' : 'border-[#333] focus:border-[#3ECF8E] focus:ring-1 focus:ring-[#3ECF8E]/20'
+              }`}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleCreateFolderFromSelectionSave();
+                if (e.key === 'Escape') handleCreateFolderFromSelectionCancel();
+              }}
+            />
+            {createFolderFromSelectionNameError && (
+              <p className="text-xs text-red-400 mb-3">{createFolderFromSelectionNameError}</p>
+            )}
+            {!createFolderFromSelectionNameError && <div className="mb-4" />}
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={handleCreateFolderFromSelectionCancel}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-[#999] bg-[#252525] hover:bg-[#333] rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateFolderFromSelectionSave}
+                disabled={!createFolderFromSelectionName.trim()}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-[#0d0d0d] bg-[#3ECF8E] hover:bg-[#35b87d] disabled:bg-[#333] disabled:text-[#666] disabled:cursor-not-allowed rounded-xl transition-colors cursor-pointer"
+              >
+                Save
+              </button>
             </div>
           </div>
         </div>
@@ -4568,7 +4837,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               <ImageNode
                 key={img.id}
                 image={img}
-                isSelected={selectedId === img.id}
+                isSelected={selectedIds.includes(img.id)}
                 selectedStrokeColor={selectedStrokeColor}
                 bypassedTabs={bypassedTabs}
                 onClick={handleObjectClick}
@@ -4591,7 +4860,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               <TextNode
                 key={txt.id}
                 text={txt}
-                isSelected={selectedId === txt.id}
+                isSelected={selectedIds.includes(txt.id)}
                 onClick={handleObjectClick}
                 onDragEnd={(e) => handleObjectDragEnd(e, 'text')}
                 onUpdate={(updates) => {
@@ -4618,36 +4887,58 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         
       </div>
 
-      {/* Right-click context menu for images: copy / paste edit */}
+      {/* Right-click context menu for images: single = copy/paste/preset; multi = paste to selection, create folder */}
       {imageContextMenu && (
         <div
           ref={imageContextMenuRef}
-          className="fixed z-50 min-w-[160px] py-1 bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50"
+          className="fixed z-50 min-w-[180px] py-1 bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50"
           style={{ left: imageContextMenu.x, top: imageContextMenu.y }}
         >
-          <button
-            type="button"
-            onClick={handleCopyEdit}
-            className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors"
-          >
-            Copy edit
-          </button>
-          <button
-            type="button"
-            onClick={handlePasteEdit}
-            disabled={!copiedEdit}
-            className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            Paste edit
-          </button>
-          {user && (
-            <button
-              type="button"
-              onClick={handleCreatePresetClick}
-              className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors border-t border-[#2a2a2a]"
-            >
-              Create preset…
-            </button>
+          {imageContextMenu.selectedIds.length > 1 ? (
+            <>
+              <button
+                type="button"
+                onClick={handlePasteEdit}
+                disabled={!copiedEdit}
+                className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                Paste edit to selection
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateFolderFromSelection}
+                className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors border-t border-[#2a2a2a]"
+              >
+                Create folder
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={handleCopyEdit}
+                className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors"
+              >
+                Copy edit
+              </button>
+              <button
+                type="button"
+                onClick={handlePasteEdit}
+                disabled={!copiedEdit}
+                className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                Paste edit
+              </button>
+              {user && (
+                <button
+                  type="button"
+                  onClick={handleCreatePresetClick}
+                  className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors border-t border-[#2a2a2a]"
+                >
+                  Create preset…
+                </button>
+              )}
+            </>
           )}
         </div>
       )}
@@ -4697,17 +4988,17 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           onUpdate={(updates) => {
             if ('src' in selectedObject) {
               setImages((prev) =>
-                prev.map((img) => (img.id === selectedId ? { ...img, ...updates } : img))
+                prev.map((img) => (img.id === selectedIds[0] ? { ...img, ...updates } : img))
               );
             } else {
               setTexts((prev) =>
-                prev.map((txt) => (txt.id === selectedId ? { ...txt, ...updates } : txt))
+                prev.map((txt) => (txt.id === selectedIds[0] ? { ...txt, ...updates } : txt))
               );
             }
           }}
           onDelete={async () => {
             if ('src' in selectedObject) {
-              setDeletingPhotoId(selectedId);
+              setDeletingPhotoId(selectedIds[0]);
               try {
                 const imageToDelete = selectedObject as CanvasImage;
                 const payload = getDeletePhotoPayload(imageToDelete);
@@ -4731,23 +5022,23 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                     console.error('Error deleting photo:', err);
                   }
                 }
-                setImages((prev) => prev.filter((img) => img.id !== selectedId));
-                setSelectedId(null);
+                setImages((prev) => prev.filter((img) => img.id !== selectedIds[0]));
+                setSelectedIds([]);
                 saveToHistory();
               } finally {
                 setDeletingPhotoId(null);
               }
             } else {
-              setTexts((prev) => prev.filter((txt) => txt.id !== selectedId));
-              setSelectedId(null);
+              setTexts((prev) => prev.filter((txt) => txt.id !== selectedIds[0]));
+              setSelectedIds([]);
               saveToHistory();
             }
           }}
-          isDeleting={deletingPhotoId === selectedId && 'src' in selectedObject}
+          isDeleting={selectedIds[0] != null && deletingPhotoId === selectedIds[0] && 'src' in selectedObject}
           onResetToOriginal={'src' in selectedObject ? () => {
             // Reset ALL edits to default values
             setImages((prev) =>
-              prev.map((img) => img.id === selectedId ? {
+              prev.map((img) => img.id === selectedIds[0] ? {
                 ...img,
                 rotation: 0,
                 scaleX: 1,
