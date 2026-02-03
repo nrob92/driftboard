@@ -813,6 +813,7 @@ export function CanvasEditor() {
   const [editingFolderName, setEditingFolderName] = useState('');
   const [selectedExistingFolderId, setSelectedExistingFolderId] = useState<string | null>(null);
   const [folderNameError, setFolderNameError] = useState('');
+  const [bypassedTabs, setBypassedTabs] = useState<Set<'curves' | 'light' | 'color' | 'effects'>>(new Set());
   const [dragHoveredFolderId, setDragHoveredFolderId] = useState<string | null>(null);
   const [resizingFolderId, setResizingFolderId] = useState<string | null>(null);
   const [hoveredFolderBorder, setHoveredFolderBorder] = useState<string | null>(null);
@@ -959,6 +960,7 @@ export function CanvasEditor() {
                 img.onerror = () => reject(new Error('Failed to load'));
                 img.src = imageUrl;
               });
+              imgSrc = imageUrl;
               width = img.width;
               height = img.height;
             }
@@ -2076,7 +2078,7 @@ export function CanvasEditor() {
       const scaleBy = 1.1;
       // Scroll up (deltaY < 0) zooms in, scroll down (deltaY > 0) zooms out
       const newScale = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
-      const clampedScale = Math.max(0.1, Math.min(5, newScale));
+      const clampedScale = Math.max(0.1, Math.min(20, newScale));
 
       setStageScale(clampedScale);
       setStagePosition({
@@ -2115,7 +2117,7 @@ export function CanvasEditor() {
 
         if (lastTouchDistance !== null && lastTouchCenter !== null) {
           const scaleChange = distance / lastTouchDistance;
-          const newScale = Math.max(0.1, Math.min(5, stageScale * scaleChange));
+          const newScale = Math.max(0.1, Math.min(20, stageScale * scaleChange));
 
           const stageBox = stage.container().getBoundingClientRect();
           const pointTo = {
@@ -2921,6 +2923,17 @@ export function CanvasEditor() {
             document.body.appendChild(tempContainer);
 
             // Build CamanJS edit values from image properties
+            // Map colorCalibration to camanFilters format
+            const mappedColorCalibration = image.colorCalibration ? {
+              shadowTint: image.shadowTint,
+              redPrimaryHue: image.colorCalibration.redHue,
+              redPrimarySaturation: image.colorCalibration.redSaturation,
+              greenPrimaryHue: image.colorCalibration.greenHue,
+              greenPrimarySaturation: image.colorCalibration.greenSaturation,
+              bluePrimaryHue: image.colorCalibration.blueHue,
+              bluePrimarySaturation: image.colorCalibration.blueSaturation,
+            } : undefined;
+
             const camanEdits: CamanEditValues = {
               exposure: image.exposure,
               contrast: image.contrast,
@@ -2943,7 +2956,7 @@ export function CanvasEditor() {
               colorHSL: image.colorHSL,
               splitToning: image.splitToning,
               colorGrading: image.colorGrading,
-              colorCalibration: image.colorCalibration,
+              colorCalibration: mappedColorCalibration,
               filters: image.filters,
             };
 
@@ -4024,6 +4037,7 @@ export function CanvasEditor() {
                 key={img.id}
                 image={img}
                 isSelected={selectedId === img.id}
+                bypassedTabs={bypassedTabs}
                 onClick={handleObjectClick}
                 onDragEnd={(e) => {
                   setDragHoveredFolderId(null);
@@ -4211,6 +4225,18 @@ export function CanvasEditor() {
           } : undefined}
           onSave={'src' in selectedObject ? handleSave : undefined}
           onExport={'src' in selectedObject ? handleExport : undefined}
+          bypassedTabs={bypassedTabs}
+          onToggleBypass={(tab) => {
+            setBypassedTabs(prev => {
+              const next = new Set(prev);
+              if (next.has(tab)) {
+                next.delete(tab);
+              } else {
+                next.add(tab);
+              }
+              return next;
+            });
+          }}
         />
       )}
 
@@ -4261,39 +4287,32 @@ const createExposureFilter = (exposure: number) => {
 };
 
 // Tonal filter for highlights, shadows, whites, blacks
-// Calibrated to match Lightroom behavior
 const createTonalFilter = (highlights: number, shadows: number, whites: number, blacks: number) => {
-  // Pre-compute 256-entry lookup table
   const lut = new Uint8ClampedArray(256);
 
   for (let i = 0; i < 256; i++) {
     let val = i / 255;
 
-    // Blacks: Affects tones 0-25%, strongest at 0%
-    // Lightroom +100 blacks lifts darkest tones significantly
+    // Blacks: 0-25%
     if (val < 0.25) {
-      const blackMask = 1 - val / 0.25; // 1 at 0%, 0 at 25%
-      val += blacks * 0.4 * blackMask;
+      const blackMask = 1 - val / 0.25;
+      val += blacks * 0.3 * blackMask;
     }
 
-    // Shadows: Affects tones 0-50%, peaks around 25%
-    // Lightroom +100 shadows brightens dark areas
+    // Shadows: 0-50%
     const shadowMask = val < 0.5 ? Math.sin(val * Math.PI) : 0;
-    val += shadows * 0.5 * shadowMask;
+    val += shadows * 0.08 * shadowMask;
 
-    // Highlights: Affects tones 50-100%, peaks around 75%
-    // Lightroom -100 highlights recovers blown highlights
+    // Highlights: 50-100%
     const highlightMask = val > 0.5 ? Math.sin((val - 0.5) * Math.PI) : 0;
-    val += highlights * 0.5 * highlightMask;
+    val += highlights * 0.3 * highlightMask;
 
-    // Whites: Affects tones 75-100%, strongest at 100%
-    // Lightroom +100 whites pushes bright tones to white
+    // Whites: 75-100%
     if (val > 0.75) {
-      const whiteMask = (val - 0.75) / 0.25; // 0 at 75%, 1 at 100%
-      val += whites * 0.4 * whiteMask;
+      const whiteMask = (val - 0.75) / 0.25;
+      val += whites * 0.3 * whiteMask;
     }
 
-    // Clamp before LUT assignment
     lut[i] = Math.max(0, Math.min(1, val)) * 255;
   }
 
@@ -4309,42 +4328,29 @@ const createTonalFilter = (highlights: number, shadows: number, whites: number, 
 };
 
 // Temperature filter - warm/cool white balance
-// Calibrated to match Lightroom: +1 = warm (orange/yellow), -1 = cool (blue)
-// Uses color temperature shift similar to Lightroom's algorithm
 const createTemperatureFilter = (temperature: number) => {
-  // Pre-compute lookup tables for R, G, B channels
-  // Warm: boost R, slight G reduction, reduce B
-  // Cool: reduce R, slight G boost, boost B
-  const warmR = temperature > 0 ? temperature * 25 : temperature * 15;
-  const warmG = temperature > 0 ? temperature * -5 : temperature * 5;
-  const warmB = temperature > 0 ? temperature * -30 : temperature * -25;
-
+  const tempFactor = temperature * 30;
   const redLut = new Uint8ClampedArray(256);
-  const greenLut = new Uint8ClampedArray(256);
   const blueLut = new Uint8ClampedArray(256);
 
   for (let i = 0; i < 256; i++) {
-    redLut[i] = i + warmR;
-    greenLut[i] = i + warmG;
-    blueLut[i] = i - warmB;
+    redLut[i] = i + tempFactor;
+    blueLut[i] = i - tempFactor;
   }
 
   return function(imageData: ImageData) {
     const data = imageData.data;
     const len = data.length;
     for (let i = 0; i < len; i += 4) {
-      data[i] = redLut[data[i]];         // R
-      data[i + 1] = greenLut[data[i + 1]]; // G
-      data[i + 2] = blueLut[data[i + 2]]; // B
+      data[i] = redLut[data[i]];
+      data[i + 2] = blueLut[data[i + 2]];
     }
   };
 };
 
-// Vibrance filter - smart saturation that protects skin tones
-// Calibrated to match Lightroom: boosts muted colors, protects saturated & skin tones
+// Vibrance filter - smart saturation (boosts muted colors more)
 const createVibranceFilter = (vibrance: number) => {
-  // Stronger effect to match Lightroom
-  const amt = vibrance * 2.0;
+  const amt = vibrance * 1.5;
   const rCoef = 0.299;
   const gCoef = 0.587;
   const bCoef = 0.114;
@@ -4355,32 +4361,14 @@ const createVibranceFilter = (vibrance: number) => {
 
     for (let i = 0; i < len; i += 4) {
       const r = data[i], g = data[i + 1], b = data[i + 2];
-
-      // Fast max/min using ternary
       const max = r > g ? (r > b ? r : b) : (g > b ? g : b);
       const min = r < g ? (r < b ? r : b) : (g < b ? g : b);
 
-      // Skip if max is 0 (black pixel)
       if (max === 0) continue;
 
       const sat = (max - min) / max;
+      const factor = 1 + amt * (1 - sat);
       const gray = rCoef * r + gCoef * g + bCoef * b;
-
-      // Skin tone detection: orange-red hues with moderate saturation
-      // Skin tones typically have R > G > B with specific ratios
-      let skinProtection = 1;
-      if (r > g && g > b && sat > 0.1 && sat < 0.7) {
-        // Calculate rough hue (0-60 range for red-yellow)
-        const hueEstimate = (g - b) / (max - min) * 60;
-        // Protect orange/red-orange skin tones (hue ~15-45)
-        if (hueEstimate > 10 && hueEstimate < 50) {
-          // Reduce effect on skin tones by 60%
-          skinProtection = 0.4;
-        }
-      }
-
-      // Vibrance: boost low-saturation colors more, protect high-saturation
-      const factor = 1 + amt * (1 - sat) * skinProtection;
 
       let nr = gray + (r - gray) * factor;
       let ng = gray + (g - gray) * factor;
@@ -4393,22 +4381,16 @@ const createVibranceFilter = (vibrance: number) => {
   };
 };
 
-// Clarity filter - midtone contrast enhancement
-// Calibrated to match Lightroom: +100 = strong midtone contrast
+// Clarity filter - midtone contrast
 const createClarityFilter = (clarity: number) => {
-  // Pre-compute 256-entry lookup table
   const lut = new Uint8ClampedArray(256);
-  // Stronger effect: clarity * 0.8 gives noticeable change
-  const factor = 1 + clarity * 0.8;
-  const midtone = 0.5;
+  const factor = 1 + clarity * 0.5;
 
   for (let i = 0; i < 256; i++) {
     const val = i / 255;
-    // Apply S-curve contrast centered on midtones
-    const diff = val - midtone;
-    // Smoothly weight the effect to be stronger in midtones
-    const weight = 1 - Math.abs(diff) * 1.5; // Reduces effect at extremes
-    const newVal = midtone + diff * (1 + (factor - 1) * Math.max(0, weight));
+    const diff = val - 0.5;
+    const weight = 1 - Math.abs(diff) * 1.5;
+    const newVal = 0.5 + diff * (1 + (factor - 1) * Math.max(0, weight));
     lut[i] = Math.max(0, Math.min(1, newVal)) * 255;
   }
 
@@ -4423,13 +4405,10 @@ const createClarityFilter = (clarity: number) => {
   };
 };
 
-// Dehaze filter - remove atmospheric haze
-// Calibrated to match Lightroom: +100 = strong haze removal
+// Dehaze filter - contrast and saturation boost
 const createDehazeFilter = (dehaze: number) => {
-  // Stronger effect for dehaze
-  const contrastBoost = 1 + dehaze * 0.7;
-  const satBoost = 1 + dehaze * 0.5;
-  const blackPoint = dehaze * 0.15; // Lift black point to cut through haze
+  const contrastBoost = 1 + dehaze * 0.5;
+  const satBoost = 1 + dehaze * 0.3;
   const rCoef = 0.299, gCoef = 0.587, bCoef = 0.114;
 
   return function(imageData: ImageData) {
@@ -4439,18 +4418,15 @@ const createDehazeFilter = (dehaze: number) => {
     for (let i = 0; i < len; i += 4) {
       const r = data[i], g = data[i + 1], b = data[i + 2];
 
-      // Contrast
       let nr = 128 + (r - 128) * contrastBoost;
       let ng = 128 + (g - 128) * contrastBoost;
       let nb = 128 + (b - 128) * contrastBoost;
 
-      // Saturation
       const ngray = rCoef * nr + gCoef * ng + bCoef * nb;
       nr = ngray + (nr - ngray) * satBoost;
       ng = ngray + (ng - ngray) * satBoost;
       nb = ngray + (nb - ngray) * satBoost;
 
-      // Fast clamping
       data[i] = nr < 0 ? 0 : nr > 255 ? 255 : nr;
       data[i + 1] = ng < 0 ? 0 : ng > 255 ? 255 : ng;
       data[i + 2] = nb < 0 ? 0 : nb > 255 ? 255 : nb;
@@ -4458,9 +4434,7 @@ const createDehazeFilter = (dehaze: number) => {
   };
 };
 
-// Vignette filter - darken or lighten edges
-// Calibrated to match Lightroom: smooth power-curve falloff with feathering
-// Positive values darken edges, negative values lighten edges
+// Vignette filter - darken edges
 const createVignetteFilter = (vignette: number) => {
   let falloffMap: Float32Array | null = null;
   let lastWidth = 0;
@@ -4471,7 +4445,6 @@ const createVignetteFilter = (vignette: number) => {
     const w = imageData.width;
     const h = imageData.height;
 
-    // Recompute falloff map only if dimensions changed
     if (w !== lastWidth || h !== lastHeight) {
       lastWidth = w;
       lastHeight = h;
@@ -4479,10 +4452,7 @@ const createVignetteFilter = (vignette: number) => {
 
       const cx = w * 0.5;
       const cy = h * 0.5;
-      // Use actual distance (not squared) for smoother falloff
-      const maxDist = Math.sqrt(cx * cx + cy * cy);
-      // Feather: how quickly the vignette fades (higher = softer edge)
-      const feather = 0.5;
+      const maxDistSq = cx * cx + cy * cy;
 
       for (let y = 0; y < h; y++) {
         const dy = y - cy;
@@ -4491,88 +4461,51 @@ const createVignetteFilter = (vignette: number) => {
 
         for (let x = 0; x < w; x++) {
           const dx = x - cx;
-          const dist = Math.sqrt(dx * dx + dySq) / maxDist;
-          // Power curve for smooth falloff (matches Lightroom's feather)
-          // Start effect at 30% from center, full effect at edge
-          const normalizedDist = Math.max(0, (dist - 0.3) / 0.7);
-          const falloff = Math.pow(normalizedDist, 1.5 + feather);
-          falloffMap[rowOffset + x] = falloff;
+          const distSq = (dx * dx + dySq) / maxDistSq;
+          const falloff = distSq * vignette;
+          falloffMap[rowOffset + x] = falloff < 1 ? 1 - falloff : 0;
         }
       }
     }
 
     const map = falloffMap!;
     const pixelCount = w * h;
-    const amount = Math.abs(vignette);
-    const isDarkening = vignette > 0;
 
     for (let p = 0; p < pixelCount; p++) {
       const i = p * 4;
-      const falloff = map[p] * amount;
-
-      if (isDarkening) {
-        // Darken edges
-        const factor = 1 - falloff * 0.8;
-        data[i] *= factor;
-        data[i + 1] *= factor;
-        data[i + 2] *= factor;
-      } else {
-        // Lighten edges
-        data[i] = data[i] + (255 - data[i]) * falloff * 0.5;
-        data[i + 1] = data[i + 1] + (255 - data[i + 1]) * falloff * 0.5;
-        data[i + 2] = data[i + 2] + (255 - data[i + 2]) * falloff * 0.5;
-      }
+      const factor = map[p];
+      data[i] *= factor;
+      data[i + 1] *= factor;
+      data[i + 2] *= factor;
     }
   };
 };
 
-// Grain filter - add film-like noise
-// Calibrated to match Lightroom: luminance-based grain (more visible in midtones)
+// Grain filter - add noise
 const createGrainFilter = (grain: number) => {
-  // Slightly stronger base intensity
-  const intensity = grain * 60;
-
-  // Pre-compute a noise pattern (faster than calling Math.random per pixel)
+  const intensity = grain * 50;
   const patternSize = 4096;
   const noisePattern = new Int8Array(patternSize);
   for (let i = 0; i < patternSize; i++) {
     noisePattern[i] = ((Math.random() - 0.5) * intensity) | 0;
   }
 
-  const rCoef = 0.299;
-  const gCoef = 0.587;
-  const bCoef = 0.114;
-
   return function(imageData: ImageData) {
     const data = imageData.data;
     const len = data.length;
-
-    // Use pattern with offset to vary grain per frame
     let offset = (Math.random() * patternSize) | 0;
 
     for (let i = 0; i < len; i += 4) {
-      const r = data[i], g = data[i + 1], b = data[i + 2];
-
-      // Calculate luminance (0-1 range)
-      const lum = (rCoef * r + gCoef * g + bCoef * b) / 255;
-
-      // Film grain is more visible in midtones, less in shadows and highlights
-      // Use sine curve to reduce grain at extremes
-      const midtoneMask = Math.sin(lum * Math.PI);
-
-      const baseNoise = noisePattern[offset];
+      const noise = noisePattern[offset];
       offset = (offset + 1) % patternSize;
 
-      // Apply luminance-weighted noise
-      const noise = baseNoise * midtoneMask;
+      const r = data[i] + noise;
+      const g = data[i + 1] + noise;
+      const b = data[i + 2] + noise;
 
-      let nr = r + noise;
-      let ng = g + noise;
-      let nb = b + noise;
-
-      data[i] = nr < 0 ? 0 : nr > 255 ? 255 : nr;
-      data[i + 1] = ng < 0 ? 0 : ng > 255 ? 255 : ng;
-      data[i + 2] = nb < 0 ? 0 : nb > 255 ? 255 : nb;
+      data[i] = r < 0 ? 0 : r > 255 ? 255 : r;
+      data[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
+      data[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
     }
   };
 };
@@ -4695,10 +4628,10 @@ const createHSLColorFilter = (colorHSL: ColorHSL) => {
     }
   }
 
-  // Lightroom calibration: +100 = full effect
-  const hueStrength = 0.3; // Lightroom +100 hue = ~30° shift
-  const satStrength = 0.8; // Stronger saturation effect
-  const lumStrength = 0.5; // Stronger luminance effect
+  // Basic strength values
+  const hueStrength = 0.2;
+  const satStrength = 0.5;
+  const lumStrength = 0.3;
 
   return function(imageData: ImageData) {
     const data = imageData.data;
@@ -4742,8 +4675,8 @@ const createHSLColorFilter = (colorHSL: ColorHSL) => {
       // Skip if adjustments are negligible
       if (hueAdj === 0 && satAdj === 0 && lumAdj === 0) continue;
 
-      // Apply hue shift (Lightroom +100 = ~30° shift = 30/360 = 0.083)
-      let newH = h + hueAdj / 1200; // +100 -> 30° shift
+      // Apply hue shift
+      let newH = h + (hueAdj / 100) * hueStrength;
       if (newH < 0) newH += 1;
       else if (newH > 1) newH -= 1;
 
@@ -5065,6 +4998,7 @@ const ImageNode = React.memo(function ImageNode({
   onDragEnd,
   onDragMove,
   onUpdate,
+  bypassedTabs,
 }: {
   image: CanvasImage;
   isSelected: boolean;
@@ -5072,11 +5006,13 @@ const ImageNode = React.memo(function ImageNode({
   onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) => void;
   onDragMove?: (e: Konva.KonvaEventObject<DragEvent>) => void;
   onUpdate: (updates: Partial<CanvasImage>) => void;
+  bypassedTabs?: Set<'curves' | 'light' | 'color' | 'effects'>;
 }) {
   const [img, imgStatus] = useImage(image.src, 'anonymous');
   const imageRef = useRef<Konva.Image>(null);
   const prevPosRef = useRef({ x: image.x, y: image.y });
   const isDraggingRef = useRef(false);
+  const cacheTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Smooth position transitions when x/y changes (but not during drag)
   useEffect(() => {
@@ -5151,75 +5087,83 @@ const ImageNode = React.memo(function ImageNode({
 
     // Build filter list using fast LUT-based filters
     const filterList: ((imageData: ImageData) => void)[] = [];
+    const bypassCurves = bypassedTabs?.has('curves');
+    const bypassLight = bypassedTabs?.has('light');
+    const bypassColor = bypassedTabs?.has('color');
+    const bypassEffects = bypassedTabs?.has('effects');
 
     // Curves
-    if (isCurvesModified && image.curves) {
+    if (!bypassCurves && isCurvesModified && image.curves) {
       filterList.push(createCurvesFilter(image.curves));
     }
 
     // Light adjustments
-    if (image.exposure !== 0) {
-      filterList.push(createExposureFilter(image.exposure));
-    }
-    if (image.highlights !== 0 || image.shadows !== 0 || image.whites !== 0 || image.blacks !== 0) {
-      filterList.push(createTonalFilter(image.highlights, image.shadows, image.whites, image.blacks));
-    }
-    if (image.temperature !== 0) {
-      filterList.push(createTemperatureFilter(image.temperature));
-    }
-    if (image.clarity !== 0) {
-      filterList.push(createClarityFilter(image.clarity));
-    }
-    if (image.brightness !== 0) {
-      filterList.push(createBrightnessFilter(image.brightness));
-    }
-
-    // Konva built-in filters
-    if (image.contrast !== 0) {
-      filterList.push(Konva.Filters.Contrast as unknown as (imageData: ImageData) => void);
-    }
-    if (image.saturation !== 0 || image.hue !== 0) {
-      filterList.push(Konva.Filters.HSV as unknown as (imageData: ImageData) => void);
+    if (!bypassLight) {
+      if (image.exposure !== 0) {
+        filterList.push(createExposureFilter(image.exposure));
+      }
+      if (image.highlights !== 0 || image.shadows !== 0 || image.whites !== 0 || image.blacks !== 0) {
+        filterList.push(createTonalFilter(image.highlights, image.shadows, image.whites, image.blacks));
+      }
+      if (image.clarity !== 0) {
+        filterList.push(createClarityFilter(image.clarity));
+      }
+      if (image.brightness !== 0) {
+        filterList.push(createBrightnessFilter(image.brightness));
+      }
+      if (image.contrast !== 0) {
+        filterList.push(Konva.Filters.Contrast as unknown as (imageData: ImageData) => void);
+      }
     }
 
     // Color adjustments
-    if (image.vibrance !== 0) {
-      filterList.push(createVibranceFilter(image.vibrance));
-    }
-    if (image.dehaze !== 0) {
-      filterList.push(createDehazeFilter(image.dehaze));
-    }
-    if (image.colorHSL) {
-      const hasHSL = Object.values(image.colorHSL).some(
-        (adj) => adj && ((adj.hue ?? 0) !== 0 || (adj.saturation ?? 0) !== 0 || (adj.luminance ?? 0) !== 0)
-      );
-      if (hasHSL) filterList.push(createHSLColorFilter(image.colorHSL));
-    }
-    if (image.splitToning) {
-      filterList.push(createSplitToningFilter(image.splitToning));
-    }
-    if (image.shadowTint && image.shadowTint !== 0) {
-      filterList.push(createShadowTintFilter(image.shadowTint));
-    }
-    if (image.colorGrading) {
-      filterList.push(createColorGradingFilter(image.colorGrading));
-    }
-    if (image.colorCalibration) {
-      filterList.push(createColorCalibrationFilter(image.colorCalibration));
+    if (!bypassColor) {
+      if (image.temperature !== 0) {
+        filterList.push(createTemperatureFilter(image.temperature));
+      }
+      if (image.saturation !== 0 || image.hue !== 0) {
+        filterList.push(Konva.Filters.HSV as unknown as (imageData: ImageData) => void);
+      }
+      if (image.vibrance !== 0) {
+        filterList.push(createVibranceFilter(image.vibrance));
+      }
+      if (image.colorHSL) {
+        const hasHSL = Object.values(image.colorHSL).some(
+          (adj) => adj && ((adj.hue ?? 0) !== 0 || (adj.saturation ?? 0) !== 0 || (adj.luminance ?? 0) !== 0)
+        );
+        if (hasHSL) filterList.push(createHSLColorFilter(image.colorHSL));
+      }
+      if (image.splitToning) {
+        filterList.push(createSplitToningFilter(image.splitToning));
+      }
+      if (image.shadowTint && image.shadowTint !== 0) {
+        filterList.push(createShadowTintFilter(image.shadowTint));
+      }
+      if (image.colorGrading) {
+        filterList.push(createColorGradingFilter(image.colorGrading));
+      }
+      if (image.colorCalibration) {
+        filterList.push(createColorCalibrationFilter(image.colorCalibration));
+      }
     }
 
     // Effects
-    if (image.vignette !== 0) {
-      filterList.push(createVignetteFilter(image.vignette));
-    }
-    if (image.grain !== 0) {
-      filterList.push(createGrainFilter(image.grain));
-    }
-    if (image.blur > 0) {
-      filterList.push(Konva.Filters.Blur as unknown as (imageData: ImageData) => void);
+    if (!bypassEffects) {
+      if (image.dehaze !== 0) {
+        filterList.push(createDehazeFilter(image.dehaze));
+      }
+      if (image.vignette !== 0) {
+        filterList.push(createVignetteFilter(image.vignette));
+      }
+      if (image.grain !== 0) {
+        filterList.push(createGrainFilter(image.grain));
+      }
+      if (image.blur > 0) {
+        filterList.push(Konva.Filters.Blur as unknown as (imageData: ImageData) => void);
+      }
     }
 
-    // Legacy filters
+    // Legacy filters (always apply)
     if (image.filters.includes('grayscale')) {
       filterList.push(Konva.Filters.Grayscale as unknown as (imageData: ImageData) => void);
     }
@@ -5230,34 +5174,46 @@ const ImageNode = React.memo(function ImageNode({
       filterList.push(Konva.Filters.Invert as unknown as (imageData: ImageData) => void);
     }
 
-    // Set Konva filter values
-    node.contrast(image.contrast * 100);
-    node.saturation(image.saturation);
-    node.hue(image.hue * 180);
-    node.blurRadius(image.blur * 20);
+    // Calculate pixelRatio to maintain source image quality
+    // If source is larger than display, we need higher pixelRatio
+    const scaleX = img.width / (image.width || img.width);
+    const scaleY = img.height / (image.height || img.height);
+    const sourceScale = Math.max(scaleX, scaleY, 1);
+    const pixelRatio = Math.min(sourceScale * window.devicePixelRatio, 8);
 
-    // Apply filters and cache with adaptive quality
-    node.filters(filterList);
+    // Clear any pending cache update
+    if (cacheTimeoutRef.current) {
+      clearTimeout(cacheTimeoutRef.current);
+    }
 
-    // Calculate optimal pixelRatio based on image vs display size
-    const naturalWidth = img.naturalWidth || img.width;
-    const naturalHeight = img.naturalHeight || img.height;
-    const displayWidth = image.width * Math.abs(image.scaleX || 1);
-    const displayHeight = image.height * Math.abs(image.scaleY || 1);
-    const widthRatio = displayWidth > 0 ? naturalWidth / displayWidth : 1;
-    const heightRatio = displayHeight > 0 ? naturalHeight / displayHeight : 1;
-    const scaleRatio = Math.max(widthRatio, heightRatio);
-    // Higher quality cache - min 3, max 6 for sharp results
-    const pixelRatio = Math.min(Math.max(scaleRatio, 3), 6);
-
-    node.cache({ pixelRatio, imageSmoothingEnabled: true });
+    // Debounce the cache + filter application for smoother sliders
+    // Keeps full quality, just batches rapid updates
+    cacheTimeoutRef.current = setTimeout(() => {
+      if (imageRef.current) {
+        imageRef.current.cache({ pixelRatio });
+        imageRef.current.filters(filterList);
+        imageRef.current.contrast(bypassLight ? 0 : image.contrast * 25);
+        imageRef.current.saturation(bypassColor ? 0 : image.saturation * 2);
+        imageRef.current.hue(bypassColor ? 0 : image.hue * 180);
+        imageRef.current.blurRadius(bypassEffects ? 0 : image.blur * 20);
+      }
+    }, 16); // ~60fps max update rate
   }, [img, hasActiveFilters, isCurvesModified, image.exposure, image.contrast,
       image.highlights, image.shadows, image.whites, image.blacks,
       image.temperature, image.vibrance, image.saturation, image.clarity,
       image.dehaze, image.vignette, image.grain, image.brightness, image.hue,
       image.blur, image.filters, image.curves, image.colorHSL, image.splitToning,
       image.shadowTint, image.colorGrading, image.colorCalibration,
-      image.width, image.height, image.scaleX, image.scaleY]);
+      image.width, image.height, image.scaleX, image.scaleY, bypassedTabs]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (cacheTimeoutRef.current) {
+        clearTimeout(cacheTimeoutRef.current);
+      }
+    };
+  }, []);
 
   if (!img || imgStatus === 'loading') {
     return null;
@@ -5307,7 +5263,8 @@ const ImageNode = React.memo(function ImageNode({
   // This prevents re-renders when other images in the array change
   return (
     prevProps.image === nextProps.image &&
-    prevProps.isSelected === nextProps.isSelected
+    prevProps.isSelected === nextProps.isSelected &&
+    prevProps.bypassedTabs === nextProps.bypassedTabs
   );
 });
 

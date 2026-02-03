@@ -131,6 +131,8 @@ interface Preset {
   settings: Partial<CanvasImage>;
 }
 
+type BypassTab = 'curves' | 'light' | 'color' | 'effects';
+
 interface EditPanelProps {
   object: CanvasImage | CanvasText;
   onUpdate: (updates: Partial<CanvasImage | CanvasText>) => void;
@@ -138,6 +140,8 @@ interface EditPanelProps {
   onResetToOriginal?: () => void;
   onSave?: () => void;
   onExport?: () => void;
+  bypassedTabs?: Set<BypassTab>;
+  onToggleBypass?: (tab: BypassTab) => void;
 }
 
 // Slider component with throttled updates for performance
@@ -160,7 +164,7 @@ function Slider({
 }) {
   // Local state for immediate visual feedback
   const [localValue, setLocalValue] = useState(value);
-  const rafRef = useRef<number>();
+  const rafRef = useRef<number | undefined>(undefined);
   const lastUpdateRef = useRef(0);
   const isDraggingRef = useRef(false);
 
@@ -234,7 +238,7 @@ function Slider({
   );
 }
 
-export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSave, onExport }: EditPanelProps) {
+export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSave, onExport, bypassedTabs, onToggleBypass }: EditPanelProps) {
   const isImage = 'src' in object;
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
@@ -1240,62 +1244,98 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
                 <>
                   {/* Curves */}
                   <button
-                    onClick={() => togglePanel('curves')}
+                    onClick={(e) => {
+                      if (e.ctrlKey || e.metaKey) {
+                        onToggleBypass?.('curves');
+                      } else {
+                        togglePanel('curves');
+                      }
+                    }}
                     className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
-                      activePanel === 'curves' || isCurvesModified
+                      bypassedTabs?.has('curves')
+                        ? 'bg-[#ff6b6b]/20 text-[#ff6b6b] opacity-50'
+                        : activePanel === 'curves' || isCurvesModified
                         ? 'bg-[#3ECF8E]/20 text-[#3ECF8E]'
                         : 'bg-[#252525] text-[#999] hover:bg-[#333] hover:text-white'
                     }`}
+                    title="Click to edit, Ctrl+click to bypass"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 20 C 8 20, 8 4, 12 4 C 16 4, 16 20, 20 20" />
                     </svg>
-                    <span className="text-[10px] font-medium uppercase tracking-wider">Curves</span>
+                    <span className={`text-[10px] font-medium uppercase tracking-wider ${bypassedTabs?.has('curves') ? 'line-through' : ''}`}>Curves</span>
                   </button>
 
                   {/* Light */}
                   <button
-                    onClick={() => togglePanel('light')}
+                    onClick={(e) => {
+                      if (e.ctrlKey || e.metaKey) {
+                        onToggleBypass?.('light');
+                      } else {
+                        togglePanel('light');
+                      }
+                    }}
                     className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
-                      activePanel === 'light' || isLightModified
+                      bypassedTabs?.has('light')
+                        ? 'bg-[#ff6b6b]/20 text-[#ff6b6b] opacity-50'
+                        : activePanel === 'light' || isLightModified
                         ? 'bg-[#3ECF8E]/20 text-[#3ECF8E]'
                         : 'bg-[#252525] text-[#999] hover:bg-[#333] hover:text-white'
                     }`}
+                    title="Click to edit, Ctrl+click to bypass"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
                     </svg>
-                    <span className="text-[10px] font-medium uppercase tracking-wider">Light</span>
+                    <span className={`text-[10px] font-medium uppercase tracking-wider ${bypassedTabs?.has('light') ? 'line-through' : ''}`}>Light</span>
                   </button>
 
                   {/* Color */}
                   <button
-                    onClick={() => togglePanel('color')}
+                    onClick={(e) => {
+                      if (e.ctrlKey || e.metaKey) {
+                        onToggleBypass?.('color');
+                      } else {
+                        togglePanel('color');
+                      }
+                    }}
                     className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
-                      activePanel === 'color' || isColorModified
+                      bypassedTabs?.has('color')
+                        ? 'bg-[#ff6b6b]/20 text-[#ff6b6b] opacity-50'
+                        : activePanel === 'color' || isColorModified
                         ? 'bg-[#3ECF8E]/20 text-[#3ECF8E]'
                         : 'bg-[#252525] text-[#999] hover:bg-[#333] hover:text-white'
                     }`}
+                    title="Click to edit, Ctrl+click to bypass"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
                     </svg>
-                    <span className="text-[10px] font-medium uppercase tracking-wider">Color</span>
+                    <span className={`text-[10px] font-medium uppercase tracking-wider ${bypassedTabs?.has('color') ? 'line-through' : ''}`}>Color</span>
                   </button>
 
                   {/* Effects */}
                   <button
-                    onClick={() => togglePanel('effects')}
+                    onClick={(e) => {
+                      if (e.ctrlKey || e.metaKey) {
+                        onToggleBypass?.('effects');
+                      } else {
+                        togglePanel('effects');
+                      }
+                    }}
                     className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
-                      activePanel === 'effects' || isEffectsModified
+                      bypassedTabs?.has('effects')
+                        ? 'bg-[#ff6b6b]/20 text-[#ff6b6b] opacity-50'
+                        : activePanel === 'effects' || isEffectsModified
                         ? 'bg-[#3ECF8E]/20 text-[#3ECF8E]'
                         : 'bg-[#252525] text-[#999] hover:bg-[#333] hover:text-white'
                     }`}
+                    title="Click to edit, Ctrl+click to bypass"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
                     </svg>
-                    <span className="text-[10px] font-medium uppercase tracking-wider">Effects</span>
+                    <span className={`text-[10px] font-medium uppercase tracking-wider ${bypassedTabs?.has('effects') ? 'line-through' : ''}`}>Effects</span>
                   </button>
 
                   {/* Presets */}
