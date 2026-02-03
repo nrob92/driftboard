@@ -143,6 +143,8 @@ interface EditPanelProps {
   onExport?: () => void;
   bypassedTabs?: Set<BypassTab>;
   onToggleBypass?: (tab: BypassTab) => void;
+  /** When true, delete button shows loading spinner (e.g. while deleting photo). */
+  isDeleting?: boolean;
 }
 
 // Slider component with throttled updates for performance
@@ -239,7 +241,7 @@ function Slider({
   );
 }
 
-export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSave, onExport, bypassedTabs, onToggleBypass }: EditPanelProps) {
+export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSave, onExport, bypassedTabs, onToggleBypass, isDeleting }: EditPanelProps) {
   const isImage = 'src' in object;
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
@@ -1414,12 +1416,20 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
                   {/* Delete */}
                   <button
                     onClick={onDelete}
-                    className="p-2 rounded-lg bg-[#252525] text-[#f87171] hover:bg-[#3a2020] transition-colors cursor-pointer"
+                    disabled={isDeleting}
+                    className="p-2 rounded-lg bg-[#252525] text-[#f87171] hover:bg-[#3a2020] disabled:opacity-60 disabled:cursor-not-allowed transition-colors cursor-pointer flex items-center justify-center min-w-[2.5rem] min-h-[2.5rem]"
                     title="Delete"
                   >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
+                    {isDeleting ? (
+                      <svg className="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    )}
                   </button>
                 </>
               ) : (
@@ -1467,7 +1477,7 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
                   {/* Divider */}
                   <div className="w-px h-10 bg-[#333] mx-1" />
 
-                  {/* Delete */}
+                  {/* Delete (text object - no loading state) */}
                   <button
                     onClick={onDelete}
                     className="p-2 rounded-lg bg-[#252525] text-[#f87171] hover:bg-[#3a2020] transition-colors cursor-pointer"

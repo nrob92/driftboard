@@ -885,6 +885,11 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const imageContextMenuRef = useRef<HTMLDivElement>(null);
   const [createPresetFromImageId, setCreatePresetFromImageId] = useState<string | null>(null);
   const [createPresetName, setCreatePresetName] = useState('');
+  const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
+  const [isDeletingFolder, setIsDeletingFolder] = useState(false);
+  const [zoomedImageId, setZoomedImageId] = useState<string | null>(null);
+  const preZoomViewRef = useRef<{ scale: number; x: number; y: number } | null>(null);
+  const zoomAnimationRef = useRef<number | null>(null);
   const queryClient = useQueryClient();
   const [hoveredFolderBorder, setHoveredFolderBorder] = useState<string | null>(null);
   const [dragGhostPosition, setDragGhostPosition] = useState<{
@@ -919,12 +924,24 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     return () => clearInterval(interval);
   }, [dragSourceFolderBorderHovered]);
 
-  // Handle keyboard events for Spacebar
+  // Handle keyboard events for Spacebar and Escape (zoom out)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
         e.preventDefault();
         setIsSpacePressed(true);
+      }
+      if (e.code === 'Escape' && zoomedImageId) {
+        if (zoomAnimationRef.current != null) {
+          cancelAnimationFrame(zoomAnimationRef.current);
+          zoomAnimationRef.current = null;
+        }
+        const pre = preZoomViewRef.current;
+        if (pre) {
+          setStageScale(pre.scale);
+          setStagePosition({ x: pre.x, y: pre.y });
+        }
+        setZoomedImageId(null);
       }
     };
 
@@ -951,7 +968,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
     };
-  }, []);
+  }, [zoomedImageId]);
 
   // Show header when mouse is near top
   useEffect(() => {
@@ -1486,10 +1503,11 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
       console.log('Folder position:', folderX, folderY);
 
-      // Create the folder
+      // Create the folder (we'll add images to state as each is ready so the UI updates progressively)
       const folderId = `folder-${Date.now()}`;
       const folderColor = FOLDER_COLORS[existingFolderCount % FOLDER_COLORS.length];
       const newImages: CanvasImage[] = [];
+      let accumulatedImages: CanvasImage[] = [...images];
 
       // Grid layout for images within folder - using centralized config
       const { imageMaxSize } = GRID_CONFIG;
@@ -1761,7 +1779,28 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           };
 
           newImages.push(newImage);
+          accumulatedImages = [...accumulatedImages, newImage];
           imageIndex++;
+
+          // Show this image in the UI immediately (progressive display)
+          const folderWithImages: PhotoFolder = {
+            id: folderId,
+            name: folderName,
+            x: folderX,
+            y: folderY,
+            width: GRID_CONFIG.defaultFolderWidth,
+            imageIds: newImages.map(img => img.id),
+            color: folderColor,
+            height: 30 + getFolderBorderHeight(
+              { id: folderId, name: folderName, x: folderX, y: folderY, width: GRID_CONFIG.defaultFolderWidth, imageIds: newImages.map(img => img.id), color: folderColor },
+              newImages.length
+            ),
+          };
+          setImages(accumulatedImages);
+          setFolders((prev) => {
+            const without = prev.filter((f) => f.id !== folderId);
+            return [...without, folderWithImages];
+          });
         } catch (error) {
           console.error('Error processing file:', file.name, error);
         }
@@ -1769,7 +1808,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
       console.log('Processed images:', newImages.length);
 
-      // Create the folder and add images in one update
+      // Final overlap resolution and save (folder already in state with all images)
       if (newImages.length > 0) {
         const newFolder: PhotoFolder = {
           id: folderId,
@@ -1780,18 +1819,15 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           imageIds: newImages.map(img => img.id),
           color: folderColor,
         };
-        
-        console.log('Creating folder:', newFolder);
-        
-        // Resolve overlaps first so we save the final positions the user sees
+
         const allImages = [...images, ...newImages];
-        const allFolders = [...folders, newFolder];
+        const allFolders = [...folders.filter((f) => f.id !== folderId), newFolder];
         const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
           allFolders,
           allImages,
           folderId
         );
-        
+
         setImages(resolvedImages);
         setFolders(resolvedFolders);
         
@@ -2321,6 +2357,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       }
 
       e.evt.preventDefault();
+      if (zoomAnimationRef.current != null) {
+        cancelAnimationFrame(zoomAnimationRef.current);
+        zoomAnimationRef.current = null;
+      }
       const stage = stageRef.current;
       if (!stage) return;
 
@@ -2343,6 +2383,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         x: pointer.x - mousePointTo.x * clampedScale,
         y: pointer.y - mousePointTo.y * clampedScale,
       });
+      // Exit "zoomed in" mode so space+drag and background click don't trigger zoom-out
+      setZoomedImageId(null);
     },
     []
   );
@@ -3461,13 +3503,14 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     saveToHistory();
   }, [editingFolder, editingFolderName, folders, user, saveToHistory]);
 
-  // Delete folder (and optionally its images)
-  const handleDeleteFolder = useCallback(async (deleteImages: boolean) => {
+  // Delete folder and all its photos (no ungroup option)
+  const handleDeleteFolder = useCallback(async () => {
     if (!editingFolder) return;
 
+    setIsDeletingFolder(true);
     const folderImageIds = editingFolder.imageIds;
 
-    if (deleteImages) {
+    try {
       // Delete images via API (service role) so photos + originals buckets are removed
       if (user) {
         for (const imgId of folderImageIds) {
@@ -3496,35 +3539,29 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
       // Remove images from canvas
       setImages((prev) => prev.filter(img => !folderImageIds.includes(img.id)));
-    } else {
-      // Just remove folder association from images
-      setImages((prev) =>
-        prev.map((img) =>
-          folderImageIds.includes(img.id) ? { ...img, folderId: undefined } : img
-        )
-      );
-    }
 
-    // Delete folder from Supabase
-    if (user) {
-      try {
-        await supabase
-          .from('photo_folders')
-          .delete()
-          .eq('id', editingFolder.id)
-          .eq('user_id', user.id);
-      } catch (error) {
-        console.error('Failed to delete folder:', error);
+      // Delete folder from Supabase
+      if (user) {
+        try {
+          await supabase
+            .from('photo_folders')
+            .delete()
+            .eq('id', editingFolder.id)
+            .eq('user_id', user.id);
+        } catch (error) {
+          console.error('Failed to delete folder:', error);
+        }
       }
-    }
 
-    // Remove folder from state
-    setFolders((prev) => prev.filter(f => f.id !== editingFolder.id));
-    setEditingFolder(null);
-    setEditingFolderName('');
-    setFolderNameError('');
-    if (user) queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
-    saveToHistory();
+      setFolders((prev) => prev.filter(f => f.id !== editingFolder.id));
+      setEditingFolder(null);
+      setEditingFolderName('');
+      setFolderNameError('');
+      if (user) queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
+      saveToHistory();
+    } finally {
+      setIsDeletingFolder(false);
+    }
   }, [editingFolder, images, user, saveToHistory, queryClient]);
 
   // Add empty folder at viewport center
@@ -3690,6 +3727,103 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     });
     setSelectedId(newText.id);
   }, [stagePosition, stageScale, saveToHistory]);
+
+  // Zoom animation: single RAF loop, update Stage directly (no React re-renders per frame)
+  const animateView = useCallback((
+    from: { scale: number; x: number; y: number },
+    to: { scale: number; x: number; y: number },
+    onComplete?: () => void
+  ) => {
+    if (zoomAnimationRef.current != null) {
+      cancelAnimationFrame(zoomAnimationRef.current);
+    }
+    const duration = 380;
+    const startTime = performance.now();
+    const stage = stageRef.current;
+    const tick = (now: number) => {
+      const t = Math.min((now - startTime) / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 4);
+      const scale = from.scale + (to.scale - from.scale) * eased;
+      const x = from.x + (to.x - from.x) * eased;
+      const y = from.y + (to.y - from.y) * eased;
+      if (stage) {
+        stage.scaleX(scale);
+        stage.scaleY(scale);
+        stage.position({ x, y });
+        stage.getLayers().forEach((layer) => layer.batchDraw());
+      } else {
+        setStageScale(scale);
+        setStagePosition({ x, y });
+      }
+      if (t < 1) {
+        zoomAnimationRef.current = requestAnimationFrame(tick);
+      } else {
+        zoomAnimationRef.current = null;
+        setStageScale(to.scale);
+        setStagePosition({ x: to.x, y: to.y });
+        onComplete?.();
+      }
+    };
+    zoomAnimationRef.current = requestAnimationFrame(tick);
+  }, []);
+
+  const handleImageDoubleClick = useCallback((image: CanvasImage) => {
+    const imgW = image.width * image.scaleX;
+    const imgH = image.height * image.scaleY;
+    const centerX = image.x + imgW / 2;
+    const centerY = image.y + imgH / 2;
+
+    if (zoomedImageId === image.id) {
+      // Zoom back out
+      const pre = preZoomViewRef.current;
+      if (pre) {
+        animateView(
+          { scale: stageScale, x: stagePosition.x, y: stagePosition.y },
+          { scale: pre.scale, x: pre.x, y: pre.y },
+          () => setZoomedImageId(null)
+        );
+      } else {
+        setZoomedImageId(null);
+      }
+      return;
+    }
+
+    // Zoom in: fit image to ~90% of viewport with padding
+    const padding = 0.9;
+    const targetScale = Math.min(
+      (dimensions.width * padding) / imgW,
+      (dimensions.height * padding) / imgH,
+      20
+    );
+    const targetX = dimensions.width / 2 - centerX * targetScale;
+    const targetY = dimensions.height / 2 - centerY * targetScale;
+
+    preZoomViewRef.current = { scale: stageScale, x: stagePosition.x, y: stagePosition.y };
+    animateView(
+      { scale: stageScale, x: stagePosition.x, y: stagePosition.y },
+      { scale: targetScale, x: targetX, y: targetY },
+      () => setZoomedImageId(image.id)
+    );
+  }, [zoomedImageId, stageScale, stagePosition, dimensions.width, dimensions.height, animateView]);
+
+  // Clicking stage background when zoomed: zoom back out
+  const handleStageMouseDownWithZoom = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+    const clickedOnEmpty = e.target === e.target.getStage();
+    if (zoomedImageId && clickedOnEmpty) {
+      const pre = preZoomViewRef.current;
+      if (pre) {
+        animateView(
+          { scale: stageScale, x: stagePosition.x, y: stagePosition.y },
+          { scale: pre.scale, x: pre.x, y: pre.y },
+          () => setZoomedImageId(null)
+        );
+      } else {
+        setZoomedImageId(null);
+      }
+      return;
+    }
+    handleStageMouseDown(e);
+  }, [zoomedImageId, stageScale, stagePosition, animateView, handleStageMouseDown]);
 
   // Get selected object
   const selectedObject = selectedId
@@ -3890,21 +4024,24 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
               {/* Delete Section */}
               <div className="pt-3 border-t border-[#333]">
-                <p className="text-xs text-[#666] mb-3">Delete this folder</p>
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => handleDeleteFolder(false)}
-                    className="flex-1 px-4 py-2.5 text-sm font-medium text-orange-400 bg-orange-400/10 hover:bg-orange-400/20 rounded-xl transition-colors cursor-pointer"
-                  >
-                    Ungroup Only
-                  </button>
-                  <button
-                    onClick={() => handleDeleteFolder(true)}
-                    className="flex-1 px-4 py-2.5 text-sm font-medium text-red-400 bg-red-400/10 hover:bg-red-400/20 rounded-xl transition-colors cursor-pointer"
-                  >
-                    Delete All Photos
-                  </button>
-                </div>
+                <p className="text-xs text-[#666] mb-3">Delete this folder and its photos</p>
+                <button
+                  onClick={() => handleDeleteFolder()}
+                  disabled={isDeletingFolder}
+                  className="w-full px-4 py-2.5 text-sm font-medium text-red-400 bg-red-400/10 hover:bg-red-400/20 disabled:opacity-60 disabled:cursor-not-allowed rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
+                >
+                  {isDeletingFolder ? (
+                    <>
+                      <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                      Deleting…
+                    </>
+                  ) : (
+                    'Delete Folder'
+                  )}
+                </button>
               </div>
             </div>
           </div>
@@ -3937,12 +4074,17 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           onWheel={handleWheel}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
-          onMouseDown={handleStageMouseDown}
+          onMouseDown={handleStageMouseDownWithZoom}
           onDblClick={handleStageDoubleClick}
           draggable={isSpacePressed}
           onDragStart={() => {
             if (isSpacePressed) {
+              if (zoomAnimationRef.current != null) {
+                cancelAnimationFrame(zoomAnimationRef.current);
+                zoomAnimationRef.current = null;
+              }
               setIsDragging(true);
+              setZoomedImageId(null);
             }
           }}
           onDragMove={(e) => {
@@ -4418,6 +4560,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 isSelected={selectedId === img.id}
                 bypassedTabs={bypassedTabs}
                 onClick={handleObjectClick}
+                onDblClick={() => handleImageDoubleClick(img)}
                 onContextMenu={handleImageContextMenu}
                 onDragEnd={(e) => {
                   setDragHoveredFolderId(null);
@@ -4552,36 +4695,43 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           }}
           onDelete={async () => {
             if ('src' in selectedObject) {
-              const imageToDelete = selectedObject as CanvasImage;
-              const payload = getDeletePhotoPayload(imageToDelete);
-              if (user && (payload.storagePath || payload.originalStoragePath)) {
-                try {
-                  const res = await fetch('/api/delete-photo', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      ...payload,
-                      userId: user.id,
-                    }),
-                  });
-                  if (!res.ok) {
-                    const data = await res.json();
-                    console.error('Delete photo failed:', data);
-                  } else if (user) {
-                    queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
+              setDeletingPhotoId(selectedId);
+              try {
+                const imageToDelete = selectedObject as CanvasImage;
+                const payload = getDeletePhotoPayload(imageToDelete);
+                if (user && (payload.storagePath || payload.originalStoragePath)) {
+                  try {
+                    const res = await fetch('/api/delete-photo', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        ...payload,
+                        userId: user.id,
+                      }),
+                    });
+                    if (!res.ok) {
+                      const data = await res.json();
+                      console.error('Delete photo failed:', data);
+                    } else if (user) {
+                      queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
+                    }
+                  } catch (err) {
+                    console.error('Error deleting photo:', err);
                   }
-                } catch (err) {
-                  console.error('Error deleting photo:', err);
                 }
+                setImages((prev) => prev.filter((img) => img.id !== selectedId));
+                setSelectedId(null);
+                saveToHistory();
+              } finally {
+                setDeletingPhotoId(null);
               }
-              
-              setImages((prev) => prev.filter((img) => img.id !== selectedId));
             } else {
               setTexts((prev) => prev.filter((txt) => txt.id !== selectedId));
+              setSelectedId(null);
+              saveToHistory();
             }
-            setSelectedId(null);
-            saveToHistory();
           }}
+          isDeleting={deletingPhotoId === selectedId && 'src' in selectedObject}
           onResetToOriginal={'src' in selectedObject ? () => {
             // Reset ALL edits to default values
             setImages((prev) =>
@@ -5413,6 +5563,7 @@ const createColorCalibrationFilter = (colorCal: ColorCalibration) => {
 const ImageNode = React.memo(function ImageNode({
   image,
   onClick,
+  onDblClick,
   onContextMenu,
   onDragEnd,
   onDragMove,
@@ -5422,6 +5573,7 @@ const ImageNode = React.memo(function ImageNode({
   image: CanvasImage;
   isSelected: boolean;
   onClick: (e: Konva.KonvaEventObject<MouseEvent>) => void;
+  onDblClick?: () => void;
   onContextMenu?: (e: Konva.KonvaEventObject<PointerEvent>, imageId: string) => void;
   onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) => void;
   onDragMove?: (e: Konva.KonvaEventObject<DragEvent>) => void;
@@ -5647,6 +5799,10 @@ const ImageNode = React.memo(function ImageNode({
       scaleY={image.scaleY}
       draggable
       onClick={onClick}
+      onDblClick={(e) => {
+        e.cancelBubble = true;
+        onDblClick?.();
+      }}
       onContextMenu={(e) => {
         e.evt.preventDefault();
         onContextMenu?.(e as Konva.KonvaEventObject<PointerEvent>, image.id);
