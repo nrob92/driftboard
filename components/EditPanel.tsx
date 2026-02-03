@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CurvesEditor } from './CurvesEditor';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
@@ -249,10 +250,14 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { user } = useAuth();
 
-  // Load presets from database on mount
-  useEffect(() => {
-    const loadPresets = async () => {
-      if (!user) return;
+  // Query client for cache invalidation
+  const queryClient = useQueryClient();
+
+  // Load presets from database with React Query caching
+  const { data: loadedPresets } = useQuery({
+    queryKey: ['presets', user?.id],
+    queryFn: async () => {
+      if (!user) return [];
 
       const { data, error } = await supabase
         .from('presets')
@@ -262,21 +267,25 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
 
       if (error) {
         console.error('Error loading presets:', error);
-        return;
+        return [];
       }
 
-      if (data) {
-        const loadedPresets: Preset[] = data.map((row) => ({
-          id: row.id,
-          name: row.name,
-          settings: row.settings as Partial<CanvasImage>,
-        }));
-        setPresets(loadedPresets);
-      }
-    };
+      return data.map((row) => ({
+        id: row.id,
+        name: row.name,
+        settings: row.settings as Partial<CanvasImage>,
+      })) as Preset[];
+    },
+    enabled: !!user,
+    staleTime: 5 * 60 * 1000, // Cache presets for 5 minutes
+  });
 
-    loadPresets();
-  }, [user]);
+  // Sync query data to local state for mutations
+  useEffect(() => {
+    if (loadedPresets) {
+      setPresets(loadedPresets);
+    }
+  }, [loadedPresets]);
 
   const handleCurvesChange = useCallback(
     (curves: ChannelCurves) => {
@@ -583,6 +592,8 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
             settings: data.settings as Partial<CanvasImage>,
           };
           setPresets(prev => [...prev, preset]);
+          // Invalidate cache so next mount gets fresh data
+          queryClient.invalidateQueries({ queryKey: ['presets', user.id] });
         }
       } else {
         // Not logged in - just add to local state
@@ -594,7 +605,7 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
         setPresets(prev => [...prev, preset]);
       }
     }
-  }, [user]);
+  }, [user, queryClient]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -671,12 +682,15 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
 
       if (error) {
         console.error('Error deleting preset:', error);
+      } else {
+        // Invalidate cache
+        queryClient.invalidateQueries({ queryKey: ['presets', user.id] });
       }
     }
 
     // Remove from local state
     setPresets(prev => prev.filter(p => p.id !== presetId));
-  }, [user]);
+  }, [user, queryClient]);
 
   const handlePresetDoubleClick = useCallback((preset: Preset) => {
     setRenamingPresetId(preset.id);
@@ -701,6 +715,9 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
 
       if (error) {
         console.error('Error renaming preset:', error);
+      } else {
+        // Invalidate cache
+        queryClient.invalidateQueries({ queryKey: ['presets', user.id] });
       }
     }
 
@@ -711,7 +728,7 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
 
     setRenamingPresetId(null);
     setRenameValue('');
-  }, [renamingPresetId, renameValue, user]);
+  }, [renamingPresetId, renameValue, user, queryClient]);
 
   const handleRenameCancel = useCallback(() => {
     setRenamingPresetId(null);

@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import { useAuth } from '@/lib/auth';
 import { useRouter } from 'next/navigation';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 const CanvasEditor = dynamic(() => import('@/components/CanvasEditor').then((m) => m.CanvasEditor), {
   ssr: false,
@@ -12,6 +12,7 @@ const CanvasEditor = dynamic(() => import('@/components/CanvasEditor').then((m) 
 export default function Home() {
   const { user, loading } = useAuth();
   const router = useRouter();
+  const [photosLoading, setPhotosLoading] = useState(true);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -19,21 +20,21 @@ export default function Home() {
     }
   }, [user, loading, router]);
 
-  if (loading) {
-    return (
-      <div className="h-screen w-screen bg-[#0f0f0f] flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-[#3ECF8E] border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
+  const showLoader = loading || (!!user && photosLoading);
 
-  if (!user) {
+  if (!loading && !user) {
     return null;
   }
 
   return (
-    <div className="h-screen w-screen overflow-hidden">
-      <CanvasEditor />
+    <div className="h-screen w-screen overflow-hidden relative">
+      {showLoader && (
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-[#171717] border border-[#2a2a2a] rounded-xl px-4 py-3 shadow-2xl shadow-black/50">
+          <div className="w-5 h-5 border-2 border-[#3ECF8E] border-t-transparent rounded-full animate-spin" />
+          <span className="text-white text-sm font-medium">Loading photos...</span>
+        </div>
+      )}
+      {user && <CanvasEditor onPhotosLoadStateChange={setPhotosLoading} />}
     </div>
   );
 }

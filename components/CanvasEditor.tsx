@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react'
 import { Stage, Layer, Image as KonvaImage, Text, Transformer, Rect, Group } from 'react-konva';
 import useImage from 'use-image';
 import Konva from 'konva';
+import { useQuery } from '@tanstack/react-query';
 import { TopBar } from './TopBar';
 import { EditPanel } from './EditPanel';
 import { snapToGrid, findNearestPhoto } from '@/lib/utils';
@@ -783,7 +784,11 @@ const resolveFolderOverlaps = (
   return updated;
 };
 
-export function CanvasEditor() {
+type CanvasEditorProps = {
+  onPhotosLoadStateChange?: (loading: boolean) => void;
+};
+
+export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}) {
   const stageRef = useRef<Konva.Stage>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
   const [images, setImages] = useState<CanvasImage[]>([]);
@@ -882,39 +887,64 @@ export function CanvasEditor() {
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, []);
 
-  // Auto-load user's photos from Supabase on login
+  // React Query for fetching photo metadata (cached for fast reloads)
+  const { data: photoData } = useQuery({
+    queryKey: ['user-photos', user?.id],
+    queryFn: async () => {
+      if (!user) return null;
+
+      // Fetch all data in parallel for speed
+      const [editsResult, foldersResult, photosResult, originalsResult] = await Promise.all([
+        supabase.from('photo_edits').select('*').eq('user_id', user.id),
+        supabase.from('photo_folders').select('*').eq('user_id', user.id),
+        supabase.storage.from('photos').list(user.id, {
+          limit: 50,
+          sortBy: { column: 'created_at', order: 'asc' },
+        }),
+        supabase.storage.from('originals').list(user.id, {
+          limit: 50,
+          sortBy: { column: 'created_at', order: 'asc' },
+        }),
+      ]);
+
+      return {
+        savedEdits: editsResult.data,
+        savedFolders: foldersResult.data,
+        photosFiles: photosResult.data,
+        originalsFiles: originalsResult.data,
+        photosError: photosResult.error,
+      };
+    },
+    enabled: !!user,
+    staleTime: 60 * 1000, // Cache for 60 seconds
+  });
+
+  // Track if images have been loaded to prevent re-processing
+  const imagesLoadedRef = useRef<string | null>(null);
+
+  // Process photos from cached query data
   useEffect(() => {
     const loadUserPhotos = async () => {
-      if (!user) return;
+      if (!user || !photoData) return;
+      // Skip if images already loaded for this user (prevents duplicate processing)
+      if (imagesLoadedRef.current === user.id) {
+        onPhotosLoadStateChange?.(false);
+        return;
+      }
+
+      const { savedEdits, savedFolders, photosFiles, originalsFiles, photosError } = photoData;
+
+      // Check if there are any files to load
+      const photosList = (photosFiles ?? []).filter((f) => !f.name.startsWith('.'));
+      const originalsList = (originalsFiles ?? []).filter((f) => !f.name.startsWith('.'));
+      if (photosList.length === 0 && originalsList.length === 0) {
+        onPhotosLoadStateChange?.(false);
+        return;
+      }
+
+      onPhotosLoadStateChange?.(true);
 
       try {
-        // Fetch photo_edits and photo_folders FIRST so positions/folders are authoritative
-        const { data: savedEdits, error: editsError } = await supabase
-          .from('photo_edits')
-          .select('*')
-          .eq('user_id', user.id);
-
-        const { data: savedFolders, error: foldersError } = await supabase
-          .from('photo_folders')
-          .select('*')
-          .eq('user_id', user.id);
-
-        // List files in photos bucket
-        const { data: photosFiles, error: photosError } = await supabase.storage
-          .from('photos')
-          .list(user.id, {
-            limit: 50,
-            sortBy: { column: 'created_at', order: 'asc' },
-          });
-
-        // List files in originals bucket (DNG-only may exist only here)
-        const { data: originalsFiles } = await supabase.storage
-          .from('originals')
-          .list(user.id, { limit: 50, sortBy: { column: 'created_at', order: 'asc' } });
-
-        const photosList = (photosFiles ?? []).filter((f) => !f.name.startsWith('.'));
-        const originalsList = (originalsFiles ?? []).filter((f) => !f.name.startsWith('.'));
-
         // Base names we already have from photos (preview) - don't duplicate from originals
         const photosBaseNames = new Set(photosList.map((f) => f.name.replace(/\.[^.]+$/, '').toLowerCase()));
         const originalsOnly = originalsList.filter(
@@ -947,7 +977,8 @@ export function CanvasEditor() {
             let width: number;
             let height: number;
 
-            if (isDNG(file.name)) {
+            // Only decode as DNG if from originals bucket (photos bucket has JPG previews)
+            if (isDNG(file.name) && file.bucket === 'originals') {
               const decoded = await decodeDNGFromUrl(imageUrl);
               imgSrc = decoded.dataUrl;
               width = decoded.width;
@@ -1175,6 +1206,7 @@ export function CanvasEditor() {
         console.log('Images with folderIds:', newImages.map(img => ({ id: img.id, folderId: img.folderId })));
 
         if (newImages.length > 0) {
+          imagesLoadedRef.current = user.id;
           setImages(newImages);
           setFolders(loadedFolders);
           // Update history with loaded state
@@ -1212,11 +1244,18 @@ export function CanvasEditor() {
         }
       } catch (err) {
         console.error('Error loading user photos:', err);
+      } finally {
+        // Delay hiding loader to allow React to render the images
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            onPhotosLoadStateChange?.(false);
+          });
+        });
       }
     };
 
     loadUserPhotos();
-  }, [user]);
+  }, [user, photoData, onPhotosLoadStateChange]);
 
   // Save state to history
   const saveToHistory = useCallback(() => {
@@ -1375,7 +1414,8 @@ export function CanvasEditor() {
           let imageSrc = '';
           let photosUploadSucceeded = false;
 
-          if (supabaseUrl && user) {
+          // Skip direct upload for DNG files - they go through the API which creates JPG previews
+          if (!isDNG(file.name) && supabaseUrl && user) {
             console.log('Uploading to Supabase:', filePath);
             const { data: uploadData, error: uploadError } = await supabase.storage
               .from('photos')
@@ -1401,7 +1441,7 @@ export function CanvasEditor() {
               imageSrc = urlData.publicUrl;
               console.log('Public URL:', imageSrc);
             }
-          } else {
+          } else if (!isDNG(file.name)) {
             console.log('Using base64 (no Supabase or not logged in)');
             const reader = new FileReader();
             imageSrc = await new Promise<string>((resolve) => {
@@ -1451,7 +1491,7 @@ export function CanvasEditor() {
                   height = result.height;
                   console.log('DNG processed via server:', width, 'x', height, 'original:', originalWidth, 'x', originalHeight);
                 } else {
-                  // Original saved to originals; no server preview — decode client-side for display
+                  // Original saved to originals; no server preview — decode client-side and upload preview
                   console.log('DNG saved to originals, decoding preview client-side');
                   const buffer = await file.arrayBuffer();
                   dngBuffer = buffer;
@@ -1459,6 +1499,23 @@ export function CanvasEditor() {
                   imageSrc = decoded.dataUrl;
                   width = decoded.width;
                   height = decoded.height;
+
+                  // Upload client-decoded preview to photos bucket
+                  const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
+                  const previewFilePath = `${user.id}/${previewFileName}`;
+                  const previewBlob = await fetch(decoded.dataUrl).then(r => r.blob());
+                  const { error: previewUploadError } = await supabase.storage
+                    .from('photos')
+                    .upload(previewFilePath, previewBlob, {
+                      contentType: 'image/jpeg',
+                      cacheControl: '3600',
+                    });
+                  if (!previewUploadError) {
+                    previewStoragePath = previewFilePath;
+                    console.log('Uploaded client-decoded preview:', previewFilePath);
+                  } else {
+                    console.error('Failed to upload preview:', previewUploadError);
+                  }
                 }
               } else {
                 // Fallback to client-side decoding
@@ -1469,6 +1526,21 @@ export function CanvasEditor() {
                 imageSrc = decoded.dataUrl;
                 width = decoded.width;
                 height = decoded.height;
+
+                // Upload client-decoded preview to photos bucket
+                const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
+                const previewFilePath = `${user.id}/${previewFileName}`;
+                const previewBlob = await fetch(decoded.dataUrl).then(r => r.blob());
+                const { error: previewUploadError } = await supabase.storage
+                  .from('photos')
+                  .upload(previewFilePath, previewBlob, {
+                    contentType: 'image/jpeg',
+                    cacheControl: '3600',
+                  });
+                if (!previewUploadError) {
+                  previewStoragePath = previewFilePath;
+                  console.log('Uploaded client-decoded preview:', previewFilePath);
+                }
               }
             } catch (apiError) {
               // Fallback to client-side decoding
@@ -1479,6 +1551,21 @@ export function CanvasEditor() {
               imageSrc = decoded.dataUrl;
               width = decoded.width;
               height = decoded.height;
+
+              // Upload client-decoded preview to photos bucket
+              const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
+              const previewFilePath = `${user.id}/${previewFileName}`;
+              const previewBlob = await fetch(decoded.dataUrl).then(r => r.blob());
+              const { error: previewUploadError } = await supabase.storage
+                .from('photos')
+                .upload(previewFilePath, previewBlob, {
+                  contentType: 'image/jpeg',
+                  cacheControl: '3600',
+                });
+              if (!previewUploadError) {
+                previewStoragePath = previewFilePath;
+                console.log('Uploaded client-decoded preview:', previewFilePath);
+              }
             }
           } else if (isDNG(file.name)) {
             // Client-side fallback for DNG when not logged in
