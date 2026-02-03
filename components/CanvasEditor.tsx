@@ -2642,14 +2642,14 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               const centeredX = contentStartX + cellOffsetX;
               const centeredY = contentStartY + cellOffsetY;
               
-              // Combined state update: remove from old folder AND add new folder
-              setFolders((prev) => {
-                const updated = prev.map((f) =>
+              // Build updated state: remove from old folder, add new folder, update image
+              const updatedFolders = folders
+                .map((f) =>
                   f.id === oldFolderId
                     ? { ...f, imageIds: f.imageIds.filter((id) => id !== currentImg.id) }
                     : f
-                );
-                return [...updated, {
+                )
+                .concat({
                   id: newFolderId,
                   name: untitledName,
                   x: newFolderX,
@@ -2657,40 +2657,67 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                   width: newFolderWidth,
                   imageIds: [currentImg.id],
                   color: FOLDER_COLORS[colorIndex],
-                }];
-              });
-
-              // Update image's folderId and position (centered in folder)
-              setImages((prev) =>
-                prev.map((img) =>
-                  img.id === currentImg.id
-                    ? { ...img, x: centeredX, y: centeredY, folderId: newFolderId }
-                    : img
-                )
+                });
+              const updatedImages = images.map((img) =>
+                img.id === currentImg.id
+                  ? { ...img, x: centeredX, y: centeredY, folderId: newFolderId }
+                  : img
               );
-              
-              // Update the node position visually
-              node.position({ x: centeredX, y: centeredY });
 
-              // Save new folder to Supabase
+              // Resolve overlaps so the new folder pushes others out of the way
+              const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
+                updatedFolders,
+                updatedImages,
+                newFolderId
+              );
+
+              setFolders(resolvedFolders);
+              setImages(resolvedImages);
+
+              const finalImg = resolvedImages.find((img) => img.id === currentImg.id);
+              if (finalImg) {
+                node.position({ x: finalImg.x, y: finalImg.y });
+              } else {
+                node.position({ x: centeredX, y: centeredY });
+              }
+
+              saveToHistory();
+
+              // Save new folder and any moved folders to Supabase
               if (user) {
+                const resolvedNewFolder = resolvedFolders.find((f) => f.id === newFolderId);
+                const newF = resolvedNewFolder || { x: newFolderX, y: newFolderY };
                 supabase.from('photo_folders').insert({
                   id: newFolderId,
                   user_id: user.id,
                   name: untitledName,
-                  x: Math.round(newFolderX),
-                  y: Math.round(newFolderY),
+                  x: Math.round(newF.x),
+                  y: Math.round(newF.y),
                   width: Math.round(newFolderWidth),
                   color: FOLDER_COLORS[colorIndex],
                 }).then(({ error }) => {
                   if (error) console.error('Failed to save new folder:', error);
                 });
 
-                // Update photo_edits with new folder_id and centered position (canonical key)
+                // Update any existing folders that were pushed
+                for (const f of resolvedFolders) {
+                  if (f.id === newFolderId) continue;
+                  const prev = folders.find((of) => of.id === f.id);
+                  if (prev && (prev.x !== f.x || prev.y !== f.y)) {
+                    supabase.from('photo_folders')
+                      .update({ x: Math.round(f.x), y: Math.round(f.y) })
+                      .eq('id', f.id)
+                      .eq('user_id', user.id)
+                      .then(({ error }) => {
+                        if (error) console.error('Failed to update folder position:', error);
+                      });
+                  }
+                }
+
                 const currentCanonical = currentImg.storagePath || currentImg.originalStoragePath;
-                if (currentCanonical) {
+                if (currentCanonical && finalImg) {
                   supabase.from('photo_edits')
-                    .update({ folder_id: newFolderId, x: Math.round(centeredX), y: Math.round(centeredY) })
+                    .update({ folder_id: newFolderId, x: Math.round(finalImg.x), y: Math.round(finalImg.y) })
                     .eq('storage_path', currentCanonical)
                     .eq('user_id', user.id)
                     .then(({ error }) => {
@@ -5124,24 +5151,18 @@ const ImageNode = React.memo(function ImageNode({
   const isDraggingRef = useRef(false);
   const cacheTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  // Smooth position transitions when x/y changes (but not during drag)
+  // Sync position when x/y change from state (e.g. after drop) – no animation, drop into place
   useEffect(() => {
     const node = imageRef.current;
     if (!node || isDraggingRef.current) return;
 
-    const prevX = prevPosRef.current.x;
-    const prevY = prevPosRef.current.y;
     const newX = image.x;
     const newY = image.y;
+    const prevX = prevPosRef.current.x;
+    const prevY = prevPosRef.current.y;
 
     if (Math.abs(newX - prevX) > 0.5 || Math.abs(newY - prevY) > 0.5) {
-      node.position({ x: prevX, y: prevY });
-      node.to({
-        x: newX,
-        y: newY,
-        duration: 0.2,
-        easing: Konva.Easings.EaseOut,
-      });
+      node.position({ x: newX, y: newY });
       prevPosRef.current = { x: newX, y: newY };
     }
   }, [image.x, image.y]);
