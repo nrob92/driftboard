@@ -346,6 +346,13 @@ const FOLDER_COLORS = [
   '#34d399', // Teal
 ];
 
+function hexToRgba(hex: string, a: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
 // Centralized grid configuration - used everywhere for consistency
 const GRID_CONFIG = {
   imageMaxSize: 140,  // Max width/height for images in grid
@@ -2740,14 +2747,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         const finalX = contentStartX + finalCol * CELL_SIZE + cellOffsetX;
         const finalY = contentStartY + finalRow * CELL_SIZE + cellOffsetY;
 
-        // Update ghost placeholder position
-        setDragGhostPosition({
-          x: finalX,
-          y: finalY,
-          width: imgWidth,
-          height: imgHeight,
-          folderId: targetFolderId,
-        });
+        // Don't show ghost at all when snapping in folder — no green dashed border
+        setDragGhostPosition(null);
 
         // Update positions in real-time
         setImages((prev) =>
@@ -4560,11 +4561,15 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               );
             })}
 
-            {images.map((img) => (
+            {images.map((img) => {
+              const folder = folders.find(f => f.id === img.folderId || f.imageIds.includes(img.id));
+              const selectedStrokeColor = folder ? hexToRgba(folder.color, 0.4) : hexToRgba('#3ECF8E', 0.4);
+              return (
               <ImageNode
                 key={img.id}
                 image={img}
                 isSelected={selectedId === img.id}
+                selectedStrokeColor={selectedStrokeColor}
                 bypassedTabs={bypassedTabs}
                 onClick={handleObjectClick}
                 onDblClick={(e) => handleImageDoubleClick(img, e)}
@@ -4581,7 +4586,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                   );
                 }}
               />
-            ))}
+            );})}
             {texts.map((txt) => (
               <TextNode
                 key={txt.id}
@@ -5569,6 +5574,8 @@ const createColorCalibrationFilter = (colorCal: ColorCalibration) => {
 // Uses fast Konva filters with pre-computed LUTs for real-time editing
 const ImageNode = React.memo(function ImageNode({
   image,
+  isSelected,
+  selectedStrokeColor,
   onClick,
   onDblClick,
   onContextMenu,
@@ -5579,6 +5586,7 @@ const ImageNode = React.memo(function ImageNode({
 }: {
   image: CanvasImage;
   isSelected: boolean;
+  selectedStrokeColor: string;
   onClick: (e: Konva.KonvaEventObject<MouseEvent>) => void;
   onDblClick?: (e: Konva.KonvaEventObject<MouseEvent>) => void;
   onContextMenu?: (e: Konva.KonvaEventObject<PointerEvent>, imageId: string) => void;
@@ -5804,6 +5812,8 @@ const ImageNode = React.memo(function ImageNode({
       rotation={image.rotation}
       scaleX={image.scaleX}
       scaleY={image.scaleY}
+      stroke={isSelected ? selectedStrokeColor : undefined}
+      strokeWidth={isSelected ? 2 : 0}
       draggable
       onClick={onClick}
       onDblClick={(e) => {
@@ -5845,6 +5855,7 @@ const ImageNode = React.memo(function ImageNode({
   return (
     prevProps.image === nextProps.image &&
     prevProps.isSelected === nextProps.isSelected &&
+    prevProps.selectedStrokeColor === nextProps.selectedStrokeColor &&
     prevProps.bypassedTabs === nextProps.bypassedTabs
   );
 });
