@@ -257,21 +257,21 @@ export function CurvesEditor({ curves, onChange, onClose }: CurvesEditorProps) {
   };
 
   return (
-    <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20">
-      <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-4">
+    <div className="relative">
+      <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-2.5 min-w-fit max-w-fit">
         {/* Header */}
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-medium text-white">Curves</h3>
+        <div className="flex items-center justify-between mb-1.5">
+          <h3 className="text-xs font-medium text-white">Curves</h3>
           <div className="flex items-center gap-2">
             <button
               onClick={handleReset}
-              className="text-xs text-[#888] hover:text-white transition-colors cursor-pointer"
+              className="text-[10px] text-[#888] hover:text-white transition-colors cursor-pointer"
             >
               Reset
             </button>
             <button
               onClick={handleResetAll}
-              className="text-xs text-[#888] hover:text-white transition-colors cursor-pointer"
+              className="text-[10px] text-[#888] hover:text-white transition-colors cursor-pointer"
             >
               Reset All
             </button>
@@ -279,7 +279,7 @@ export function CurvesEditor({ curves, onChange, onClose }: CurvesEditorProps) {
               onClick={onClose}
               className="p-1 text-[#888] hover:text-white transition-colors cursor-pointer"
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
@@ -287,12 +287,12 @@ export function CurvesEditor({ curves, onChange, onClose }: CurvesEditorProps) {
         </div>
 
         {/* Channel Tabs */}
-        <div className="flex gap-1 mb-3">
+        <div className="flex gap-0.5 mb-1.5">
           {(['rgb', 'red', 'green', 'blue'] as Channel[]).map((channel) => (
             <button
               key={channel}
               onClick={() => setActiveChannel(channel)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all cursor-pointer ${
+              className={`px-1.5 py-0.5 text-[9px] font-medium rounded transition-all cursor-pointer ${
                 activeChannel === channel
                   ? channel === 'rgb'
                     ? 'bg-white/20 text-white'
@@ -312,10 +312,9 @@ export function CurvesEditor({ curves, onChange, onClose }: CurvesEditorProps) {
         {/* Canvas */}
         <canvas
           ref={canvasRef}
-          width={220}
-          height={220}
-
-          className="rounded-lg cursor-crosshair"
+          width={140}
+          height={140}
+          className="rounded cursor-crosshair"
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
@@ -324,7 +323,7 @@ export function CurvesEditor({ curves, onChange, onClose }: CurvesEditorProps) {
         />
 
         {/* Footer labels */}
-        <div className="flex justify-between mt-2 text-[10px] text-[#555]">
+        <div className="flex justify-between mt-1 text-[9px] text-[#555]">
           <span>Shadows</span>
           <span>Midtones</span>
           <span>Highlights</span>

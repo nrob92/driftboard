@@ -7,7 +7,6 @@ import Konva from 'konva';
 import { CurvesEditor } from './CurvesEditor';
 import { buildSandboxFilterList } from '@/lib/sandboxFilters';
 
-const MAX_PHOTOS = 3;
 const ACCEPT = 'image/jpeg,image/png,image/webp';
 
 // Match main app CanvasEditor exactly (no DB writes)
@@ -40,11 +39,24 @@ function getFolderLayoutMode(folderWidth: number): 'grid' | 'stack' {
   return cols === 1 ? 'stack' : 'grid';
 }
 
-function getFolderBorderHeight(imageCount: number, folderWidth: number): number {
+function getFolderBorderHeight(imageCount: number, folderWidth: number, folderHeight?: number): number {
+  if (folderHeight != null) {
+    return Math.max(folderHeight - LABEL_HEIGHT, 100);
+  }
   if (imageCount === 0) return 100;
-  // Sandbox folders always use single row (max 3 photos)
-  const rowHeight = GRID_CONFIG.imageMaxSize;
-  return rowHeight + GRID_CONFIG.folderPadding * 2;
+  
+  // Calculate dynamic columns based on folder width (same as main app)
+  const layoutMode = getFolderLayoutMode(folderWidth);
+  
+  if (layoutMode === 'stack') {
+    // Stack mode: single column, height based on number of images
+    return imageCount * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
+  }
+  
+  // Grid mode: calculate rows based on columns
+  const cols = calculateColsFromWidth(folderWidth);
+  const rows = Math.ceil(imageCount / cols) || 1;
+  return rows * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
 }
 
 type SandboxFolder = {
@@ -53,6 +65,7 @@ type SandboxFolder = {
   x: number;
   y: number;
   width: number;
+  height?: number; // Optional height for resizing
   imageIds: string[];
   color: string;
 };
@@ -61,29 +74,103 @@ function reflowSandboxImagesInFolder(
   images: SandboxImage[],
   folderX: number,
   folderY: number,
-  folderWidth: number
+  folderWidth: number,
+  folderHeight?: number
 ): SandboxImage[] {
   const { folderPadding, imageMaxSize } = GRID_CONFIG;
   const contentStartX = folderX + folderPadding;
   const contentStartY = folderY + LABEL_HEIGHT + folderPadding;
   
-  // Sandbox folders always use single row with 3 columns (max 3 photos)
-  const cols = 3;
-  const row = 0; // Always row 0 (single row)
+  // Calculate dynamic columns based on folder width (same as main app)
+  const cols = calculateColsFromWidth(folderWidth);
+  const layoutMode = getFolderLayoutMode(folderWidth);
+  
+  // Calculate max rows based on folder height if provided
+  let maxRows = Infinity;
+  if (folderHeight != null) {
+    const contentHeight = folderHeight - LABEL_HEIGHT;
+    const availableContentHeight = contentHeight - (2 * folderPadding);
+    maxRows = Math.max(1, Math.floor(availableContentHeight / CELL_SIZE));
+  }
 
+  if (layoutMode === 'stack') {
+    // Stack mode: single column, vertical stacking
+    return images.map((img, index) => {
+      const baseWidth = img.originalWidth ?? img.width;
+      const baseHeight = img.originalHeight ?? img.height;
+      const scale = Math.min(imageMaxSize / baseWidth, imageMaxSize / baseHeight, 1);
+      const w = baseWidth * scale;
+      const h = baseHeight * scale;
+      
+      // Center horizontally in folder
+      const availableWidth = folderWidth - (2 * folderPadding);
+      const cellOffsetX = (availableWidth - w) / 2;
+      
+      // Stack vertically with gaps
+      const yOffset = index * CELL_SIZE;
+      
+      return {
+        ...img,
+        x: contentStartX + cellOffsetX,
+        y: contentStartY + yOffset,
+        width: w,
+        height: h,
+        originalWidth: img.originalWidth ?? baseWidth,
+        originalHeight: img.originalHeight ?? baseHeight,
+      };
+    });
+  }
+
+  // Grid mode: multi-column layout
   return images.map((img, index) => {
     const col = index % cols;
-    const scale = Math.min(imageMaxSize / img.width, imageMaxSize / img.height, 1);
-    const w = img.width * scale;
-    const h = img.height * scale;
+    const row = Math.floor(index / cols);
+    
+    // If folder height is limited, ensure we don't exceed max rows
+    if (folderHeight != null && row >= maxRows) {
+      // This shouldn't happen if folder height is calculated correctly, but handle it
+      const wrappedRow = row % maxRows;
+      const wrappedCol = (Math.floor(index / maxRows) % cols);
+      const baseWidth = img.originalWidth ?? img.width;
+      const baseHeight = img.originalHeight ?? img.height;
+      const scale = Math.min(imageMaxSize / baseWidth, imageMaxSize / baseHeight, 1);
+      const w = baseWidth * scale;
+      const h = baseHeight * scale;
+      const cellOffsetX = (imageMaxSize - w) / 2;
+      const cellOffsetY = (imageMaxSize - h) / 2;
+      return {
+        ...img,
+        x: contentStartX + wrappedCol * CELL_SIZE + cellOffsetX,
+        y: contentStartY + wrappedRow * CELL_SIZE + cellOffsetY,
+        width: w,
+        height: h,
+        originalWidth: img.originalWidth ?? baseWidth,
+        originalHeight: img.originalHeight ?? baseHeight,
+      };
+    }
+    
+    // Use original dimensions if available, otherwise use current dimensions
+    const baseWidth = img.originalWidth ?? img.width;
+    const baseHeight = img.originalHeight ?? img.height;
+    
+    // Constrain to imageMaxSize (same as main app: Math.min(width * scaleX, imageMaxSize))
+    const scale = Math.min(imageMaxSize / baseWidth, imageMaxSize / baseHeight, 1);
+    const w = baseWidth * scale;
+    const h = baseHeight * scale;
+    
+    // Center images in their cells (same as main app)
     const cellOffsetX = (imageMaxSize - w) / 2;
     const cellOffsetY = (imageMaxSize - h) / 2;
+    
     return {
       ...img,
       x: contentStartX + col * CELL_SIZE + cellOffsetX,
       y: contentStartY + row * CELL_SIZE + cellOffsetY,
       width: w,
       height: h,
+      // Preserve original dimensions if not already set
+      originalWidth: img.originalWidth ?? baseWidth,
+      originalHeight: img.originalHeight ?? baseHeight,
     };
   });
 }
@@ -110,6 +197,9 @@ type SandboxImage = {
   width: number;
   height: number;
   folderId?: string;
+  // Store original dimensions to restore when removed from folder
+  originalWidth?: number;
+  originalHeight?: number;
   exposure?: number;
   contrast?: number;
   highlights?: number;
@@ -144,9 +234,9 @@ function SandboxSlider({
   onChange: (v: number) => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-xs text-[#888] w-20">{label}</span>
-      <div className="flex items-center gap-2 flex-1">
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-[#888] w-20 shrink-0">{label}</span>
+      <div className="flex items-center gap-2 flex-1 min-w-0">
         <input
           type="range"
           min={min}
@@ -157,7 +247,7 @@ function SandboxSlider({
           onDoubleClick={() => onChange(defaultValue)}
           className="flex-1 h-1 bg-[#333] rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#3ECF8E] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:transition-transform [&::-webkit-slider-thumb]:hover:scale-125"
         />
-        <span className="text-[10px] text-[#666] w-8 text-right tabular-nums">
+        <span className="text-[10px] text-[#666] w-10 text-right tabular-nums shrink-0">
           {value > 0 ? '+' : ''}{Math.round(value * 100)}
         </span>
       </div>
@@ -171,18 +261,22 @@ function SandboxImageNode({
   isSelected,
   onSelect,
   onDoubleClick,
+  onDragMove,
   onDragEnd,
   onCursorOverImage,
   onNodeRef,
+  isSpacePressed,
 }: {
   img: SandboxImage;
   isZoomed: boolean;
   isSelected: boolean;
   onSelect: () => void;
   onDoubleClick: () => void;
+  onDragMove?: (e: Konva.KonvaEventObject<DragEvent>) => void;
   onDragEnd: (x: number, y: number) => void;
   onCursorOverImage: (over: boolean) => void;
   onNodeRef?: (node: Konva.Image | null) => void;
+  isSpacePressed?: boolean;
 }) {
   const nodeRef = useRef<Konva.Image>(null);
   const [image] = useImage(img.url, 'anonymous');
@@ -191,12 +285,39 @@ function SandboxImageNode({
 
   useEffect(() => {
     if (!image || !nodeRef.current) return;
-    if (hasFilters) {
-      nodeRef.current.cache({ pixelRatio: Math.min(window.devicePixelRatio, 2) });
-    } else {
-      nodeRef.current.filters([]);
+    const node = nodeRef.current;
+    
+    if (!hasFilters || filterList.length === 0) {
+      // No filters - clear cache and filters (don't cache to preserve quality)
+      node.clearCache();
+      node.filters([]);
+      return;
     }
-  }, [image, hasFilters, filterList]);
+    
+    // Calculate pixelRatio to maintain source image quality (match main app)
+    // If source is larger than display, we need higher pixelRatio
+    const imgElement = image as HTMLImageElement;
+    const sourceWidth = imgElement.naturalWidth || img.width;
+    const sourceHeight = imgElement.naturalHeight || img.height;
+    const displayWidth = img.width;
+    const displayHeight = img.height;
+    const scaleX = sourceWidth / displayWidth;
+    const scaleY = sourceHeight / displayHeight;
+    const sourceScale = Math.max(scaleX, scaleY, 1);
+    const pixelRatio = Math.min(sourceScale * (window.devicePixelRatio || 1), 8);
+    
+    // Apply filters, then cache with high quality
+    node.filters(filterList);
+    node.cache({ pixelRatio });
+    // Force redraw to apply cache
+    node.getLayer()?.batchDraw();
+  }, [image, hasFilters, filterList, img.width, img.height]);
+
+  useEffect(() => {
+    if (onNodeRef && nodeRef.current) {
+      onNodeRef(nodeRef.current);
+    }
+  }, [onNodeRef]);
 
   if (!image) return null;
   return (
@@ -208,12 +329,33 @@ function SandboxImageNode({
       width={img.width}
       height={img.height}
       draggable={!isZoomed}
-      filters={hasFilters ? filterList : undefined}
-      onMouseEnter={() => onCursorOverImage(true)}
-      onMouseLeave={() => onCursorOverImage(false)}
+      onMouseEnter={(e) => {
+        onCursorOverImage(true);
+        const container = e.target.getStage()?.container();
+        if (container && !isSpacePressed) container.style.cursor = 'pointer';
+      }}
+      onMouseLeave={(e) => {
+        onCursorOverImage(false);
+        const container = e.target.getStage()?.container();
+        if (container && !isSpacePressed) container.style.cursor = 'default';
+      }}
       onClick={(e) => e.evt.button === 0 && onSelect()}
       onDblClick={onDoubleClick}
-      onDragEnd={(e) => onDragEnd(e.target.x(), e.target.y())}
+      onDragMove={onDragMove}
+      onDragEnd={(e) => {
+        // Get the actual pointer position, not the node position (which may have been snapped during drag)
+        const stage = e.target.getStage();
+        if (stage) {
+          // Get pointer position relative to stage (accounts for stage transform/scale)
+          const pointerPos = stage.getRelativePointerPosition();
+          if (pointerPos && pointerPos.x !== undefined && pointerPos.y !== undefined) {
+            onDragEnd(pointerPos.x, pointerPos.y);
+            return;
+          }
+        }
+        // Fallback to node position if we can't get pointer position
+        onDragEnd(e.target.x(), e.target.y());
+      }}
       listening={true}
       stroke={isSelected ? '#3ECF8E' : undefined}
       strokeWidth={isSelected ? 2 : 0}
@@ -240,7 +382,10 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
   const [isDragOver, setIsDragOver] = useState(false);
   const [folderLabelWidths, setFolderLabelWidths] = useState<Record<string, number>>({});
   const [hoveredFolderBorder, setHoveredFolderBorder] = useState<string | null>(null);
+  const [resizingFolderId, setResizingFolderId] = useState<string | null>(null);
   const folderLabelRefs = useRef<Record<string, Konva.Text>>({});
+  const preZoomViewRef = useRef<{ scale: number; x: number; y: number } | null>(null);
+  const zoomAnimationRef = useRef<number | null>(null);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -253,13 +398,63 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
     return () => ro.disconnect();
   }, []);
 
+  // Animate view transition (for zoom) - defined early so it can be used in useEffect
+  const animateView = useCallback((
+    from: { scale: number; x: number; y: number },
+    to: { scale: number; x: number; y: number },
+    onComplete?: () => void
+  ) => {
+    if (zoomAnimationRef.current != null) {
+      cancelAnimationFrame(zoomAnimationRef.current);
+    }
+    const duration = 380;
+    const startTime = performance.now();
+    const stage = stageRef.current;
+    const tick = (now: number) => {
+      const t = Math.min((now - startTime) / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 4);
+      const scale = from.scale + (to.scale - from.scale) * eased;
+      const x = from.x + (to.x - from.x) * eased;
+      const y = from.y + (to.y - from.y) * eased;
+      if (stage) {
+        stage.scaleX(scale);
+        stage.scaleY(scale);
+        stage.position({ x, y });
+        setStageScale(scale);
+        setStagePosition({ x, y });
+      }
+      if (t < 1) {
+        zoomAnimationRef.current = requestAnimationFrame(tick);
+      } else {
+        zoomAnimationRef.current = null;
+        onComplete?.();
+      }
+    };
+    zoomAnimationRef.current = requestAnimationFrame(tick);
+  }, []);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
         e.preventDefault();
         setIsSpacePressed(true);
       }
-      if (e.code === 'Escape') setZoomedId(null);
+      if (e.code === 'Escape' && zoomedId) {
+        if (zoomAnimationRef.current != null) {
+          cancelAnimationFrame(zoomAnimationRef.current);
+          zoomAnimationRef.current = null;
+        }
+        const pre = preZoomViewRef.current;
+        if (pre) {
+          animateView(
+            { scale: stageScale, x: stagePosition.x, y: stagePosition.y },
+            { scale: pre.scale, x: pre.x, y: pre.y },
+            () => setZoomedId(null)
+          );
+        } else {
+          setZoomedId(null);
+        }
+      }
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
@@ -274,7 +469,7 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, []);
+  }, [zoomedId, stageScale, stagePosition, animateView]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -315,6 +510,9 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
       y: addToFolder ? 0 : 100 + Math.floor((startIndex + i) / 3) * (GRID_CONFIG.imageMaxSize + GRID_CONFIG.imageGap),
       width: item.width,
       height: item.height,
+      // Store original dimensions for when image is removed from folder
+      originalWidth: item.width,
+      originalHeight: item.height,
       folderId: addToFolder ? folderId : undefined,
       curves: JSON.parse(JSON.stringify(DEFAULT_CURVES)),
     }));
@@ -344,7 +542,8 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
         folderImgs,
         targetFolder.x,
         targetFolder.y,
-        targetFolder.width
+        targetFolder.width,
+        targetFolder.height
       );
       return next.map((im) => {
         const r = reflowed.find((x) => x.id === im.id);
@@ -360,7 +559,7 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
       ACCEPT.split(',').some((t) => f.type === t.trim())
     );
     if (files.length === 0) return;
-    const toAdd = files.slice(0, MAX_PHOTOS - sandboxImages.length);
+    const toAdd = files;
     if (toAdd.length === 0) return;
 
     const createFolder = sandboxFolders.length === 0 && toAdd.length > 0;
@@ -396,7 +595,7 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
     );
     e.target.value = '';
     if (files.length === 0) return;
-    const toAdd = files.slice(0, MAX_PHOTOS - sandboxImages.length);
+    const toAdd = files;
     if (toAdd.length === 0) return;
 
     const createFolder = sandboxFolders.length === 0 && toAdd.length > 0;
@@ -424,6 +623,46 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
     });
   }, [sandboxImages.length, sandboxFolders, addImagesToSandbox]);
 
+  // Handle double-click to zoom into image
+  const handleImageDoubleClick = useCallback((image: SandboxImage) => {
+    const imgW = image.width;
+    const imgH = image.height;
+    const centerX = image.x + imgW / 2;
+    const centerY = image.y + imgH / 2;
+
+    if (zoomedId === image.id) {
+      // Zoom back out
+      const pre = preZoomViewRef.current;
+      if (pre) {
+        animateView(
+          { scale: stageScale, x: stagePosition.x, y: stagePosition.y },
+          { scale: pre.scale, x: pre.x, y: pre.y },
+          () => setZoomedId(null)
+        );
+      } else {
+        setZoomedId(null);
+      }
+      return;
+    }
+
+    // Zoom in: fit image to ~90% of viewport with padding
+    const padding = 0.9;
+    const targetScale = Math.min(
+      (dimensions.width * padding) / imgW,
+      (dimensions.height * padding) / imgH,
+      20
+    );
+    const targetX = dimensions.width / 2 - centerX * targetScale;
+    const targetY = dimensions.height / 2 - centerY * targetScale;
+
+    preZoomViewRef.current = { scale: stageScale, x: stagePosition.x, y: stagePosition.y };
+    animateView(
+      { scale: stageScale, x: stagePosition.x, y: stagePosition.y },
+      { scale: targetScale, x: targetX, y: targetY },
+      () => setZoomedId(image.id)
+    );
+  }, [zoomedId, stageScale, stagePosition, dimensions.width, dimensions.height, animateView]);
+
   const handleWheel = useCallback((e: Konva.KonvaEventObject<WheelEvent>) => {
     if (!e.evt.ctrlKey && !e.evt.metaKey) return;
     e.evt.preventDefault();
@@ -441,51 +680,203 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
       x: pointer.x - mousePointTo.x * clamped,
       y: pointer.y - mousePointTo.y * clamped,
     });
-    setZoomedId(null);
-  }, []);
-
-  const getSnappedPositionInFolder = useCallback((img: SandboxImage, x: number, y: number, folder: SandboxFolder): { x: number; y: number } | null => {
-    const folderImages = sandboxImages.filter((i) => i.folderId === folder.id);
-    if (folderImages.length > 3) return null; // Use grid snapping for >3 images
-    
-    const { folderPadding, imageMaxSize } = GRID_CONFIG;
-    const contentStartX = folder.x + folderPadding;
-    const contentStartY = folder.y + LABEL_HEIGHT + folderPadding;
-    const contentWidth = folder.width - folderPadding * 2;
-    const slotGap = 8;
-    const slotWidth = (contentWidth - slotGap * 2) / 3; // Always 3 slots
-    
-    // Calculate slot centers
-    const slotCenters: number[] = [];
-    for (let i = 0; i < 3; i++) {
-      const slotLeft = contentStartX + i * (slotWidth + slotGap);
-      slotCenters.push(slotLeft + slotWidth / 2);
-    }
-    
-    // Find nearest slot
-    const dropCenterX = x + img.width / 2;
-    let nearestSlotIndex = 0;
-    let minDist = Math.abs(dropCenterX - slotCenters[0]);
-    for (let i = 1; i < 3; i++) {
-      const dist = Math.abs(dropCenterX - slotCenters[i]);
-      if (dist < minDist) {
-        minDist = dist;
-        nearestSlotIndex = i;
+    if (zoomedId) {
+      const pre = preZoomViewRef.current;
+      if (pre) {
+        animateView(
+          { scale: clamped, x: pointer.x - mousePointTo.x * clamped, y: pointer.y - mousePointTo.y * clamped },
+          { scale: pre.scale, x: pre.x, y: pre.y },
+          () => setZoomedId(null)
+        );
+      } else {
+        setZoomedId(null);
       }
     }
+  }, [zoomedId, animateView]);
+
+  // Handle real-time snapping during drag (same as main app)
+  // Images MUST snap to one of exactly 3 positions - no free movement allowed
+  const handleImageDragMove = useCallback((e: Konva.KonvaEventObject<DragEvent>) => {
+    const node = e.target;
+    const currentX = node.x();
+    const currentY = node.y();
+    const currentImg = sandboxImages.find((i) => i.id === node.id());
+    if (!currentImg) return;
+
+    const currentCenterX = currentX + currentImg.width / 2;
+    const currentCenterY = currentY + currentImg.height / 2;
+
+    // Detect which folder is being hovered (check all folders, not just current folder)
+    let targetFolderId: string | undefined = undefined;
+    let targetFolder: SandboxFolder | undefined = undefined;
     
-    // Calculate snapped position for nearest slot
-    const slotLeft = contentStartX + nearestSlotIndex * (slotWidth + slotGap);
-    const maxW = Math.min(slotWidth - slotGap, imageMaxSize);
-    const maxH = Math.min(imageMaxSize - slotGap, imageMaxSize);
-    const scale = Math.min(maxW / img.width, maxH / img.height, 1);
-    const w = img.width * scale;
-    const h = img.height * scale;
-    const snappedX = slotLeft + (slotWidth - w) / 2;
-    const snappedY = contentStartY + (imageMaxSize - h) / 2;
-    
-    return { x: snappedX, y: snappedY };
-  }, [sandboxImages]);
+      for (const folder of sandboxFolders) {
+        const contentHeight = getFolderBorderHeight(folder.imageIds.length, folder.width, folder.height);
+        const top = folder.y + LABEL_HEIGHT;
+        const bottom = folder.y + LABEL_HEIGHT + contentHeight;
+        const left = folder.x;
+        const right = folder.x + folder.width;
+      
+      if (currentCenterX >= left && currentCenterX <= right &&
+          currentCenterY >= top && currentCenterY <= bottom) {
+        targetFolderId = folder.id;
+        targetFolder = folder;
+        break;
+      }
+    }
+
+    // If image is over a folder (whether already in it or being dragged into it), snap to grid positions
+    if (targetFolderId && targetFolder) {
+      const { folderPadding, imageMaxSize } = GRID_CONFIG;
+      const contentStartX = targetFolder.x + folderPadding;
+      const contentStartY = targetFolder.y + LABEL_HEIGHT + folderPadding;
+      
+      // Calculate dynamic columns based on folder width (same as main app)
+      const cols = calculateColsFromWidth(targetFolder.width);
+      const layoutMode = getFolderLayoutMode(targetFolder.width);
+      
+      // Calculate which cell the drag position corresponds to
+      const relativeX = currentX - contentStartX;
+      const relativeY = currentY - contentStartY;
+      const targetCol = Math.max(0, Math.min(cols - 1, Math.floor(relativeX / CELL_SIZE)));
+      
+      // Calculate max rows based on folder height
+      let maxRows = Infinity;
+      if (targetFolder.height != null) {
+        const contentHeight = targetFolder.height - LABEL_HEIGHT;
+        const availableContentHeight = contentHeight - (2 * folderPadding);
+        maxRows = Math.max(1, Math.floor(availableContentHeight / CELL_SIZE));
+      }
+      
+      const targetRow = Math.max(0, Math.min(maxRows - 1, Math.floor(relativeY / CELL_SIZE)));
+      
+      // Get other images in folder
+      const otherFolderImages = sandboxImages.filter(img => 
+        targetFolder!.imageIds.includes(img.id) && img.id !== currentImg.id
+      );
+      
+      // Calculate which cells each other image occupies (row, col pairs)
+      const occupiedCells = new Set<string>();
+      otherFolderImages.forEach((otherImg) => {
+        const otherImgRelativeX = otherImg.x - contentStartX;
+        const otherImgRelativeY = otherImg.y - contentStartY;
+        const otherImgCol = Math.floor(otherImgRelativeX / CELL_SIZE);
+        const otherImgRow = Math.floor(otherImgRelativeY / CELL_SIZE);
+        if (otherImgCol >= 0 && otherImgCol < cols && otherImgRow >= 0 && otherImgRow < maxRows) {
+          occupiedCells.add(`${otherImgRow},${otherImgCol}`);
+        }
+      });
+      
+      // Calculate current image's cell (if it's already in a valid spot)
+      const currentImgRelativeX = currentImg.x - contentStartX;
+      const currentImgRelativeY = currentImg.y - contentStartY;
+      const currentImgCol = Math.floor(currentImgRelativeX / CELL_SIZE);
+      const currentImgRow = Math.floor(currentImgRelativeY / CELL_SIZE);
+      const isInValidSpot = currentImgCol >= 0 && currentImgCol < cols && currentImgRow >= 0 && currentImgRow < maxRows;
+      
+      let swapX: number | undefined;
+      let swapY: number | undefined;
+      let swapImgId: string | undefined;
+      let finalCol = targetCol;
+      let finalRow = targetRow;
+      
+      // If target cell is occupied, swap positions or find empty cell
+      const targetCellKey = `${targetRow},${targetCol}`;
+      if (occupiedCells.has(targetCellKey)) {
+        if (isInValidSpot) {
+          // Swap: move occupied image to current image's spot
+          const currentCellKey = `${currentImgRow},${currentImgCol}`;
+          const occupiedImg = otherFolderImages.find((otherImg) => {
+            const otherImgRelativeX = otherImg.x - contentStartX;
+            const otherImgRelativeY = otherImg.y - contentStartY;
+            const otherImgCol = Math.floor(otherImgRelativeX / CELL_SIZE);
+            const otherImgRow = Math.floor(otherImgRelativeY / CELL_SIZE);
+            return otherImgCol === targetCol && otherImgRow === targetRow;
+          });
+          
+          if (occupiedImg && !occupiedCells.has(currentCellKey)) {
+            const baseWidth = occupiedImg.originalWidth ?? occupiedImg.width;
+            const baseHeight = occupiedImg.originalHeight ?? occupiedImg.height;
+            const scale = Math.min(imageMaxSize / baseWidth, imageMaxSize / baseHeight, 1);
+            const swapImgWidth = baseWidth * scale;
+            const swapImgHeight = baseHeight * scale;
+            const swapOffsetX = (imageMaxSize - swapImgWidth) / 2;
+            const swapOffsetY = (imageMaxSize - swapImgHeight) / 2;
+            
+            swapX = contentStartX + currentImgCol * CELL_SIZE + swapOffsetX;
+            swapY = contentStartY + currentImgRow * CELL_SIZE + swapOffsetY;
+            swapImgId = occupiedImg.id;
+          }
+        } else {
+          // Image coming from outside folder - find nearest empty cell
+          for (let radius = 0; radius < maxRows * cols; radius++) {
+            let foundEmpty = false;
+            for (let dr = -radius; dr <= radius && !foundEmpty; dr++) {
+              for (let dc = -radius; dc <= radius && !foundEmpty; dc++) {
+                if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue;
+                const checkRow = targetRow + dr;
+                const checkCol = targetCol + dc;
+                if (checkRow >= 0 && checkRow < maxRows && checkCol >= 0 && checkCol < cols) {
+                  const checkCellKey = `${checkRow},${checkCol}`;
+                  if (!occupiedCells.has(checkCellKey)) {
+                    finalRow = checkRow;
+                    finalCol = checkCol;
+                    foundEmpty = true;
+                  }
+                }
+              }
+            }
+            if (foundEmpty) break;
+          }
+        }
+      }
+      
+      // Ensure final position is valid
+      finalCol = Math.max(0, Math.min(cols - 1, finalCol));
+      finalRow = Math.max(0, Math.min(maxRows - 1, finalRow));
+      
+      // Use original dimensions if available, otherwise use current dimensions
+      const baseWidth = currentImg.originalWidth ?? currentImg.width;
+      const baseHeight = currentImg.originalHeight ?? currentImg.height;
+      
+      // Constrain to imageMaxSize (same as main app)
+      const scale = Math.min(imageMaxSize / baseWidth, imageMaxSize / baseHeight, 1);
+      const imgWidth = baseWidth * scale;
+      const imgHeight = baseHeight * scale;
+      
+      const cellOffsetX = (imageMaxSize - imgWidth) / 2;
+      const cellOffsetY = (imageMaxSize - imgHeight) / 2;
+      
+      // Calculate exact position for the snapped cell
+      const finalX = contentStartX + finalCol * CELL_SIZE + cellOffsetX;
+      const finalY = contentStartY + finalRow * CELL_SIZE + cellOffsetY;
+      
+      // Update positions in real-time
+      setSandboxImages((prev) =>
+        prev.map((img) => {
+          if (img.id === currentImg.id) {
+            return { 
+              ...img, 
+              x: finalX, 
+              y: finalY,
+              width: imgWidth,
+              height: imgHeight,
+              folderId: targetFolderId, // Update folder assignment during drag
+              originalWidth: img.originalWidth ?? baseWidth,
+              originalHeight: img.originalHeight ?? baseHeight,
+            };
+          }
+          if (swapImgId && img.id === swapImgId && swapX !== undefined && swapY !== undefined) {
+            return { ...img, x: swapX, y: swapY };
+          }
+          return img;
+        })
+      );
+      
+      // FORCE the node position immediately - this prevents any free movement
+      node.setAttrs({ x: finalX, y: finalY });
+    }
+  }, [sandboxImages, sandboxFolders]);
 
 
   const handleImageDragEnd = useCallback((id: string, x: number, y: number) => {
@@ -498,12 +889,12 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
 
     let targetFolderId: string | undefined;
     let targetFolder: SandboxFolder | undefined;
-    for (const folder of sandboxFolders) {
-      const contentHeight = getFolderBorderHeight(folder.imageIds.length, folder.width);
-      const top = folder.y + LABEL_HEIGHT;
-      const bottom = folder.y + LABEL_HEIGHT + contentHeight;
-      const left = folder.x;
-      const right = folder.x + folder.width;
+      for (const folder of sandboxFolders) {
+        const contentHeight = getFolderBorderHeight(folder.imageIds.length, folder.width, folder.height);
+        const top = folder.y + LABEL_HEIGHT;
+        const bottom = folder.y + LABEL_HEIGHT + contentHeight;
+        const left = folder.x;
+        const right = folder.x + folder.width;
       if (centerX >= left && centerX <= right && centerY >= top && centerY <= bottom) {
         targetFolderId = folder.id;
         targetFolder = folder;
@@ -513,6 +904,10 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
 
     if (targetFolderId !== oldFolderId) {
       if (!targetFolderId && oldFolderId) {
+        // Image removed from folder - restore original size and reflow remaining images
+        const oldFolder = sandboxFolders.find(f => f.id === oldFolderId);
+        if (!oldFolder) return;
+        
         const untitledNames = sandboxFolders.filter((f) => f.name.toLowerCase().startsWith('untitled')).map((f) => f.name.toLowerCase());
         let name = 'Untitled';
         if (untitledNames.includes('untitled')) {
@@ -530,62 +925,202 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
           imageIds: [id],
           color: FOLDER_COLORS[sandboxFolders.length % FOLDER_COLORS.length],
         };
+        
+        // Remove image from old folder
+        const updatedOldFolder = { ...oldFolder, imageIds: oldFolder.imageIds.filter((i) => i !== id) };
+        
+        // Get remaining images in old folder
+        const remainingOldFolderImages = sandboxImages.filter((i) => 
+          i.folderId === oldFolderId && i.id !== id
+        );
+        
+        // Reflow remaining images in old folder
+        let reflowedOldFolderImages: SandboxImage[] = [];
+        if (remainingOldFolderImages.length > 0) {
+          reflowedOldFolderImages = reflowSandboxImagesInFolder(
+            remainingOldFolderImages,
+            oldFolder.x,
+            oldFolder.y,
+            oldFolder.width,
+            oldFolder.height
+          );
+        }
+        
+        // Reflow new folder image
+        const folderImages = sandboxImages.filter((i) => i.id === id);
+        const reflowedNewFolderImages = reflowSandboxImagesInFolder(
+          folderImages, 
+          newFolder.x, 
+          newFolder.y, 
+          newFolder.width, 
+          newFolder.height
+        );
+        
+        // Update folders: remove old folder if empty, add new folder
         const updatedFolders = sandboxFolders
-          .map((f) => (f.id === oldFolderId ? { ...f, imageIds: f.imageIds.filter((i) => i !== id) } : f))
+          .map((f) => (f.id === oldFolderId ? updatedOldFolder : f))
           .filter((f) => f.imageIds.length > 0)
           .concat(newFolder);
-        const folderImages = sandboxImages.filter((i) => i.id === id);
-        const reflowed = reflowSandboxImagesInFolder(folderImages, newFolder.x, newFolder.y, newFolder.width);
-        const updatedImages = sandboxImages.map((i) => (i.id === id ? { ...reflowed[0], folderId: newFolderId } : i));
+        
+        // Update images: reflow old folder images, add new folder image
+        const updatedImages = sandboxImages.map((i) => {
+          if (i.id === id) {
+            // Image moved to new folder
+            return { ...reflowedNewFolderImages[0], folderId: newFolderId };
+          }
+          // Reflow remaining images in old folder
+          if (i.folderId === oldFolderId) {
+            const reflowed = reflowedOldFolderImages.find(r => r.id === i.id);
+            if (reflowed) {
+              return {
+                ...reflowed,
+                // Preserve original dimensions if available
+                originalWidth: i.originalWidth ?? reflowed.width,
+                originalHeight: i.originalHeight ?? reflowed.height,
+              };
+            }
+          }
+          return i;
+        });
+        
         setSandboxFolders(updatedFolders);
         setSandboxImages(updatedImages);
         return;
       }
 
       if (targetFolderId && targetFolder) {
-        // When moving image INTO a folder, ALWAYS snap to one of exactly 3 positions
-        const contentStartX = targetFolder.x + GRID_CONFIG.folderPadding;
-        const contentStartY = targetFolder.y + LABEL_HEIGHT + GRID_CONFIG.folderPadding;
+        // When moving image INTO a folder, snap to nearest grid position based on release position
+        // TypeScript guard: ensure targetFolder is defined
+        const currentTargetFolder = targetFolder;
+        const contentStartX = currentTargetFolder.x + GRID_CONFIG.folderPadding;
+        const contentStartY = currentTargetFolder.y + LABEL_HEIGHT + GRID_CONFIG.folderPadding;
         
-        // Sandbox folders always have exactly 3 column positions
-        const cols = 3;
-        const row = 0;
+        // Calculate dynamic columns based on folder width (same as main app)
+        const cols = calculateColsFromWidth(currentTargetFolder.width);
         
-        // Calculate the exact center X for each of the 3 spots
-        const spotCenterXs: number[] = [];
-        for (let col = 0; col < cols; col++) {
-          const spotCenterX = contentStartX + col * CELL_SIZE + GRID_CONFIG.imageMaxSize / 2;
-          spotCenterXs.push(spotCenterX);
+        // Calculate max rows based on folder height
+        let maxRows = Infinity;
+        if (currentTargetFolder.height != null) {
+          const contentHeight = currentTargetFolder.height - LABEL_HEIGHT;
+          const availableContentHeight = contentHeight - (2 * GRID_CONFIG.folderPadding);
+          maxRows = Math.max(1, Math.floor(availableContentHeight / CELL_SIZE));
         }
         
-        // Find which of the 3 spots is closest to the image's center
-        // Use image center (x + width/2) to determine nearest spot based on X
-        // Y is ALWAYS snapped to row 0 regardless of drop Y position
-        const imageCenterX = x + (img.width || GRID_CONFIG.imageMaxSize) / 2;
-        let nearestSpotIndex = 0;
-        let minDist = Math.abs(imageCenterX - spotCenterXs[0]);
-        for (let spot = 1; spot < cols; spot++) {
-          const dist = Math.abs(imageCenterX - spotCenterXs[spot]);
-          if (dist < minDist) {
-            minDist = dist;
-            nearestSpotIndex = spot;
+        // Calculate which cell the release position corresponds to
+        const relativeX = x - contentStartX;
+        const relativeY = y - contentStartY;
+        const targetCol = Math.max(0, Math.min(cols - 1, Math.floor(relativeX / CELL_SIZE)));
+        const targetRow = Math.max(0, Math.min(maxRows - 1, Math.floor(relativeY / CELL_SIZE)));
+        
+        // Get other images in target folder (excluding the one being moved)
+        const otherFolderImages = sandboxImages.filter(img => 
+          img.folderId === targetFolderId && img.id !== id
+        );
+        
+        // Calculate which cells each other image occupies (row, col pairs)
+        const occupiedCells = new Set<string>();
+        otherFolderImages.forEach((otherImg) => {
+          const otherImgRelativeX = otherImg.x - contentStartX;
+          const otherImgRelativeY = otherImg.y - contentStartY;
+          const otherImgCol = Math.floor(otherImgRelativeX / CELL_SIZE);
+          const otherImgRow = Math.floor(otherImgRelativeY / CELL_SIZE);
+          if (otherImgCol >= 0 && otherImgCol < cols && otherImgRow >= 0 && otherImgRow < maxRows) {
+            occupiedCells.add(`${otherImgRow},${otherImgCol}`);
+          }
+        });
+        
+        // Calculate current image's cell (if it's already in a valid spot in the old folder)
+        let currentImgCol = -1;
+        let currentImgRow = -1;
+        if (oldFolderId) {
+          const oldFolder = sandboxFolders.find(f => f.id === oldFolderId);
+          if (oldFolder) {
+            const oldContentStartX = oldFolder.x + GRID_CONFIG.folderPadding;
+            const oldContentStartY = oldFolder.y + LABEL_HEIGHT + GRID_CONFIG.folderPadding;
+            const currentImgRelativeX = img.x - oldContentStartX;
+            const currentImgRelativeY = img.y - oldContentStartY;
+            currentImgCol = Math.floor(currentImgRelativeX / CELL_SIZE);
+            currentImgRow = Math.floor(currentImgRelativeY / CELL_SIZE);
+          }
+        }
+        const isInValidSpot = currentImgCol >= 0 && currentImgRow >= 0;
+        
+        let swapX: number | undefined;
+        let swapY: number | undefined;
+        let swapImgId: string | undefined;
+        let finalCol = targetCol;
+        let finalRow = targetRow;
+        
+        // If target cell is occupied, swap positions or find empty cell
+        const targetCellKey = `${targetRow},${targetCol}`;
+        if (occupiedCells.has(targetCellKey)) {
+          if (isInValidSpot && oldFolderId === targetFolderId) {
+            // Swap: move occupied image to current image's spot
+            const currentCellKey = `${currentImgRow},${currentImgCol}`;
+            const occupiedImg = otherFolderImages.find((otherImg) => {
+              const otherImgRelativeX = otherImg.x - contentStartX;
+              const otherImgRelativeY = otherImg.y - contentStartY;
+              const otherImgCol = Math.floor(otherImgRelativeX / CELL_SIZE);
+              const otherImgRow = Math.floor(otherImgRelativeY / CELL_SIZE);
+              return otherImgCol === targetCol && otherImgRow === targetRow;
+            });
+            
+            if (occupiedImg && !occupiedCells.has(currentCellKey)) {
+              const baseWidth = occupiedImg.originalWidth ?? occupiedImg.width;
+              const baseHeight = occupiedImg.originalHeight ?? occupiedImg.height;
+              const scale = Math.min(GRID_CONFIG.imageMaxSize / baseWidth, GRID_CONFIG.imageMaxSize / baseHeight, 1);
+              const swapImgWidth = baseWidth * scale;
+              const swapImgHeight = baseHeight * scale;
+              const swapOffsetX = (GRID_CONFIG.imageMaxSize - swapImgWidth) / 2;
+              const swapOffsetY = (GRID_CONFIG.imageMaxSize - swapImgHeight) / 2;
+              
+              swapX = contentStartX + currentImgCol * CELL_SIZE + swapOffsetX;
+              swapY = contentStartY + currentImgRow * CELL_SIZE + swapOffsetY;
+              swapImgId = occupiedImg.id;
+            }
+          } else {
+            // Image coming from outside folder or different folder - find nearest empty cell
+            for (let radius = 0; radius < maxRows * cols; radius++) {
+              let foundEmpty = false;
+              for (let dr = -radius; dr <= radius && !foundEmpty; dr++) {
+                for (let dc = -radius; dc <= radius && !foundEmpty; dc++) {
+                  if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue;
+                  const checkRow = targetRow + dr;
+                  const checkCol = targetCol + dc;
+                  if (checkRow >= 0 && checkRow < maxRows && checkCol >= 0 && checkCol < cols) {
+                    const checkCellKey = `${checkRow},${checkCol}`;
+                    if (!occupiedCells.has(checkCellKey)) {
+                      finalRow = checkRow;
+                      finalCol = checkCol;
+                      foundEmpty = true;
+                    }
+                  }
+                }
+              }
+              if (foundEmpty) break;
+            }
           }
         }
         
-        // ALWAYS snap to this nearest spot (one of exactly 3 positions: 0, 1, or 2)
-        // Y will always be snapped to row 0 (single row layout)
-        const targetCol = nearestSpotIndex;
+        // Ensure final position is valid
+        finalCol = Math.max(0, Math.min(cols - 1, finalCol));
+        finalRow = Math.max(0, Math.min(maxRows - 1, finalRow));
         
-        const imgW = Math.min(img.width, GRID_CONFIG.imageMaxSize);
-        const imgH = Math.min(img.height, GRID_CONFIG.imageMaxSize);
+        // Preserve original dimensions if not already set (same as main app)
+        const baseWidth = img.originalWidth ?? img.width;
+        const baseHeight = img.originalHeight ?? img.height;
+        
+        // Constrain to imageMaxSize (same as main app)
+        const scale = Math.min(GRID_CONFIG.imageMaxSize / baseWidth, GRID_CONFIG.imageMaxSize / baseHeight, 1);
+        const imgW = baseWidth * scale;
+        const imgH = baseHeight * scale;
+        
         const cellOffsetX = (GRID_CONFIG.imageMaxSize - imgW) / 2;
         const cellOffsetY = (GRID_CONFIG.imageMaxSize - imgH) / 2;
         
-        // Calculate exact position for the snapped spot
-        // X snaps to one of 3 column positions, Y ALWAYS snaps to row 0
-        // This ensures that no matter where you drop (X, Y), it snaps to one of 3 exact positions
-        const newX = contentStartX + targetCol * CELL_SIZE + cellOffsetX;
-        const newY = contentStartY + row * CELL_SIZE + cellOffsetY; // Always row 0, regardless of drop Y
+        // Calculate exact position for the snapped cell
+        const finalX = contentStartX + finalCol * CELL_SIZE + cellOffsetX;
+        const finalY = contentStartY + finalRow * CELL_SIZE + cellOffsetY;
 
         const updatedFolders = sandboxFolders.map((f) => {
           if (f.id === oldFolderId) return { ...f, imageIds: f.imageIds.filter((i) => i !== id) };
@@ -593,53 +1128,109 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
           return f;
         }).filter((f) => f.imageIds.length > 0);
 
-        const movedImg = { ...img, x: newX, y: newY, folderId: targetFolderId };
-        const targetFolderImages = sandboxImages
-          .filter((i) => (i.folderId === targetFolderId && i.id !== id) || i.id === id)
-          .map((i) => (i.id === id ? movedImg : i));
-        
-        // Reflow all images in target folder to ensure they're in correct 3-position layout
-        const reflowed = reflowSandboxImagesInFolder(
-          targetFolderImages,
-          targetFolder.x,
-          targetFolder.y,
-          targetFolder.width
+        // Reflow remaining images in old folder (if moving between folders)
+        const oldFolder = sandboxFolders.find((f) => f.id === oldFolderId);
+        const remainingOldFolderImages = sandboxImages.filter((im) => 
+          im.folderId === oldFolderId && im.id !== id
         );
+        let reflowedOldFolderImages: SandboxImage[] = [];
+        if (oldFolder && remainingOldFolderImages.length > 0 && oldFolderId !== targetFolderId) {
+          reflowedOldFolderImages = reflowSandboxImagesInFolder(
+            remainingOldFolderImages,
+            oldFolder.x,
+            oldFolder.y,
+            oldFolder.width,
+            oldFolder.height
+          );
+        }
         
-        // Find the final snapped position for the moved image
-        const reflowedImg = reflowed.find((r) => r.id === id);
-        const finalX = reflowedImg ? reflowedImg.x : newX;
-        const finalY = reflowedImg ? reflowedImg.y : newY;
+        // Get target folder images (including the moved one) for reflow
+        // Use the targetFolder that was already found above (don't redeclare)
+        const targetFolderImages = sandboxImages.filter((im) => 
+          im.folderId === targetFolderId || im.id === id
+        );
+        let reflowedTargetFolderImages: SandboxImage[] = [];
+        if (currentTargetFolder && targetFolderImages.length > 0) {
+          // Create a temporary image object for the moved image with its new position
+          const movedImageForReflow = {
+            ...img,
+            x: finalX,
+            y: finalY,
+            width: imgW,
+            height: imgH,
+            folderId: targetFolderId,
+          };
+          const imagesToReflow = targetFolderImages.map((im) => 
+            im.id === id ? movedImageForReflow : im
+          );
+          reflowedTargetFolderImages = reflowSandboxImagesInFolder(
+            imagesToReflow,
+            currentTargetFolder.x,
+            currentTargetFolder.y,
+            currentTargetFolder.width,
+            currentTargetFolder.height
+          );
+        }
         
-        // Update Konva node position FIRST to prevent visual glitch
+        // Update images - place moved image, reflow folders
+        const updatedImages = sandboxImages.map((i) => {
+          if (i.id === id) {
+            // Moved image - use reflowed position from target folder
+            const reflowed = reflowedTargetFolderImages.find(r => r.id === id);
+            if (reflowed) {
+              return {
+                ...reflowed,
+                originalWidth: img.originalWidth ?? baseWidth,
+                originalHeight: img.originalHeight ?? baseHeight,
+              };
+            }
+            // Fallback to calculated position
+            return { 
+              ...img, 
+              x: finalX, 
+              y: finalY, 
+              width: imgW, 
+              height: imgH,
+              folderId: targetFolderId,
+              originalWidth: img.originalWidth ?? baseWidth,
+              originalHeight: img.originalHeight ?? baseHeight,
+            };
+          }
+          if (swapImgId && i.id === swapImgId && swapX !== undefined && swapY !== undefined) {
+            return { ...i, x: swapX, y: swapY };
+          }
+          // Reflow remaining images in old folder
+          if (i.folderId === oldFolderId && oldFolderId !== targetFolderId) {
+            const reflowed = reflowedOldFolderImages.find(r => r.id === i.id);
+            if (reflowed) {
+              return {
+                ...reflowed,
+                originalWidth: i.originalWidth ?? reflowed.width,
+                originalHeight: i.originalHeight ?? reflowed.height,
+              };
+            }
+          }
+          // Reflow images in target folder (excluding the moved one, which is handled above)
+          if (i.folderId === targetFolderId && i.id !== id) {
+            const reflowed = reflowedTargetFolderImages.find(r => r.id === i.id);
+            if (reflowed) {
+              return {
+                ...reflowed,
+                originalWidth: i.originalWidth ?? reflowed.width,
+                originalHeight: i.originalHeight ?? reflowed.height,
+              };
+            }
+          }
+          return i;
+        });
+        
+        // Update Konva node position
         const node = imageNodeRefs.current[id];
         if (node) {
           node.x(finalX);
           node.y(finalY);
         }
         
-        const updatedImages = sandboxImages.map((i) => {
-          if (i.id === id) {
-            // Use reflowed position to ensure it's in one of the 3 spots
-            return reflowedImg ? { ...movedImg, x: reflowedImg.x, y: reflowedImg.y, width: reflowedImg.width, height: reflowedImg.height } : movedImg;
-          }
-          if (i.folderId === targetFolderId) {
-            const r = reflowed.find((x) => x.id === i.id);
-            return r ? r : i;
-          }
-          if (i.folderId === oldFolderId) {
-            const remaining = sandboxImages.filter((im) => im.folderId === oldFolderId && im.id !== id);
-            const reflowedOld = reflowSandboxImagesInFolder(
-              remaining,
-              sandboxFolders.find((f) => f.id === oldFolderId)!.x,
-              sandboxFolders.find((f) => f.id === oldFolderId)!.y,
-              sandboxFolders.find((f) => f.id === oldFolderId)!.width
-            );
-            const rr = reflowedOld.find((x) => x.id === i.id);
-            return rr ? rr : i;
-          }
-          return i;
-        });
         setSandboxFolders(updatedFolders);
         setSandboxImages(updatedImages);
         return;
@@ -647,131 +1238,167 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
     }
 
     if (targetFolderId && targetFolder && targetFolderId === oldFolderId) {
-      // ALWAYS snap to one of exactly 3 positions when dropped in folder - NO EXCEPTIONS
-      const folderImages = sandboxImages.filter((i) => i.folderId === targetFolderId);
-      const { folderPadding, imageMaxSize } = GRID_CONFIG;
-      const contentStartX = targetFolder.x + folderPadding;
-      const contentStartY = targetFolder.y + LABEL_HEIGHT + folderPadding;
+      // Image dragged within same folder - recalculate nearest position based on release position
+      const contentStartX = targetFolder.x + GRID_CONFIG.folderPadding;
+      const contentStartY = targetFolder.y + LABEL_HEIGHT + GRID_CONFIG.folderPadding;
       
-      // Sandbox folders always have exactly 3 column positions (0, 1, 2)
-      const cols = 3;
-      const row = 0;
+      // Calculate dynamic columns based on folder width (same as main app)
+      const cols = calculateColsFromWidth(targetFolder.width);
       
-      // Calculate the exact center X for each of the 3 spots
-      const spotCenterXs: number[] = [];
-      for (let col = 0; col < cols; col++) {
-        const spotCenterX = contentStartX + col * CELL_SIZE + imageMaxSize / 2;
-        spotCenterXs.push(spotCenterX);
+      // Calculate max rows based on folder height
+      let maxRows = Infinity;
+      if (targetFolder.height != null) {
+        const contentHeight = targetFolder.height - LABEL_HEIGHT;
+        const availableContentHeight = contentHeight - (2 * GRID_CONFIG.folderPadding);
+        maxRows = Math.max(1, Math.floor(availableContentHeight / CELL_SIZE));
       }
       
-      // Find which of the 3 spots is closest to the image's center
-      // Use image center (x + width/2) to determine nearest spot based on X
-      // Y is ALWAYS snapped to row 0 regardless of drop Y position
-      const imageCenterX = x + (img.width || imageMaxSize) / 2;
-      let nearestSpotIndex = 0;
-      let minDist = Math.abs(imageCenterX - spotCenterXs[0]);
-      for (let spot = 1; spot < cols; spot++) {
-        const dist = Math.abs(imageCenterX - spotCenterXs[spot]);
-        if (dist < minDist) {
-          minDist = dist;
-          nearestSpotIndex = spot;
-        }
-      }
-      
-      // ALWAYS snap to this nearest spot (one of exactly 3 positions: 0, 1, or 2)
-      // Y will always be snapped to row 0 (single row layout)
-      const targetCol = nearestSpotIndex;
+      // Calculate which cell the release position corresponds to
+      const relativeX = x - contentStartX;
+      const relativeY = y - contentStartY;
+      const targetCol = Math.max(0, Math.min(cols - 1, Math.floor(relativeX / CELL_SIZE)));
+      const targetRow = Math.max(0, Math.min(maxRows - 1, Math.floor(relativeY / CELL_SIZE)));
       
       // Get other images in folder (excluding dragged one)
-      const otherImages = folderImages.filter((i) => i.id !== id);
+      const otherFolderImages = sandboxImages.filter(img => 
+        img.folderId === targetFolderId && img.id !== id
+      );
       
-      // Calculate which of the 3 spots each other image occupies
-      const occupiedSpots = new Set<number>();
-      otherImages.forEach((otherImg) => {
+      // Calculate which cells each other image occupies (row, col pairs)
+      const occupiedCells = new Set<string>();
+      otherFolderImages.forEach((otherImg) => {
         const otherImgRelativeX = otherImg.x - contentStartX;
+        const otherImgRelativeY = otherImg.y - contentStartY;
         const otherImgCol = Math.floor(otherImgRelativeX / CELL_SIZE);
-        // Clamp to valid range [0, 2]
-        if (otherImgCol >= 0 && otherImgCol < cols) {
-          occupiedSpots.add(otherImgCol);
+        const otherImgRow = Math.floor(otherImgRelativeY / CELL_SIZE);
+        if (otherImgCol >= 0 && otherImgCol < cols && otherImgRow >= 0 && otherImgRow < maxRows) {
+          occupiedCells.add(`${otherImgRow},${otherImgCol}`);
         }
       });
       
-      // Calculate current image's spot (if it's already in a valid spot)
+      // Calculate current image's cell
       const currentImgRelativeX = img.x - contentStartX;
+      const currentImgRelativeY = img.y - contentStartY;
       const currentImgCol = Math.floor(currentImgRelativeX / CELL_SIZE);
-      const isInValidSpot = currentImgCol >= 0 && currentImgCol < cols;
+      const currentImgRow = Math.floor(currentImgRelativeY / CELL_SIZE);
+      const isInValidSpot = currentImgCol >= 0 && currentImgCol < cols && currentImgRow >= 0 && currentImgRow < maxRows;
       
       let swapX: number | undefined;
       let swapY: number | undefined;
       let swapImgId: string | undefined;
       let finalCol = targetCol;
+      let finalRow = targetRow;
       
-      // If target spot is occupied, swap positions
-      if (occupiedSpots.has(targetCol)) {
+      // If target cell is occupied, swap positions or find empty cell
+      const targetCellKey = `${targetRow},${targetCol}`;
+      if (occupiedCells.has(targetCellKey)) {
         if (isInValidSpot) {
           // Swap: move occupied image to current image's spot
-          const occupiedImg = otherImages.find((otherImg) => {
+          const currentCellKey = `${currentImgRow},${currentImgCol}`;
+          const occupiedImg = otherFolderImages.find((otherImg) => {
             const otherImgRelativeX = otherImg.x - contentStartX;
+            const otherImgRelativeY = otherImg.y - contentStartY;
             const otherImgCol = Math.floor(otherImgRelativeX / CELL_SIZE);
-            return otherImgCol >= 0 && otherImgCol < cols && otherImgCol === targetCol;
+            const otherImgRow = Math.floor(otherImgRelativeY / CELL_SIZE);
+            return otherImgCol === targetCol && otherImgRow === targetRow;
           });
           
-          if (occupiedImg) {
-            const swapImgWidth = Math.min(occupiedImg.width, imageMaxSize);
-            const swapImgHeight = Math.min(occupiedImg.height, imageMaxSize);
-            const swapOffsetX = (imageMaxSize - swapImgWidth) / 2;
-            const swapOffsetY = (imageMaxSize - swapImgHeight) / 2;
+          if (occupiedImg && !occupiedCells.has(currentCellKey)) {
+            const baseWidth = occupiedImg.originalWidth ?? occupiedImg.width;
+            const baseHeight = occupiedImg.originalHeight ?? occupiedImg.height;
+            const scale = Math.min(GRID_CONFIG.imageMaxSize / baseWidth, GRID_CONFIG.imageMaxSize / baseHeight, 1);
+            const swapImgWidth = baseWidth * scale;
+            const swapImgHeight = baseHeight * scale;
+            const swapOffsetX = (GRID_CONFIG.imageMaxSize - swapImgWidth) / 2;
+            const swapOffsetY = (GRID_CONFIG.imageMaxSize - swapImgHeight) / 2;
             
             swapX = contentStartX + currentImgCol * CELL_SIZE + swapOffsetX;
-            swapY = contentStartY + row * CELL_SIZE + swapOffsetY;
+            swapY = contentStartY + currentImgRow * CELL_SIZE + swapOffsetY;
             swapImgId = occupiedImg.id;
           }
         } else {
-          // Image coming from outside folder - find nearest empty spot
-          for (let checkCol = 0; checkCol < cols; checkCol++) {
-            if (!occupiedSpots.has(checkCol)) {
-              finalCol = checkCol;
-              break;
+          // Find nearest empty cell
+          for (let radius = 0; radius < maxRows * cols; radius++) {
+            let foundEmpty = false;
+            for (let dr = -radius; dr <= radius && !foundEmpty; dr++) {
+              for (let dc = -radius; dc <= radius && !foundEmpty; dc++) {
+                if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue;
+                const checkRow = targetRow + dr;
+                const checkCol = targetCol + dc;
+                if (checkRow >= 0 && checkRow < maxRows && checkCol >= 0 && checkCol < cols) {
+                  const checkCellKey = `${checkRow},${checkCol}`;
+                  if (!occupiedCells.has(checkCellKey)) {
+                    finalRow = checkRow;
+                    finalCol = checkCol;
+                    foundEmpty = true;
+                  }
+                }
+              }
             }
+            if (foundEmpty) break;
           }
         }
       }
       
-      // Calculate final position - ALWAYS one of exactly 3 spots (0, 1, or 2)
-      // Ensure finalCol is always 0, 1, or 2
-      finalCol = Math.max(0, Math.min(2, finalCol));
+      // Ensure final position is valid
+      finalCol = Math.max(0, Math.min(cols - 1, finalCol));
+      finalRow = Math.max(0, Math.min(maxRows - 1, finalRow));
       
-      const imgWidth = Math.min(img.width, imageMaxSize);
-      const imgHeight = Math.min(img.height, imageMaxSize);
-      const cellOffsetX = (imageMaxSize - imgWidth) / 2;
-      const cellOffsetY = (imageMaxSize - imgHeight) / 2;
+      // Use original dimensions if available
+      const baseWidth = img.originalWidth ?? img.width;
+      const baseHeight = img.originalHeight ?? img.height;
       
-      // Calculate exact position for spot finalCol (one of 0, 1, or 2)
+      // Constrain to imageMaxSize
+      const scale = Math.min(GRID_CONFIG.imageMaxSize / baseWidth, GRID_CONFIG.imageMaxSize / baseHeight, 1);
+      const imgW = baseWidth * scale;
+      const imgH = baseHeight * scale;
+      
+      const cellOffsetX = (GRID_CONFIG.imageMaxSize - imgW) / 2;
+      const cellOffsetY = (GRID_CONFIG.imageMaxSize - imgH) / 2;
+      
+      // Calculate exact position for the snapped cell
       const finalX = contentStartX + finalCol * CELL_SIZE + cellOffsetX;
-      const finalY = contentStartY + row * CELL_SIZE + cellOffsetY;
+      const finalY = contentStartY + finalRow * CELL_SIZE + cellOffsetY;
       
-      // Update Konva node position FIRST to prevent visual glitch
+      // Update Konva node position
       const node = imageNodeRefs.current[id];
       if (node) {
         node.x(finalX);
         node.y(finalY);
       }
       
-      // Then update state to match
-      const updatedImages = sandboxImages.map((i) => {
+      // Update state
+      setSandboxImages((prev) => prev.map((i) => {
         if (i.id === id) {
-          return { ...i, x: finalX, y: finalY };
+          return { 
+            ...i, 
+            x: finalX, 
+            y: finalY,
+            width: imgW,
+            height: imgH,
+            originalWidth: i.originalWidth ?? baseWidth,
+            originalHeight: i.originalHeight ?? baseHeight,
+          };
         }
         if (swapImgId && i.id === swapImgId && swapX !== undefined && swapY !== undefined) {
           return { ...i, x: swapX, y: swapY };
         }
         return i;
-      });
-      setSandboxImages(updatedImages);
+      }));
       return;
     }
 
-    setSandboxImages((prev) => prev.map((i) => (i.id === id ? { ...i, x, y } : i)));
+    // Image moved outside folders - restore original size if available (same as main app)
+    setSandboxImages((prev) => prev.map((i) => {
+      if (i.id === id) {
+        // If image was removed from folder, restore original size
+        if (oldFolderId && !targetFolderId && i.originalWidth && i.originalHeight) {
+          return { ...i, x, y, width: i.originalWidth, height: i.originalHeight, folderId: undefined };
+        }
+        return { ...i, x, y };
+      }
+      return i;
+    }));
   }, [sandboxImages, sandboxFolders]);
 
   const handleExportClick = useCallback(() => {
@@ -799,9 +1426,9 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
   }, [selectedId]);
 
   const selectedImage = selectedId ? sandboxImages.find((i) => i.id === selectedId) : null;
-  const canAddMore = sandboxImages.length < MAX_PHOTOS;
+  const canAddMore = true; // No limit on photos in sandbox
   const isEmpty = sandboxImages.length === 0;
-  const containerCursor = cursorOverImage && !isSpacePressed ? 'pointer' : isSpacePressed ? (isDragging ? 'grabbing' : 'grab') : 'default';
+  const containerCursor = cursorOverImage ? 'pointer' : isSpacePressed ? (isDragging ? 'grabbing' : 'grab') : 'default';
 
   const isCurveModified = (points: CurvePoint[]) => {
     if (!points || points.length === 0) return false;
@@ -826,7 +1453,7 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
   );
 
   return (
-    <div className="w-full max-w-5xl mx-auto">
+    <div className="relative w-full max-w-5xl mx-auto">
       <input
         ref={fileInputRef}
         type="file"
@@ -839,8 +1466,8 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
       <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
         <p className="text-sm text-[#888]">
           {isEmpty
-            ? 'Drop or click to add up to 3 photos'
-            : `${sandboxImages.length} / ${MAX_PHOTOS} photos — drag to move, Space + drag to pan, Ctrl + scroll to zoom`}
+            ? 'Drop or click to add photos'
+            : `${sandboxImages.length} photo${sandboxImages.length === 1 ? '' : 's'} — drag to move, Space + drag to pan, Ctrl + scroll to zoom`}
         </p>
         {canAddMore && (
           <button
@@ -872,27 +1499,6 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
       >
-        {zoomedId && (
-          <div
-            className="absolute inset-0 z-20 bg-black/90 flex items-center justify-center cursor-pointer"
-            onClick={() => setZoomedId(null)}
-            onKeyDown={(e) => e.key === 'Escape' && setZoomedId(null)}
-            role="button"
-            tabIndex={0}
-            aria-label="Close fullscreen"
-          >
-            <img
-              src={sandboxImages.find((i) => i.id === zoomedId)?.url}
-              alt="Fullscreen"
-              className="max-w-full max-h-full object-contain pointer-events-none"
-              draggable={false}
-              onClick={(e) => e.stopPropagation()}
-            />
-            <p className="absolute bottom-4 left-1/2 -translate-x-1/2 text-[#888] text-sm">
-              Double-click or Esc to exit
-            </p>
-          </div>
-        )}
 
         <Stage
           ref={stageRef}
@@ -905,6 +1511,20 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
           draggable={isSpacePressed}
           onWheel={handleWheel}
           onMouseDown={(e) => {
+            const clickedOnEmpty = e.target === e.target.getStage();
+            if (zoomedId && clickedOnEmpty && e.evt.button === 0) {
+              const pre = preZoomViewRef.current;
+              if (pre) {
+                animateView(
+                  { scale: stageScale, x: stagePosition.x, y: stagePosition.y },
+                  { scale: pre.scale, x: pre.x, y: pre.y },
+                  () => setZoomedId(null)
+                );
+              } else {
+                setZoomedId(null);
+              }
+              return;
+            }
             handleStageMouseDown(e);
             if (isSpacePressed) setIsDragging(true);
           }}
@@ -920,15 +1540,73 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
           <Layer>
             {sandboxFolders.map((folder) => {
               const count = folder.imageIds.length;
-              const borderHeight = getFolderBorderHeight(count, folder.width);
+              const borderHeight = getFolderBorderHeight(count, folder.width, folder.height);
               const borderY = folder.y + LABEL_HEIGHT;
               const borderH = Math.max(borderHeight, 80);
               const isHovered = hoveredFolderBorder === folder.id;
-              const nameWidth = folderLabelWidths[folder.id] ?? approximateLabelWidth(folder.name);
+              const isResizing = resizingFolderId === folder.id;
               return (
                 <Group key={folder.id}>
-                  {/* Folder label (name + " +") — Group at folder pos, same as app */}
-                  <Group x={folder.x} y={folder.y} listening={true}>
+                  {/* Folder label — Group at folder pos, draggable like main app */}
+                  <Group 
+                    x={folder.x} 
+                    y={folder.y} 
+                    draggable={true}
+                    listening={true}
+                    onMouseEnter={(e) => {
+                      const container = e.target.getStage()?.container();
+                      if (container) container.style.cursor = 'pointer';
+                    }}
+                    onMouseLeave={(e) => {
+                      const container = e.target.getStage()?.container();
+                      if (container) container.style.cursor = 'default';
+                    }}
+                    onDragMove={(e) => {
+                      const newX = e.target.x();
+                      const newY = e.target.y();
+                      
+                      // Update folder position
+                      const updatedFolders = sandboxFolders.map((f) =>
+                        f.id === folder.id ? { ...f, x: newX, y: newY } : f
+                      );
+                      
+                      // Reflow images in the folder to match new position
+                      const folderImgs = sandboxImages.filter(img => folder.imageIds.includes(img.id));
+                      let updatedImages = [...sandboxImages];
+                      if (folderImgs.length > 0) {
+                        const reflowedImages = reflowSandboxImagesInFolder(folderImgs, newX, newY, folder.width, folder.height);
+                        updatedImages = sandboxImages.map((img) => {
+                          const reflowed = reflowedImages.find(r => r.id === img.id);
+                          return reflowed ? reflowed : img;
+                        });
+                      }
+                      
+                      setSandboxFolders(updatedFolders);
+                      setSandboxImages(updatedImages);
+                    }}
+                    onDragEnd={(e) => {
+                      const newX = e.target.x();
+                      const newY = e.target.y();
+                      
+                      // Final update with reflow
+                      const updatedFolders = sandboxFolders.map((f) =>
+                        f.id === folder.id ? { ...f, x: newX, y: newY } : f
+                      );
+                      
+                      const folderImgs = sandboxImages.filter(img => folder.imageIds.includes(img.id));
+                      let updatedImages = [...sandboxImages];
+                      if (folderImgs.length > 0) {
+                        const reflowedImages = reflowSandboxImagesInFolder(folderImgs, newX, newY, folder.width, folder.height);
+                        updatedImages = sandboxImages.map((img) => {
+                          const reflowed = reflowedImages.find(r => r.id === img.id);
+                          return reflowed ? reflowed : img;
+                        });
+                      }
+                      
+                      setSandboxFolders(updatedFolders);
+                      setSandboxImages(updatedImages);
+                    }}
+                  >
                     <Text
                       ref={(el) => {
                         if (el) {
@@ -942,15 +1620,6 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
                       x={0}
                       y={0}
                       text={folder.name}
-                      fontSize={16}
-                      fontStyle="600"
-                      fill={folder.color}
-                      listening={true}
-                    />
-                    <Text
-                      x={nameWidth}
-                      y={2}
-                      text=" +"
                       fontSize={16}
                       fontStyle="600"
                       fill={folder.color}
@@ -975,15 +1644,17 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
                     onMouseEnter={() => setHoveredFolderBorder(folder.id)}
                     onMouseLeave={() => setHoveredFolderBorder(null)}
                   />
-                  {/* Resize handle — bottom-right, visible on hover (match app) */}
+                  {/* Resize handle — bottom-right, draggable to resize folder */}
                   <Rect
                     x={folder.x + folder.width - 20}
-                    y={borderY + borderHeight - 20}
+                    y={borderY + borderH - 20}
                     width={20}
                     height={20}
-                    fill={isHovered ? folder.color : 'transparent'}
-                    opacity={isHovered ? 0.6 : 0}
+                    fill={isHovered || resizingFolderId === folder.id ? folder.color : 'transparent'}
+                    opacity={isHovered || resizingFolderId === folder.id ? 0.6 : 0}
                     cornerRadius={4}
+                    draggable={true}
+                    dragBoundFunc={(pos) => pos}
                     listening={true}
                     onMouseEnter={(e) => {
                       const container = e.target.getStage()?.container();
@@ -992,8 +1663,118 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
                     }}
                     onMouseLeave={(e) => {
                       const container = e.target.getStage()?.container();
+                      if (container && !resizingFolderId) container.style.cursor = 'default';
+                      if (!resizingFolderId) setHoveredFolderBorder(null);
+                    }}
+                    onDragStart={() => {
+                      setResizingFolderId(folder.id);
+                    }}
+                    onDragMove={(e) => {
+                      const handleSize = 20;
+                      const currentFolder = sandboxFolders.find(f => f.id === folder.id) || folder;
+                      const proposedWidth = Math.max(GRID_CONFIG.minFolderWidth, e.target.x() - currentFolder.x + handleSize);
+                      const proposedContentHeight = Math.max(100, e.target.y() - borderY + handleSize);
+                      const proposedHeight = LABEL_HEIGHT + proposedContentHeight;
+                      
+                      // Get folder images
+                      const folderImgs = sandboxImages.filter(img => currentFolder.imageIds.includes(img.id));
+                      
+                      // Calculate columns from proposed width
+                      const proposedCols = calculateColsFromWidth(proposedWidth);
+                      
+                      // Calculate minimum size needed for all images
+                      const rowsNeeded = Math.ceil(folderImgs.length / proposedCols) || 1;
+                      const minContentHeight = rowsNeeded * CELL_SIZE + (2 * GRID_CONFIG.folderPadding);
+                      const minHeight = LABEL_HEIGHT + Math.max(minContentHeight, 100);
+                      
+                      // Snap width to grid (exact fit for columns with proper padding)
+                      const snappedWidth = (2 * GRID_CONFIG.folderPadding) + (proposedCols * CELL_SIZE) - GRID_CONFIG.imageGap;
+                      
+                      // Snap height to grid (based on rows needed)
+                      const snappedContentHeight = (2 * GRID_CONFIG.folderPadding) + (rowsNeeded * CELL_SIZE) - GRID_CONFIG.imageGap;
+                      const snappedHeight = LABEL_HEIGHT + Math.max(snappedContentHeight, 100);
+                      
+                      // Enforce minimum size (can't shrink smaller than needed)
+                      const newWidth = Math.max(snappedWidth, GRID_CONFIG.minFolderWidth);
+                      const newHeight = Math.max(snappedHeight, minHeight);
+                      
+                      // Keep handle at bottom-right corner
+                      e.target.x(currentFolder.x + newWidth - handleSize);
+                      e.target.y(borderY + (newHeight - LABEL_HEIGHT) - handleSize);
+                      
+                      // Update folder with new dimensions
+                      const updatedFolders = sandboxFolders.map((f) =>
+                        f.id === currentFolder.id ? { ...f, width: newWidth, height: newHeight } : f
+                      );
+                      
+                      // Reflow images in the folder with new dimensions
+                      let updatedImages = [...sandboxImages];
+                      if (folderImgs.length > 0) {
+                        const reflowedImages = reflowSandboxImagesInFolder(
+                          folderImgs,
+                          currentFolder.x,
+                          currentFolder.y,
+                          newWidth,
+                          newHeight
+                        );
+                        updatedImages = sandboxImages.map((img) => {
+                          const reflowed = reflowedImages.find(r => r.id === img.id);
+                          return reflowed ? reflowed : img;
+                        });
+                      }
+                      
+                      setSandboxFolders(updatedFolders);
+                      setSandboxImages(updatedImages);
+                    }}
+                    onDragEnd={(e) => {
+                      const container = e.target.getStage()?.container();
                       if (container) container.style.cursor = 'default';
+                      setResizingFolderId(null);
                       setHoveredFolderBorder(null);
+                      
+                      // Final snap to grid and reflow
+                      const resizedFolder = sandboxFolders.find(f => f.id === folder.id);
+                      if (resizedFolder) {
+                        const folderImgs = sandboxImages.filter(img => resizedFolder.imageIds.includes(img.id));
+                        
+                        if (folderImgs.length === 0) {
+                          // No images - just finalize dimensions
+                          return;
+                        }
+                        
+                        // Calculate snapped dimensions based on grid
+                        const cols = calculateColsFromWidth(resizedFolder.width);
+                        const rowsNeeded = Math.ceil(folderImgs.length / cols) || 1;
+                        
+                        // Snap width to grid
+                        const snappedWidth = (2 * GRID_CONFIG.folderPadding) + (cols * CELL_SIZE) - GRID_CONFIG.imageGap;
+                        
+                        // Snap height to grid (ensure it fits all images)
+                        const snappedContentHeight = (2 * GRID_CONFIG.folderPadding) + (rowsNeeded * CELL_SIZE) - GRID_CONFIG.imageGap;
+                        const snappedHeight = LABEL_HEIGHT + Math.max(snappedContentHeight, 100);
+                        
+                        // Update folder with snapped dimensions
+                        const finalFolders = sandboxFolders.map((f) =>
+                          f.id === resizedFolder.id ? { ...f, width: snappedWidth, height: snappedHeight } : f
+                        );
+                        
+                        // Reflow images with final snapped dimensions
+                        const reflowedImages = reflowSandboxImagesInFolder(
+                          folderImgs,
+                          resizedFolder.x,
+                          resizedFolder.y,
+                          snappedWidth,
+                          snappedHeight
+                        );
+                        
+                        setSandboxFolders(finalFolders);
+                        setSandboxImages((prev) =>
+                          prev.map((img) => {
+                            const reflowed = reflowedImages.find(r => r.id === img.id);
+                            return reflowed ? reflowed : img;
+                          })
+                        );
+                      }
                     }}
                   />
                 </Group>
@@ -1006,9 +1787,11 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
                 isZoomed={zoomedId === img.id}
                 isSelected={selectedId === img.id}
                 onSelect={() => setSelectedId(img.id)}
-                onDoubleClick={() => setZoomedId((id) => (id === img.id ? null : img.id))}
+                onDoubleClick={() => handleImageDoubleClick(img)}
+                onDragMove={handleImageDragMove}
                 onDragEnd={(x, y) => handleImageDragEnd(img.id, x, y)}
                 onCursorOverImage={setCursorOverImage}
+                isSpacePressed={isSpacePressed}
                 onNodeRef={(node: Konva.Image | null) => {
                   if (node) imageNodeRefs.current[img.id] = node;
                   else delete imageNodeRefs.current[img.id];
@@ -1026,7 +1809,7 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
             aria-label="Add photos"
           >
             <p className="text-[#555] group-hover:text-[#3ECF8E]/80 text-sm transition-colors">
-              Drop or click to add up to {MAX_PHOTOS} photos
+              Drop or click to add photos
             </p>
           </button>
         )}
@@ -1034,173 +1817,182 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
 
       {/* Edit toolbar (same look as main app): Light, Curves, Color, Effects — no HSL; Export = sign up */}
       {selectedImage && selectedId && (
-        <div className="mt-3 relative z-0">
-          {/* Curves popup */}
-          {activePanel === 'curves' && (
-            <CurvesEditor
-              curves={selectedImage.curves ?? DEFAULT_CURVES}
-              onChange={(curves) => updateImageEdit(selectedId, { curves })}
-              onClose={() => setActivePanel(null)}
-            />
-          )}
-
-          {/* Light panel popup — match EditPanel position */}
-          {activePanel === 'light' && (
-            <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20">
-              <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-4 w-72">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-medium text-white">Light</h3>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => updateImageEdit(selectedId, { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0 })}
-                      className="text-xs text-[#888] hover:text-white transition-colors cursor-pointer"
-                    >
-                      Reset
-                    </button>
-                    <button type="button" onClick={() => setActivePanel(null)} className="p-1 text-[#888] hover:text-white transition-colors cursor-pointer">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                    </button>
-                  </div>
-                </div>
-                <div className="space-y-3">
-                  <SandboxSlider label="Exposure" value={selectedImage.exposure ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { exposure: v })} />
-                  <SandboxSlider label="Contrast" value={selectedImage.contrast ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { contrast: v })} />
-                  <SandboxSlider label="Highlights" value={selectedImage.highlights ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { highlights: v })} />
-                  <SandboxSlider label="Shadows" value={selectedImage.shadows ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { shadows: v })} />
-                  <SandboxSlider label="Whites" value={selectedImage.whites ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { whites: v })} />
-                  <SandboxSlider label="Blacks" value={selectedImage.blacks ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { blacks: v })} />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Color panel popup (no HSL) */}
-          {activePanel === 'color' && (
-            <div className="absolute bottom-full left-1/2 -translate-x-1/2 z-20 mb-2">
-              <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-4 w-80">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-medium text-white">Color</h3>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => updateImageEdit(selectedId, { temperature: 0, vibrance: 0, saturation: 0 })}
-                      className="text-xs text-[#888] hover:text-white transition-colors cursor-pointer"
-                    >
-                      Reset
-                    </button>
-                    <button type="button" onClick={() => setActivePanel(null)} className="p-1 text-[#888] hover:text-white transition-colors cursor-pointer">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                    </button>
-                  </div>
-                </div>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-xs text-[#888] w-20">Temp</span>
-                    <div className="flex items-center gap-2 flex-1">
-                      <span className="text-[10px] text-[#74c0fc]">Cool</span>
-                      <input
-                        type="range"
-                        min={-1}
-                        max={1}
-                        step={0.01}
-                        value={selectedImage.temperature ?? 0}
-                        onChange={(e) => updateImageEdit(selectedId, { temperature: parseFloat(e.target.value) })}
-                        onDoubleClick={() => updateImageEdit(selectedId, { temperature: 0 })}
-                        className="flex-1 h-1 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:cursor-pointer"
-                        style={{ background: 'linear-gradient(to right, #74c0fc, #ff9f43)' }}
-                      />
-                      <span className="text-[10px] text-[#ff9f43]">Warm</span>
-                    </div>
-                  </div>
-                  <SandboxSlider label="Vibrance" value={selectedImage.vibrance ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { vibrance: v })} />
-                  <SandboxSlider label="Saturation" value={selectedImage.saturation ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { saturation: v })} />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Effects panel popup — match EditPanel position */}
-          {activePanel === 'effects' && (
-            <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20">
-              <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-4 w-72">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-medium text-white">Effects</h3>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => updateImageEdit(selectedId, { clarity: 0, dehaze: 0, vignette: 0, grain: 0 })}
-                      className="text-xs text-[#888] hover:text-white transition-colors cursor-pointer"
-                    >
-                      Reset
-                    </button>
-                    <button type="button" onClick={() => setActivePanel(null)} className="p-1 text-[#888] hover:text-white transition-colors cursor-pointer">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                    </button>
-                  </div>
-                </div>
-                <div className="space-y-3">
-                  <SandboxSlider label="Clarity" value={selectedImage.clarity ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { clarity: v })} />
-                  <SandboxSlider label="Dehaze" value={selectedImage.dehaze ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { dehaze: v })} />
-                  <SandboxSlider label="Vignette" value={selectedImage.vignette ?? 0} min={0} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { vignette: v })} />
-                  <SandboxSlider label="Grain" value={selectedImage.grain ?? 0} min={0} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { grain: v })} />
-                </div>
-              </div>
-            </div>
-          )}
-
+        <div className="absolute left-1/2 -translate-x-1/2 z-10 mt-3" style={{ top: '540px' }}>
           {/* Main toolbar — same structure as EditPanel */}
           <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 backdrop-blur-xl">
             <div className="px-4 py-3">
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setActivePanel(activePanel === 'curves' ? null : 'curves')}
-                  className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
-                    activePanel === 'curves' || isCurvesModified ? 'bg-[#3ECF8E]/20 text-[#3ECF8E]' : 'bg-[#252525] text-[#999] hover:bg-[#333] hover:text-white'
-                  }`}
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 20 C 8 20, 8 4, 12 4 C 16 4, 16 20, 20 20" />
-                  </svg>
-                  <span className="text-[10px] font-medium uppercase tracking-wider">Curves</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActivePanel(activePanel === 'light' ? null : 'light')}
-                  className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
-                    activePanel === 'light' || isLightModified ? 'bg-[#3ECF8E]/20 text-[#3ECF8E]' : 'bg-[#252525] text-[#999] hover:bg-[#333] hover:text-white'
-                  }`}
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
-                  </svg>
-                  <span className="text-[10px] font-medium uppercase tracking-wider">Light</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActivePanel(activePanel === 'color' ? null : 'color')}
-                  className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
-                    activePanel === 'color' || isColorModified ? 'bg-[#3ECF8E]/20 text-[#3ECF8E]' : 'bg-[#252525] text-[#999] hover:bg-[#333] hover:text-white'
-                  }`}
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
-                  </svg>
-                  <span className="text-[10px] font-medium uppercase tracking-wider">Color</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActivePanel(activePanel === 'effects' ? null : 'effects')}
-                  className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
-                    activePanel === 'effects' || isEffectsModified ? 'bg-[#3ECF8E]/20 text-[#3ECF8E]' : 'bg-[#252525] text-[#999] hover:bg-[#333] hover:text-white'
-                  }`}
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
-                  </svg>
-                  <span className="text-[10px] font-medium uppercase tracking-wider">Effects</span>
-                </button>
+                {/* Curves button with popup */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setActivePanel(activePanel === 'curves' ? null : 'curves')}
+                    className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
+                      activePanel === 'curves' || isCurvesModified ? 'bg-[#3ECF8E]/20 text-[#3ECF8E]' : 'bg-[#252525] text-[#999] hover:bg-[#333] hover:text-white'
+                    }`}
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 20 C 8 20, 8 4, 12 4 C 16 4, 16 20, 20 20" />
+                    </svg>
+                    <span className="text-[10px] font-medium uppercase tracking-wider">Curves</span>
+                  </button>
+                  {activePanel === 'curves' && (
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 z-20 mb-2">
+                      <CurvesEditor
+                        curves={selectedImage.curves ?? DEFAULT_CURVES}
+                        onChange={(curves) => updateImageEdit(selectedId, { curves })}
+                        onClose={() => setActivePanel(null)}
+                      />
+                    </div>
+                  )}
+                </div>
+                
+                {/* Light button with popup */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setActivePanel(activePanel === 'light' ? null : 'light')}
+                    className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
+                      activePanel === 'light' || isLightModified ? 'bg-[#3ECF8E]/20 text-[#3ECF8E]' : 'bg-[#252525] text-[#999] hover:bg-[#333] hover:text-white'
+                    }`}
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+                    </svg>
+                    <span className="text-[10px] font-medium uppercase tracking-wider">Light</span>
+                  </button>
+                  {activePanel === 'light' && (
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 z-20 mb-2">
+                      <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-2.5 min-w-[256px] max-w-fit">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <h3 className="text-xs font-medium text-white">Light</h3>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => updateImageEdit(selectedId, { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0 })}
+                              className="text-[10px] text-[#888] hover:text-white transition-colors cursor-pointer"
+                            >
+                              Reset
+                            </button>
+                            <button type="button" onClick={() => setActivePanel(null)} className="p-0.5 text-[#888] hover:text-white transition-colors cursor-pointer">
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <SandboxSlider label="Exposure" value={selectedImage.exposure ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { exposure: v })} />
+                          <SandboxSlider label="Contrast" value={selectedImage.contrast ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { contrast: v })} />
+                          <SandboxSlider label="Highlights" value={selectedImage.highlights ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { highlights: v })} />
+                          <SandboxSlider label="Shadows" value={selectedImage.shadows ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { shadows: v })} />
+                          <SandboxSlider label="Whites" value={selectedImage.whites ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { whites: v })} />
+                          <SandboxSlider label="Blacks" value={selectedImage.blacks ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { blacks: v })} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                
+                {/* Color button with popup */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setActivePanel(activePanel === 'color' ? null : 'color')}
+                    className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
+                      activePanel === 'color' || isColorModified ? 'bg-[#3ECF8E]/20 text-[#3ECF8E]' : 'bg-[#252525] text-[#999] hover:bg-[#333] hover:text-white'
+                    }`}
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
+                    </svg>
+                    <span className="text-[10px] font-medium uppercase tracking-wider">Color</span>
+                  </button>
+                  {activePanel === 'color' && (
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 z-20 mb-2">
+                      <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-2.5 min-w-[256px] max-w-fit">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <h3 className="text-xs font-medium text-white">Color</h3>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => updateImageEdit(selectedId, { temperature: 0, vibrance: 0, saturation: 0 })}
+                              className="text-[10px] text-[#888] hover:text-white transition-colors cursor-pointer"
+                            >
+                              Reset
+                            </button>
+                            <button type="button" onClick={() => setActivePanel(null)} className="p-0.5 text-[#888] hover:text-white transition-colors cursor-pointer">
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2.5">
+                            <span className="text-[10px] text-[#888] w-18">Temp</span>
+                            <div className="flex items-center gap-2 flex-1">
+                              <span className="text-[9px] text-[#74c0fc]">Cool</span>
+                              <input
+                                type="range"
+                                min={-1}
+                                max={1}
+                                step={0.01}
+                                value={selectedImage.temperature ?? 0}
+                                onChange={(e) => updateImageEdit(selectedId, { temperature: parseFloat(e.target.value) })}
+                                onDoubleClick={() => updateImageEdit(selectedId, { temperature: 0 })}
+                                className="flex-1 h-1 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:cursor-pointer"
+                                style={{ background: 'linear-gradient(to right, #74c0fc, #ff9f43)' }}
+                              />
+                              <span className="text-[9px] text-[#ff9f43]">Warm</span>
+                            </div>
+                          </div>
+                          <SandboxSlider label="Vibrance" value={selectedImage.vibrance ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { vibrance: v })} />
+                          <SandboxSlider label="Saturation" value={selectedImage.saturation ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { saturation: v })} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                
+                {/* Effects button with popup */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setActivePanel(activePanel === 'effects' ? null : 'effects')}
+                    className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
+                      activePanel === 'effects' || isEffectsModified ? 'bg-[#3ECF8E]/20 text-[#3ECF8E]' : 'bg-[#252525] text-[#999] hover:bg-[#333] hover:text-white'
+                    }`}
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                    </svg>
+                    <span className="text-[10px] font-medium uppercase tracking-wider">Effects</span>
+                  </button>
+                  {activePanel === 'effects' && (
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 z-20 mb-2">
+                      <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-3 min-w-[256px] max-w-fit">
+                        <div className="flex items-center justify-between mb-2">
+                          <h3 className="text-xs font-medium text-white">Effects</h3>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => updateImageEdit(selectedId, { clarity: 0, dehaze: 0, vignette: 0, grain: 0 })}
+                              className="text-[10px] text-[#888] hover:text-white transition-colors cursor-pointer"
+                            >
+                              Reset
+                            </button>
+                            <button type="button" onClick={() => setActivePanel(null)} className="p-1 text-[#888] hover:text-white transition-colors cursor-pointer">
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                          </div>
+                        </div>
+                        <div className="space-y-2.5">
+                          <SandboxSlider label="Clarity" value={selectedImage.clarity ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { clarity: v })} />
+                          <SandboxSlider label="Dehaze" value={selectedImage.dehaze ?? 0} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { dehaze: v })} />
+                          <SandboxSlider label="Vignette" value={selectedImage.vignette ?? 0} min={0} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { vignette: v })} />
+                          <SandboxSlider label="Grain" value={selectedImage.grain ?? 0} min={0} max={1} step={0.01} defaultValue={0} onChange={(v) => updateImageEdit(selectedId, { grain: v })} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <div className="w-px h-10 bg-[#333] mx-1" />
                 <button
                   type="button"

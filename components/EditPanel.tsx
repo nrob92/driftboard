@@ -754,7 +754,7 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
 
       {/* Light Panel Popup */}
       {activePanel === 'light' && isImage && (
-        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20">
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-20">
           <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-4 w-72">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-medium text-white">Light</h3>
@@ -789,7 +789,7 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
 
       {/* Color Panel Popup */}
       {activePanel === 'color' && isImage && (
-        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20">
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-20">
           <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-4 w-80">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-medium text-white">Color</h3>
@@ -1129,7 +1129,7 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
 
       {/* Effects Panel Popup */}
       {activePanel === 'effects' && isImage && (
-        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20">
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-20">
           <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-4 w-72">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-medium text-white">Effects</h3>
@@ -1162,7 +1162,7 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
 
       {/* Presets Panel Popup */}
       {activePanel === 'presets' && isImage && (
-        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20">
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-20">
           <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-4 w-80">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-medium text-white">Presets</h3>
@@ -1258,7 +1258,7 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
       )}
 
       {/* Main Toolbar */}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10">
+      <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-10">
         <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 backdrop-blur-xl">
           <div className="px-4 py-3">
             <div className="flex items-center gap-2">
