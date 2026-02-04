@@ -886,6 +886,11 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const [createFolderFromSelectionIds, setCreateFolderFromSelectionIds] = useState<string[] | null>(null);
   const [createFolderFromSelectionName, setCreateFolderFromSelectionName] = useState('');
   const [createFolderFromSelectionNameError, setCreateFolderFromSelectionNameError] = useState('');
+  const [createEmptyFolderOpen, setCreateEmptyFolderOpen] = useState(false);
+  const [createEmptyFolderName, setCreateEmptyFolderName] = useState('');
+  const [createEmptyFolderNameError, setCreateEmptyFolderNameError] = useState('');
+  const [confirmDeleteFolderOpen, setConfirmDeleteFolderOpen] = useState(false);
+  const [deleteFolderDontAskAgain, setDeleteFolderDontAskAgain] = useState(false);
   const [bypassedTabs, setBypassedTabs] = useState<Set<'curves' | 'light' | 'color' | 'effects'>>(new Set());
   const [dragHoveredFolderId, setDragHoveredFolderId] = useState<string | null>(null);
   const [dragSourceFolderBorderHovered, setDragSourceFolderBorderHovered] = useState<string | null>(null);
@@ -894,9 +899,13 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const [copiedEdit, setCopiedEdit] = useState<Partial<CanvasImage> | null>(null);
   const [imageContextMenu, setImageContextMenu] = useState<{ x: number; y: number; imageId: string; selectedIds: string[] } | null>(null);
   const imageContextMenuRef = useRef<HTMLDivElement>(null);
+  const [canvasContextMenu, setCanvasContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const canvasContextMenuRef = useRef<HTMLDivElement>(null);
   const [createPresetFromImageId, setCreatePresetFromImageId] = useState<string | null>(null);
   const [createPresetName, setCreatePresetName] = useState('');
   const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
+  const [confirmDeletePhotoIds, setConfirmDeletePhotoIds] = useState<string[] | null>(null);
+  const [deletePhotoDontAskAgain, setDeletePhotoDontAskAgain] = useState(false);
   const [isDeletingFolder, setIsDeletingFolder] = useState(false);
   const [exportProgress, setExportProgress] = useState<{ current: number; total: number } | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -2791,14 +2800,114 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     setCreateFolderFromSelectionNameError('');
   }, []);
 
-  // Close image context menu on click outside or escape
+  // Create empty folder from canvas context menu: name in modal first, then create with overlap resolution
+  const handleCreateEmptyFolderSave = useCallback(async () => {
+    const name = createEmptyFolderName.trim();
+    if (!name) {
+      setCreateEmptyFolderNameError('Enter a folder name');
+      return;
+    }
+    const isDuplicate = folders.some(
+      (f) => f.name.toLowerCase() === name.toLowerCase()
+    );
+    if (isDuplicate) {
+      setCreateEmptyFolderNameError('A folder with this name already exists');
+      return;
+    }
+
+    const centerX = (dimensions.width / 2 - stagePosition.x) / stageScale;
+    const centerY = (dimensions.height / 2 - stagePosition.y) / stageScale;
+    const folderId = `folder-${Date.now()}`;
+    const colorIndex = folders.length % FOLDER_COLORS.length;
+
+    const newFolder: PhotoFolder = {
+      id: folderId,
+      name,
+      x: centerX,
+      y: centerY,
+      width: GRID_CONFIG.defaultFolderWidth,
+      imageIds: [],
+      color: FOLDER_COLORS[colorIndex],
+    };
+
+    const foldersWithNew = [...folders, newFolder];
+    const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
+      foldersWithNew,
+      images,
+      folderId
+    );
+
+    setFolders(resolvedFolders);
+    setImages(resolvedImages);
+    setCreateEmptyFolderOpen(false);
+    setCreateEmptyFolderName('');
+    setCreateEmptyFolderNameError('');
+
+    if (user) {
+      const finalFolder = resolvedFolders.find((f) => f.id === folderId);
+      if (finalFolder) {
+        try {
+          await supabase.from('photo_folders').insert({
+            id: folderId,
+            user_id: user.id,
+            name,
+            x: Math.round(finalFolder.x),
+            y: Math.round(finalFolder.y),
+            width: GRID_CONFIG.defaultFolderWidth,
+            color: FOLDER_COLORS[colorIndex],
+          });
+          const movedFolders = resolvedFolders.filter((f) => {
+            if (f.id === folderId) return false;
+            const prev = foldersWithNew.find((of) => of.id === f.id);
+            return prev && (prev.x !== f.x || prev.y !== f.y);
+          });
+          for (const f of movedFolders) {
+            await supabase
+              .from('photo_folders')
+              .update({ x: Math.round(f.x), y: Math.round(f.y) })
+              .eq('id', f.id)
+              .eq('user_id', user.id);
+          }
+        } catch (err) {
+          console.error('Failed to create folder', err);
+        }
+      }
+    }
+
+    saveToHistory();
+  }, [
+    createEmptyFolderName,
+    folders,
+    images,
+    dimensions,
+    stagePosition,
+    stageScale,
+    user,
+    resolveOverlapsAndReflow,
+    saveToHistory,
+  ]);
+
+  const handleCreateEmptyFolderCancel = useCallback(() => {
+    setCreateEmptyFolderOpen(false);
+    setCreateEmptyFolderName('');
+    setCreateEmptyFolderNameError('');
+  }, []);
+
+  // Close image/canvas context menu on click outside or escape
   useEffect(() => {
-    if (!imageContextMenu) return;
+    if (!imageContextMenu && !canvasContextMenu) return;
     const close = (e?: MouseEvent) => {
       if (e?.target && imageContextMenuRef.current?.contains(e.target as Node)) return;
+      if (e?.target && canvasContextMenuRef.current?.contains(e.target as Node)) return;
       setImageContextMenu(null);
+      setCanvasContextMenu(null);
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setImageContextMenu(null); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setImageContextMenu(null);
+        setCanvasContextMenu(null);
+      }
+    };
     window.addEventListener('click', close, true);
     window.addEventListener('contextmenu', close, true);
     window.addEventListener('keydown', onKey);
@@ -2807,7 +2916,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       window.removeEventListener('contextmenu', close, true);
       window.removeEventListener('keydown', onKey);
     };
-  }, [imageContextMenu]);
+  }, [imageContextMenu, canvasContextMenu]);
 
   // Handle object drag end with smart snapping (only if near another photo)
   // Handle real-time grid snapping and shuffling during drag
@@ -3814,49 +3923,45 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     }
   }, [editingFolder, images, user, saveToHistory, queryClient]);
 
-  // Add empty folder at viewport center
-  const handleAddEmptyFolder = useCallback(async () => {
-    // Calculate center of viewport in stage coordinates
-    const centerX = (dimensions.width / 2 - stagePosition.x) / stageScale;
-    const centerY = (dimensions.height / 2 - stagePosition.y) / stageScale;
+  // Delete photos by id (used for single from EditPanel or multi from context menu; after confirm or when skip-confirm)
+  const handleDeletePhotos = useCallback(async (ids: string[]) => {
+    const photoIds = ids.filter((id) => {
+      const img = images.find((i) => i.id === id);
+      return img && 'src' in img;
+    });
+    if (photoIds.length === 0) return;
 
-    const folderId = `folder-${Date.now()}`;
-    const colorIndex = folders.length % FOLDER_COLORS.length;
-    
-    const newFolder: PhotoFolder = {
-      id: folderId,
-      name: 'New Folder',
-      x: centerX,
-      y: centerY,
-      width: GRID_CONFIG.defaultFolderWidth,
-      imageIds: [],
-      color: FOLDER_COLORS[colorIndex],
-    };
-
-    setFolders((prev) => [...prev, newFolder]);
-
-    // Save to Supabase
-    if (user) {
-      try {
-        await supabase.from('photo_folders').insert({
-          id: folderId,
-          user_id: user.id,
-          name: 'New Folder',
-          x: Math.round(centerX),
-          y: Math.round(centerY),
-          width: GRID_CONFIG.defaultFolderWidth,
-          color: FOLDER_COLORS[colorIndex],
-        });
-      } catch (error) {
-        console.error('Failed to save folder:', error);
+    setDeletingPhotoId(photoIds[0]);
+    try {
+      if (user) {
+        for (const photoId of photoIds) {
+          const img = images.find((i) => i.id === photoId);
+          if (!img || !('src' in img)) continue;
+          const payload = getDeletePhotoPayload(img);
+          if (!payload.storagePath && !payload.originalStoragePath) continue;
+          try {
+            const res = await fetch('/api/delete-photo', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ...payload, userId: user.id }),
+            });
+            if (!res.ok) {
+              const data = await res.json();
+              console.error('Delete photo failed:', data);
+            }
+          } catch (err) {
+            console.error('Error deleting photo:', err);
+          }
+        }
+        queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
       }
+      setImages((prev) => prev.filter((img) => !photoIds.includes(img.id)));
+      setSelectedIds((prev) => prev.filter((id) => !photoIds.includes(id)));
+      saveToHistory();
+    } finally {
+      setDeletingPhotoId(null);
     }
-
-    // Open edit modal so user can rename
-    setEditingFolder(newFolder);
-    setEditingFolderName('New Folder');
-    saveToHistory();
-  }, [dimensions, stagePosition, stageScale, folders.length, user, saveToHistory]);
+  }, [images, user, getDeletePhotoPayload, queryClient, saveToHistory]);
 
   // Recenter all folders horizontally in the middle of the canvas
   const handleRecenterFolders = useCallback(async () => {
@@ -4089,7 +4194,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     <div className="relative h-full w-full bg-[#0d0d0d]">
       <TopBar
         onUpload={handleFileUpload}
-        onAddFolder={handleAddEmptyFolder}
         onRecenter={handleRecenterFolders}
         onUndo={handleUndo}
         onRedo={handleRedo}
@@ -4290,9 +4394,20 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
               {/* Delete Section */}
               <div className="pt-3 border-t border-[#333]">
-                <p className="text-xs text-[#666] mb-3">Delete this folder and its photos</p>
                 <button
-                  onClick={() => handleDeleteFolder()}
+                  onClick={() => {
+                    const hasPhotos = editingFolder.imageIds.length > 0;
+                    if (!hasPhotos) {
+                      handleDeleteFolder();
+                      return;
+                    }
+                    if (typeof window !== 'undefined' && window.localStorage.getItem('driftboard-delete-folder-skip-confirm') === 'true') {
+                      handleDeleteFolder();
+                    } else {
+                      setDeleteFolderDontAskAgain(false);
+                      setConfirmDeleteFolderOpen(true);
+                    }
+                  }}
                   disabled={isDeletingFolder}
                   className="w-full px-4 py-2.5 text-sm font-medium text-red-400 bg-red-400/10 hover:bg-red-400/20 disabled:opacity-60 disabled:cursor-not-allowed rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
                 >
@@ -4305,10 +4420,150 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                       Deleting…
                     </>
                   ) : (
-                    'Delete Folder'
+                    editingFolder.imageIds.length > 0 ? 'Delete folder + photos' : 'Delete folder'
                   )}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm delete photo(s) */}
+      {confirmDeletePhotoIds && confirmDeletePhotoIds.length > 0 && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96">
+            <h2 className="text-lg font-semibold text-white mb-2">
+              {confirmDeletePhotoIds.length === 1 ? 'Delete photo' : `Delete ${confirmDeletePhotoIds.length} photos`}
+            </h2>
+            <p className="text-sm text-[#888] mb-4">
+              Are you sure? This will permanently delete {confirmDeletePhotoIds.length === 1 ? 'this photo' : `these ${confirmDeletePhotoIds.length} photos`}.
+            </p>
+            <label className="flex items-center gap-2 mb-4 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={deletePhotoDontAskAgain}
+                onChange={(e) => setDeletePhotoDontAskAgain(e.target.checked)}
+                className="rounded border-[#333] bg-[#252525] text-[#3ECF8E] focus:ring-[#3ECF8E]/20"
+              />
+              <span className="text-sm text-[#888]">Don&apos;t ask again</span>
+            </label>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setConfirmDeletePhotoIds(null)}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-[#999] bg-[#252525] hover:bg-[#333] rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (deletePhotoDontAskAgain && typeof window !== 'undefined') {
+                    window.localStorage.setItem('driftboard-delete-photo-skip-confirm', 'true');
+                  }
+                  const ids = [...confirmDeletePhotoIds];
+                  setConfirmDeletePhotoIds(null);
+                  await handleDeletePhotos(ids);
+                }}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-xl transition-colors cursor-pointer"
+              >
+                {confirmDeletePhotoIds.length === 1 ? 'Delete photo' : `Delete ${confirmDeletePhotoIds.length} photos`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm delete folder + photos */}
+      {confirmDeleteFolderOpen && editingFolder && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96">
+            <h2 className="text-lg font-semibold text-white mb-2">Delete folder + photos</h2>
+            <p className="text-sm text-[#888] mb-4">
+              Are you sure? This will permanently delete the folder &quot;{editingFolder.name}&quot; and all {editingFolder.imageIds.length} photo{editingFolder.imageIds.length !== 1 ? 's' : ''} inside it.
+            </p>
+            <label className="flex items-center gap-2 mb-4 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={deleteFolderDontAskAgain}
+                onChange={(e) => setDeleteFolderDontAskAgain(e.target.checked)}
+                className="rounded border-[#333] bg-[#252525] text-[#3ECF8E] focus:ring-[#3ECF8E]/20"
+              />
+              <span className="text-sm text-[#888]">Don&apos;t ask again</span>
+            </label>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteFolderOpen(false)}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-[#999] bg-[#252525] hover:bg-[#333] rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (deleteFolderDontAskAgain && typeof window !== 'undefined') {
+                    window.localStorage.setItem('driftboard-delete-folder-skip-confirm', 'true');
+                  }
+                  setConfirmDeleteFolderOpen(false);
+                  handleDeleteFolder();
+                }}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-xl transition-colors cursor-pointer"
+              >
+                Delete folder + photos
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create empty folder from canvas right-click: name modal first, then create with overlap resolution */}
+      {createEmptyFolderOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96">
+            <h2 className="text-lg font-semibold text-white mb-1">Create folder</h2>
+            <p className="text-sm text-[#888] mb-4">
+              Name your folder. Existing folders will be pushed aside if nearby.
+            </p>
+            <label className="block text-xs uppercase tracking-wide text-[#666] mb-2">Folder name</label>
+            <input
+              type="text"
+              value={createEmptyFolderName}
+              onChange={(e) => {
+                setCreateEmptyFolderName(e.target.value);
+                setCreateEmptyFolderNameError('');
+              }}
+              placeholder="e.g., Beach Trip 2024"
+              className={`w-full px-4 py-3 text-white bg-[#252525] border rounded-xl focus:outline-none transition-colors mb-1 ${
+                createEmptyFolderNameError ? 'border-red-500 focus:border-red-500' : 'border-[#333] focus:border-[#3ECF8E] focus:ring-1 focus:ring-[#3ECF8E]/20'
+              }`}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleCreateEmptyFolderSave();
+                if (e.key === 'Escape') handleCreateEmptyFolderCancel();
+              }}
+            />
+            {createEmptyFolderNameError && (
+              <p className="text-xs text-red-400 mb-3">{createEmptyFolderNameError}</p>
+            )}
+            {!createEmptyFolderNameError && <div className="mb-4" />}
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={handleCreateEmptyFolderCancel}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-[#999] bg-[#252525] hover:bg-[#333] rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateEmptyFolderSave}
+                disabled={!createEmptyFolderName.trim()}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-[#0d0d0d] bg-[#3ECF8E] hover:bg-[#35b87d] disabled:bg-[#333] disabled:text-[#666] disabled:cursor-not-allowed rounded-xl transition-colors cursor-pointer"
+              >
+                Save
+              </button>
             </div>
           </div>
         </div>
@@ -4392,6 +4647,14 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
           onMouseDown={handleStageMouseDownWithZoom}
+          onContextMenu={(e) => {
+            e.evt.preventDefault();
+            const stage = e.target.getStage();
+            if (stage && e.target === stage) {
+              setImageContextMenu(null);
+              setCanvasContextMenu({ x: e.evt.clientX, y: e.evt.clientY });
+            }
+          }}
           onDblClick={handleStageDoubleClick}
           draggable={isSpacePressed}
           onDragStart={() => {
@@ -4942,6 +5205,31 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         
       </div>
 
+      {/* Right-click context menu on empty canvas: Create folder */}
+      {canvasContextMenu && (
+        <div
+          ref={canvasContextMenuRef}
+          className="fixed z-50 min-w-[160px] py-1 bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50"
+          style={{ left: canvasContextMenu.x, top: canvasContextMenu.y }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setCanvasContextMenu(null);
+              setCreateEmptyFolderOpen(true);
+              setCreateEmptyFolderName('New Folder');
+              setCreateEmptyFolderNameError('');
+            }}
+            className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors flex items-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+            </svg>
+            Create folder
+          </button>
+        </div>
+      )}
+
       {/* Right-click context menu for images: single = copy/paste/preset; multi = paste to selection, create folder */}
       {imageContextMenu && (
         <div
@@ -4969,9 +5257,25 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               <button
                 type="button"
                 onClick={handleCreateFolderFromSelection}
-                className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors border-t border-[#2a2a2a]"
+                className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors"
               >
                 Create folder
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const ids = imageContextMenu.selectedIds;
+                  setImageContextMenu(null);
+                  if (typeof window !== 'undefined' && window.localStorage.getItem('driftboard-delete-photo-skip-confirm') === 'true') {
+                    handleDeletePhotos(ids);
+                  } else {
+                    setDeletePhotoDontAskAgain(false);
+                    setConfirmDeletePhotoIds(ids);
+                  }
+                }}
+                className="w-full px-4 py-2.5 text-left text-sm text-red-400 hover:bg-red-400/10 transition-colors border-t border-[#2a2a2a]"
+              >
+                Delete selection ({imageContextMenu.selectedIds.length} photos)
               </button>
             </>
           ) : (
@@ -5060,35 +5364,11 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           }}
           onDelete={async () => {
             if ('src' in selectedObject) {
-              setDeletingPhotoId(selectedIds[0]);
-              try {
-                const imageToDelete = selectedObject as CanvasImage;
-                const payload = getDeletePhotoPayload(imageToDelete);
-                if (user && (payload.storagePath || payload.originalStoragePath)) {
-                  try {
-                    const res = await fetch('/api/delete-photo', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        ...payload,
-                        userId: user.id,
-                      }),
-                    });
-                    if (!res.ok) {
-                      const data = await res.json();
-                      console.error('Delete photo failed:', data);
-                    } else if (user) {
-                      queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
-                    }
-                  } catch (err) {
-                    console.error('Error deleting photo:', err);
-                  }
-                }
-                setImages((prev) => prev.filter((img) => img.id !== selectedIds[0]));
-                setSelectedIds([]);
-                saveToHistory();
-              } finally {
-                setDeletingPhotoId(null);
+              if (typeof window !== 'undefined' && window.localStorage.getItem('driftboard-delete-photo-skip-confirm') === 'true') {
+                await handleDeletePhotos([selectedIds[0]]);
+              } else {
+                setDeletePhotoDontAskAgain(false);
+                setConfirmDeletePhotoIds([selectedIds[0]]);
               }
             } else {
               setTexts((prev) => prev.filter((txt) => txt.id !== selectedIds[0]));

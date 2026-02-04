@@ -1391,32 +1391,6 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
                     </button>
                   )}
 
-                  {/* Auto-save status (no Save button – edits auto-save) */}
-                  {(saveStatus === 'saving' || saveStatus === 'saved' || saveStatus === 'error') && (
-                    <div className="flex items-center gap-2">
-                      {saveStatus === 'saving' && (
-                        <span className="text-[10px] text-[#888]">Saving…</span>
-                      )}
-                      {saveStatus === 'saved' && (
-                        <span className="text-[10px] text-[#3ECF8E]">Saved</span>
-                      )}
-                      {saveStatus === 'error' && (
-                        <>
-                          <span className="text-[10px] text-[#f87171]">Save failed</span>
-                          {onRetrySave && (
-                            <button
-                              type="button"
-                              onClick={onRetrySave}
-                              className="text-[10px] text-[#3ECF8E] hover:underline cursor-pointer"
-                            >
-                              Retry
-                            </button>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  )}
-
                   {/* Export */}
                   {onExport && (
                     <button

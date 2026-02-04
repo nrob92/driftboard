@@ -47,3 +47,16 @@ body {
 ::selection {
   background: rgba(62, 207, 142, 0.3);
 }
+
+/* Shortcut key / button on left of help rows */
+.kbd {
+  display: inline-block;
+  padding: 0.15em 0.45em;
+  font-size: 0.75em;
+  font-weight: 500;
+  color: #d4d4d4;
+  background: #252525;
+  border: 1px solid #333;
+  border-radius: 4px;
+  box-shadow: 0 1px 0 #333;
+}

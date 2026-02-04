@@ -1,11 +1,10 @@
 'use client';
 
-import { useRef } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth';
 
 interface TopBarProps {
   onUpload: (files: FileList | null) => void;
-  onAddFolder: () => void;
   onRecenter: () => void;
   onUndo: () => void;
   onRedo: () => void;
@@ -16,7 +15,6 @@ interface TopBarProps {
 
 export function TopBar({
   onUpload,
-  onAddFolder,
   onRecenter,
   onUndo,
   onRedo,
@@ -25,7 +23,18 @@ export function TopBar({
   visible,
 }: TopBarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const helpRef = useRef<HTMLDivElement>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
   const { user, signOut } = useAuth();
+
+  useEffect(() => {
+    if (!helpOpen) return;
+    const close = (e: MouseEvent) => {
+      if (helpRef.current && !helpRef.current.contains(e.target as Node)) setHelpOpen(false);
+    };
+    window.addEventListener('click', close, true);
+    return () => window.removeEventListener('click', close, true);
+  }, [helpOpen]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     onUpload(e.target.files);
@@ -81,15 +90,6 @@ export function TopBar({
           className="hidden"
         />
         <button
-          onClick={onAddFolder}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-[#252525] hover:bg-[#333] rounded-lg transition-colors cursor-pointer"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
-          </svg>
-          Folder
-        </button>
-        <button
           onClick={onRecenter}
           className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-[#252525] hover:bg-[#333] rounded-lg transition-colors cursor-pointer"
           title="Arrange folders in center"
@@ -104,6 +104,43 @@ export function TopBar({
 
       {/* Right side */}
       <div className="ml-auto flex items-center gap-2">
+        {/* Help / Shortcuts dropdown */}
+        <div className="relative" ref={helpRef}>
+          <button
+            type="button"
+            onClick={() => setHelpOpen((o) => !o)}
+            className="p-2 text-[#888] hover:text-white hover:bg-[#252525] rounded-lg transition-colors cursor-pointer"
+            title="Shortcuts & tips"
+            aria-expanded={helpOpen}
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
+          {helpOpen && (
+            <div className="absolute right-0 top-full mt-2 w-96 max-h-[calc(100vh-6rem)] overflow-y-auto bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 z-50">
+              <div className="px-4 py-2 border-b border-[#2a2a2a]">
+                <h3 className="text-sm font-semibold text-white">Shortcuts</h3>
+              </div>
+              <div className="px-4 py-3 text-left text-sm text-[#d4d4d4] leading-7">
+                <ul className="space-y-3">
+                  <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">Ctrl + Click + photo</kbd>multi-select photos</li>
+                  <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">Shift + Click + photo</kbd>range select photos</li>
+                  <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">Ctrl + Click + edit tab</kbd>toggle edit</li>
+                  <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">Space + drag</kbd>pan</li>
+                  <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">Ctrl + scroll</kbd>zoom</li>
+                  <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">2× click + photo</kbd>fullscreen</li>
+                  <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">2× click + canvas</kbd>add text</li>
+                  <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">Drag + photo into folder</kbd>adds to folder</li>
+                  <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">Drag + photo out of folder</kbd>creates/adds to new folder</li>
+                  <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">Right-click + 1 photo</kbd>copy/paste edits, preset, export</li>
+                  <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">Right-click + multiple photos</kbd>paste, export, new folder</li>
+                </ul>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Undo/Redo */}
         <div className="flex items-center bg-[#252525] rounded-lg">
           <button
