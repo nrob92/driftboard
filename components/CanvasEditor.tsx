@@ -10,6 +10,7 @@ import { EditPanel } from './EditPanel';
 import { snapToGrid, findNearestPhoto } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
+import exifr from 'exifr';
 
 // DNG support - runtime script loading to avoid bundler issues
 const isDNG = (name: string) => name.toLowerCase().endsWith('.dng');
@@ -231,6 +232,11 @@ interface CanvasImage {
   originalHeight?: number;      // Full resolution height
   // Legacy: DNG original buffer (deprecated - now stored in Supabase)
   originalDngBuffer?: ArrayBuffer;
+  // Filter search: metadata + AI labels
+  takenAt?: string; // ISO date from EXIF
+  cameraMake?: string;
+  cameraModel?: string;
+  labels?: string[];
 }
 
 // Build delete-photo API payload: storagePath = path in photos bucket, originalStoragePath = path in originals bucket
@@ -311,6 +317,11 @@ interface PhotoEdits {
   is_raw?: boolean;
   original_width?: number;
   original_height?: number;
+  // Filter search
+  taken_at?: string | null;
+  camera_make?: string | null;
+  camera_model?: string | null;
+  labels?: string[] | null;
 }
 
 interface CanvasText {
@@ -874,6 +885,13 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const [isSpacePressed, setIsSpacePressed] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [showHeader, setShowHeader] = useState(false);
+  const [photoFilter, setPhotoFilter] = useState<{
+    dateFrom?: string;
+    dateTo?: string;
+    cameraMake?: string;
+    cameraModel?: string;
+    contentSearch?: string;
+  }>({});
   const [folders, setFolders] = useState<PhotoFolder[]>([]);
   const [showFolderPrompt, setShowFolderPrompt] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
@@ -1009,13 +1027,21 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
   // React Query for fetching photo metadata (cached for fast reloads)
   const { data: photoData } = useQuery({
-    queryKey: ['user-photos', user?.id],
+    queryKey: ['user-photos', user?.id, photoFilter],
     queryFn: async () => {
       if (!user) return null;
 
-      // Fetch all data in parallel for speed
+      let editsQuery = supabase.from('photo_edits').select('*').eq('user_id', user.id);
+      if (photoFilter.dateFrom) editsQuery = editsQuery.gte('taken_at', photoFilter.dateFrom);
+      if (photoFilter.dateTo) editsQuery = editsQuery.lte('taken_at', photoFilter.dateTo);
+      if (photoFilter.cameraMake) editsQuery = editsQuery.eq('camera_make', photoFilter.cameraMake);
+      if (photoFilter.cameraModel) editsQuery = editsQuery.eq('camera_model', photoFilter.cameraModel);
+      if (photoFilter.contentSearch?.trim()) {
+        editsQuery = editsQuery.contains('labels', [photoFilter.contentSearch.trim().toLowerCase()]);
+      }
+
       const [editsResult, foldersResult, photosResult, originalsResult] = await Promise.all([
-        supabase.from('photo_edits').select('*').eq('user_id', user.id),
+        editsQuery,
         supabase.from('photo_folders').select('*').eq('user_id', user.id),
         supabase.storage.from('photos').list(user.id, {
           limit: 500,
@@ -1039,15 +1065,15 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     staleTime: 60 * 1000, // Cache for 60 seconds
   });
 
-  // Track if images have been loaded to prevent re-processing
-  const imagesLoadedRef = useRef<string | null>(null);
+  // Track load key (user + filter) to prevent duplicate processing
+  const loadKeyRef = useRef<string | null>(null);
 
   // Process photos from cached query data
   useEffect(() => {
     const loadUserPhotos = async () => {
       if (!user || !photoData) return;
-      // Skip if images already loaded for this user (prevents duplicate processing)
-      if (imagesLoadedRef.current === user.id) {
+      const loadKey = `${user.id}:${JSON.stringify(photoFilter)}`;
+      if (loadKeyRef.current === loadKey) {
         onPhotosLoadStateChange?.(false);
         return;
       }
@@ -1073,13 +1099,32 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
         // Combined list: all from photos, plus originals-only files (no preview)
         type FileEntry = { name: string; bucket: 'photos' | 'originals' };
-        const validFiles: FileEntry[] = [
+        let validFiles: FileEntry[] = [
           ...photosList.map((f) => ({ name: f.name, bucket: 'photos' as const })),
           ...originalsOnly.map((f) => ({ name: f.name, bucket: 'originals' as const })),
         ];
 
+        // When any filter is active, only show files that have a matching photo_edit row
+        const hasFilter = photoFilter.contentSearch?.trim() || photoFilter.dateFrom || photoFilter.dateTo || photoFilter.cameraMake || photoFilter.cameraModel;
+        if (hasFilter && savedEdits && savedEdits.length >= 0) {
+          const editPaths = new Set<string>();
+          for (const e of savedEdits as { storage_path?: string; original_storage_path?: string }[]) {
+            if (e.storage_path) editPaths.add(e.storage_path);
+            if (e.original_storage_path) editPaths.add(e.original_storage_path);
+          }
+          validFiles = validFiles.filter((f) => editPaths.has(`${user.id}/${f.name}`));
+        }
+
         if (photosError) return;
-        if (validFiles.length === 0) return;
+
+        if (validFiles.length === 0) {
+          loadKeyRef.current = loadKey;
+          setImages([]);
+          setFolders([]);
+          setHistory([{ images: [], texts: [], folders: [] }]);
+          setHistoryIndex(0);
+          return;
+        }
 
         const cols = 3;
         const spacing = 420;
@@ -1207,6 +1252,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               canvasImg.folderId = edit.folder_id != null ? String(edit.folder_id) : undefined;
               canvasImg.rotation = edit.rotation ?? 0;
               canvasImg.scaleX = edit.scale_x ?? 1;
+              if (edit.taken_at != null) canvasImg.takenAt = edit.taken_at;
+              if (edit.camera_make != null) canvasImg.cameraMake = edit.camera_make;
+              if (edit.camera_model != null) canvasImg.cameraModel = edit.camera_model;
+              if (edit.labels != null && Array.isArray(edit.labels)) canvasImg.labels = edit.labels;
               canvasImg.scaleY = edit.scale_y ?? 1;
               canvasImg.exposure = edit.exposure ?? 0;
               canvasImg.contrast = edit.contrast ?? 0;
@@ -1279,6 +1328,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               img.rotation = edit.rotation ?? 0;
               img.scaleX = edit.scale_x ?? 1;
               img.scaleY = edit.scale_y ?? 1;
+              if (edit.taken_at != null) img.takenAt = edit.taken_at;
+              if (edit.camera_make != null) img.cameraMake = edit.camera_make;
+              if (edit.camera_model != null) img.cameraModel = edit.camera_model;
+              if (edit.labels != null && Array.isArray(edit.labels)) img.labels = edit.labels;
               // Light
               img.exposure = edit.exposure ?? 0;
               img.contrast = edit.contrast ?? 0;
@@ -1347,14 +1400,13 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         console.log('Final loaded folders:', loadedFolders);
         console.log('Images with folderIds:', newImages.map(img => ({ id: img.id, folderId: img.folderId })));
 
+        loadKeyRef.current = loadKey;
+        setImages(newImages);
+        setFolders(loadedFolders);
+        setHistory([{ images: newImages, texts: [], folders: loadedFolders }]);
+        setHistoryIndex(0);
+
         if (newImages.length > 0) {
-          imagesLoadedRef.current = user.id;
-          setImages(newImages);
-          setFolders(loadedFolders);
-          // Update history with loaded state
-          setHistory([{ images: newImages, texts: [], folders: loadedFolders }]);
-          setHistoryIndex(0);
-          
           // Center the viewport on the loaded content
           if (loadedFolders.length > 0) {
             // Calculate bounding box of all folders
@@ -1397,6 +1449,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     };
 
     loadUserPhotos();
+    // Don't depend on photoFilter: we only run when photoData changes. When user presses Enter,
+    // the query key (which includes photoFilter) changes and React Query refetches; when the
+    // refetch completes, photoData updates and we run with the correct filtered result.
   }, [user, photoData, onPhotosLoadStateChange, queryClient]);
 
   // Save state to history
@@ -1547,7 +1602,23 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
         try {
           console.log('Processing file:', file.name);
-          
+
+          // Extract EXIF metadata (client-side) for filter search
+          let takenAt: string | undefined;
+          let cameraMake: string | undefined;
+          let cameraModel: string | undefined;
+          try {
+            const exif = await exifr.parse(file, { pick: ['DateTimeOriginal', 'Make', 'Model'] });
+            if (exif?.DateTimeOriginal) {
+              const d = exif.DateTimeOriginal;
+              takenAt = d instanceof Date ? d.toISOString() : String(d);
+            }
+            if (exif?.Make) cameraMake = String(exif.Make).trim();
+            if (exif?.Model) cameraModel = String(exif.Model).trim();
+          } catch {
+            // ignore EXIF errors
+          }
+
           // Generate unique filename with user folder
           const fileExt = file.name.split('.').pop();
           const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
@@ -1643,22 +1714,31 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                   width = decoded.width;
                   height = decoded.height;
 
-                  // Upload client-decoded preview to photos bucket
+                  // Upload client-decoded preview to photos bucket (background, don't block display)
                   const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
                   const previewFilePath = `${user.id}/${previewFileName}`;
-                  const previewBlob = await fetch(decoded.dataUrl).then(r => r.blob());
-                  const { error: previewUploadError } = await supabase.storage
-                    .from('photos')
-                    .upload(previewFilePath, previewBlob, {
+                  previewStoragePath = previewFilePath; // Set optimistically for immediate use
+                  fetch(decoded.dataUrl).then(r => r.blob()).then(previewBlob => {
+                    supabase.storage.from('photos').upload(previewFilePath, previewBlob, {
                       contentType: 'image/jpeg',
                       cacheControl: '3600',
+                    }).then(({ error }) => {
+                      if (error) {
+                        console.error('Failed to upload preview:', error);
+                        previewStoragePath = undefined; // Clear if upload failed
+                      } else {
+                        console.log('Uploaded client-decoded preview:', previewFilePath);
+                        // Trigger labeling after preview is uploaded (needs to exist in storage)
+                        if (user) {
+                          fetch('/api/label-photo', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ storagePath: previewFilePath, userId: user.id }),
+                          }).catch(() => {});
+                        }
+                      }
                     });
-                  if (!previewUploadError) {
-                    previewStoragePath = previewFilePath;
-                    console.log('Uploaded client-decoded preview:', previewFilePath);
-                  } else {
-                    console.error('Failed to upload preview:', previewUploadError);
-                  }
+                  });
                 }
               } else {
                 // Fallback to client-side decoding
@@ -1670,20 +1750,31 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 width = decoded.width;
                 height = decoded.height;
 
-                // Upload client-decoded preview to photos bucket
+                // Upload client-decoded preview to photos bucket (background, don't block display)
                 const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
                 const previewFilePath = `${user.id}/${previewFileName}`;
-                const previewBlob = await fetch(decoded.dataUrl).then(r => r.blob());
-                const { error: previewUploadError } = await supabase.storage
-                  .from('photos')
-                  .upload(previewFilePath, previewBlob, {
+                previewStoragePath = previewFilePath; // Set optimistically for immediate use
+                fetch(decoded.dataUrl).then(r => r.blob()).then(previewBlob => {
+                  supabase.storage.from('photos').upload(previewFilePath, previewBlob, {
                     contentType: 'image/jpeg',
                     cacheControl: '3600',
+                  }).then(({ error }) => {
+                    if (error) {
+                      console.error('Failed to upload preview:', error);
+                      previewStoragePath = undefined; // Clear if upload failed
+                    } else {
+                      console.log('Uploaded client-decoded preview:', previewFilePath);
+                      // Trigger labeling after preview is uploaded (needs to exist in storage)
+                      if (user) {
+                        fetch('/api/label-photo', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ storagePath: previewFilePath, userId: user.id }),
+                        }).catch(() => {});
+                      }
+                    }
                   });
-                if (!previewUploadError) {
-                  previewStoragePath = previewFilePath;
-                  console.log('Uploaded client-decoded preview:', previewFilePath);
-                }
+                });
               }
             } catch (apiError) {
               // Fallback to client-side decoding
@@ -1695,20 +1786,31 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               width = decoded.width;
               height = decoded.height;
 
-              // Upload client-decoded preview to photos bucket
+              // Upload client-decoded preview to photos bucket (background, don't block display)
               const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
               const previewFilePath = `${user.id}/${previewFileName}`;
-              const previewBlob = await fetch(decoded.dataUrl).then(r => r.blob());
-              const { error: previewUploadError } = await supabase.storage
-                .from('photos')
-                .upload(previewFilePath, previewBlob, {
+              previewStoragePath = previewFilePath; // Set optimistically for immediate use
+              fetch(decoded.dataUrl).then(r => r.blob()).then(previewBlob => {
+                supabase.storage.from('photos').upload(previewFilePath, previewBlob, {
                   contentType: 'image/jpeg',
                   cacheControl: '3600',
+                }).then(({ error }) => {
+                  if (error) {
+                    console.error('Failed to upload preview:', error);
+                    previewStoragePath = undefined; // Clear if upload failed
+                  } else {
+                    console.log('Uploaded client-decoded preview:', previewFilePath);
+                    // Trigger labeling after preview is uploaded (needs to exist in storage)
+                    if (user) {
+                      fetch('/api/label-photo', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ storagePath: previewFilePath, userId: user.id }),
+                      }).catch(() => {});
+                    }
+                  }
                 });
-              if (!previewUploadError) {
-                previewStoragePath = previewFilePath;
-                console.log('Uploaded client-decoded preview:', previewFilePath);
-              }
+              });
             }
           } else if (isDNG(file.name)) {
             // Client-side fallback for DNG when not logged in
@@ -1802,6 +1904,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             originalWidth,
             originalHeight,
             originalDngBuffer: dngBuffer, // Legacy: client-side fallback
+            takenAt,
+            cameraMake,
+            cameraModel,
           };
 
           newImages.push(newImage);
@@ -1921,11 +2026,29 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               is_raw: img.isRaw ?? false,
               original_width: img.originalWidth ?? null,
               original_height: img.originalHeight ?? null,
+              taken_at: img.takenAt ?? null,
+              camera_make: img.cameraMake ?? null,
+              camera_model: img.cameraModel ?? null,
             }));
             const { error: editsError } = await supabase
               .from('photo_edits')
               .upsert(editsToSave, { onConflict: 'storage_path,user_id' });
             if (editsError) console.error('Error saving photo edits:', editsError);
+            else {
+              // Fire-and-forget: trigger AI labeling for each new photo
+              // Skip DNG files - they'll be labeled after preview upload completes
+              for (const img of imagesToSave) {
+                if (img.isRaw) continue; // DNG files labeled after preview upload
+                const path = img.storagePath || img.originalStoragePath;
+                if (path && user) {
+                  fetch('/api/label-photo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ storagePath: path, userId: user.id }),
+                  }).catch(() => {});
+                }
+              }
+            }
           }
         }
         
@@ -1964,6 +2087,22 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
       for (const file of files) {
         try {
+          // Extract EXIF metadata (client-side) for filter search — same as new-folder flow
+          let takenAt: string | undefined;
+          let cameraMake: string | undefined;
+          let cameraModel: string | undefined;
+          try {
+            const exif = await exifr.parse(file, { pick: ['DateTimeOriginal', 'Make', 'Model'] });
+            if (exif?.DateTimeOriginal) {
+              const d = exif.DateTimeOriginal;
+              takenAt = d instanceof Date ? d.toISOString() : String(d);
+            }
+            if (exif?.Make) cameraMake = String(exif.Make).trim();
+            if (exif?.Model) cameraModel = String(exif.Model).trim();
+          } catch {
+            // ignore EXIF errors
+          }
+
           const fileExt = file.name.split('.').pop();
           const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
           const filePath = user ? `${user.id}/${fileName}` : `anonymous/${fileName}`;
@@ -2005,17 +2144,26 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                   imageSrc = decoded.dataUrl;
                   const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
                   const previewFilePath = `${user.id}/${previewFileName}`;
-                  const previewBlob = await fetch(decoded.dataUrl).then(r => r.blob());
-                  const { error: previewUploadError } = await supabase.storage
-                    .from('photos')
-                    .upload(previewFilePath, previewBlob, {
+                  storagePath = previewFilePath; // Set optimistically for immediate use
+                  fetch(decoded.dataUrl).then(r => r.blob()).then(previewBlob => {
+                    supabase.storage.from('photos').upload(previewFilePath, previewBlob, {
                       contentType: 'image/jpeg',
                       cacheControl: '3600',
+                    }).then(({ error }) => {
+                      if (!error) {
+                        storagePath = previewFilePath;
+                        photosUploadSucceeded = true;
+                        // Trigger labeling after preview is uploaded (needs to exist in storage)
+                        if (user) {
+                          fetch('/api/label-photo', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ storagePath: previewFilePath, userId: user.id }),
+                          }).catch(() => {});
+                        }
+                      }
                     });
-                  if (!previewUploadError) {
-                    storagePath = previewFilePath;
-                    photosUploadSucceeded = true;
-                  }
+                  });
                 }
               }
             } catch {
@@ -2024,19 +2172,32 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               dngBuffer = buffer;
               const decoded = await decodeDNG(buffer, true);
               imageSrc = decoded.dataUrl;
-              const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
-              const previewFilePath = `${user.id}/${previewFileName}`;
-              const previewBlob = await fetch(decoded.dataUrl).then(r => r.blob());
-              const { error: previewUploadError } = await supabase.storage
-                .from('photos')
-                .upload(previewFilePath, previewBlob, {
-                  contentType: 'image/jpeg',
-                  cacheControl: '3600',
-                });
-              if (!previewUploadError) {
-                storagePath = previewFilePath;
-                photosUploadSucceeded = true;
-              }
+                  const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
+                  const previewFilePath = `${user.id}/${previewFileName}`;
+                  storagePath = previewFilePath; // Set optimistically for immediate use
+                  photosUploadSucceeded = true;
+                  fetch(decoded.dataUrl).then(r => r.blob()).then(previewBlob => {
+                    supabase.storage.from('photos').upload(previewFilePath, previewBlob, {
+                      contentType: 'image/jpeg',
+                      cacheControl: '3600',
+                    }).then(({ error }) => {
+                      if (error) {
+                        console.error('Failed to upload preview:', error);
+                        storagePath = undefined; // Clear if upload failed
+                        photosUploadSucceeded = false;
+                      } else {
+                        console.log('Uploaded client-decoded preview:', previewFilePath);
+                        // Trigger labeling after preview is uploaded (needs to exist in storage)
+                        if (user) {
+                          fetch('/api/label-photo', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ storagePath: previewFilePath, userId: user.id }),
+                          }).catch(() => {});
+                        }
+                      }
+                    });
+                  });
               isRaw = true;
             }
           } else if (supabaseUrl && user && !isDNG(file.name)) {
@@ -2151,6 +2312,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             originalWidth,
             originalHeight,
             originalDngBuffer: dngBuffer,
+            takenAt: takenAt ?? undefined,
+            cameraMake: cameraMake ?? undefined,
+            cameraModel: cameraModel ?? undefined,
           };
 
           newImages.push(newImage);
@@ -2265,11 +2429,30 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               is_raw: img.isRaw ?? false,
               original_width: img.originalWidth ?? null,
               original_height: img.originalHeight ?? null,
+              // Filter search: metadata + AI labels
+              taken_at: img.takenAt ?? null,
+              camera_make: img.cameraMake ?? null,
+              camera_model: img.cameraModel ?? null,
             }));
 
-            await supabase
+            const { error: editsError } = await supabase
               .from('photo_edits')
               .upsert(editsToSave, { onConflict: 'storage_path,user_id' });
+            if (!editsError) {
+              // Fire-and-forget: trigger AI labeling for each new photo
+              // Skip DNG files - they'll be labeled after preview upload completes
+              for (const img of imagesToSave) {
+                if (img.isRaw) continue; // DNG files labeled after preview upload
+                const path = img.storagePath || img.originalStoragePath;
+                if (path && user) {
+                  fetch('/api/label-photo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ storagePath: path, userId: user.id }),
+                  }).catch(() => {});
+                }
+              }
+            }
           }
 
           // Update folder dimensions if they changed
@@ -3590,6 +3773,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         is_raw: img.isRaw ?? false,
         original_width: img.originalWidth ?? null,
         original_height: img.originalHeight ?? null,
+        taken_at: img.takenAt ?? null,
+        camera_make: img.cameraMake ?? null,
+        camera_model: img.cameraModel ?? null,
+        labels: img.labels ?? null,
       }));
 
       // Upsert edits (insert or update)
@@ -4200,6 +4387,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         canUndo={historyIndex > 0}
         canRedo={historyIndex < history.length - 1}
         visible={showHeader || folders.length === 0}
+        photoFilter={photoFilter}
+        onPhotoFilterChange={setPhotoFilter}
       />
 
       {/* Upload loading indicator */}

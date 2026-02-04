@@ -3,6 +3,46 @@
 import { useRef, useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth';
 
+export interface PhotoFilterState {
+  dateFrom?: string;
+  dateTo?: string;
+  cameraMake?: string;
+  cameraModel?: string;
+  contentSearch?: string;
+}
+
+function SearchFilterInput({
+  initialValue,
+  photoFilter,
+  onPhotoFilterChange,
+}: {
+  initialValue: string;
+  photoFilter: PhotoFilterState;
+  onPhotoFilterChange: (filter: PhotoFilterState) => void;
+}) {
+  const [value, setValue] = useState(initialValue);
+  return (
+    <input
+      type="search"
+      placeholder="Search photos (e.g. tree, beach) — press Enter"
+      value={value}
+      onChange={(e) => {
+        const next = e.target.value;
+        setValue(next);
+        if (next === '') {
+          onPhotoFilterChange({ ...photoFilter, contentSearch: undefined });
+        }
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          onPhotoFilterChange({ ...photoFilter, contentSearch: value.trim() || undefined });
+        }
+      }}
+      className="w-56 h-8 px-3 py-1 text-sm bg-[#252525] border border-[#333] rounded-lg text-white placeholder:text-[#666] focus:outline-none focus:ring-1 focus:ring-[#3ECF8E] focus:border-[#3ECF8E]"
+    />
+  );
+}
+
 interface TopBarProps {
   onUpload: (files: FileList | null) => void;
   onRecenter: () => void;
@@ -11,6 +51,8 @@ interface TopBarProps {
   canUndo: boolean;
   canRedo: boolean;
   visible: boolean;
+  photoFilter?: PhotoFilterState;
+  onPhotoFilterChange?: (filter: PhotoFilterState) => void;
 }
 
 export function TopBar({
@@ -21,10 +63,14 @@ export function TopBar({
   canUndo,
   canRedo,
   visible,
+  photoFilter = {},
+  onPhotoFilterChange,
 }: TopBarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const helpRef = useRef<HTMLDivElement>(null);
+  const filterRef = useRef<HTMLDivElement>(null);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
   const { user, signOut } = useAuth();
 
   useEffect(() => {
@@ -35,6 +81,15 @@ export function TopBar({
     window.addEventListener('click', close, true);
     return () => window.removeEventListener('click', close, true);
   }, [helpOpen]);
+
+  useEffect(() => {
+    if (!filterOpen) return;
+    const close = (e: MouseEvent) => {
+      if (filterRef.current && !filterRef.current.contains(e.target as Node)) setFilterOpen(false);
+    };
+    window.addEventListener('click', close, true);
+    return () => window.removeEventListener('click', close, true);
+  }, [filterOpen]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     onUpload(e.target.files);
@@ -66,6 +121,84 @@ export function TopBar({
         </div>
         <span className="text-base font-semibold text-white">Driftboard</span>
       </div>
+
+      {/* Divider */}
+      <div className="w-px h-6 bg-[#333]" />
+
+      {/* Filter search */}
+      {onPhotoFilterChange && (
+        <>
+          <div key={`search-${photoFilter.contentSearch ?? ''}`}>
+            <SearchFilterInput
+              initialValue={photoFilter.contentSearch ?? ''}
+              photoFilter={photoFilter}
+              onPhotoFilterChange={onPhotoFilterChange}
+            />
+          </div>
+          <div className="relative" ref={filterRef}>
+            <button
+              type="button"
+              onClick={() => setFilterOpen((o) => !o)}
+              className="p-2 text-[#888] hover:text-white hover:bg-[#252525] rounded-lg transition-colors cursor-pointer"
+              title="Date & camera filters"
+              aria-expanded={filterOpen}
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+              </svg>
+            </button>
+            {filterOpen && (
+              <div className="absolute left-0 top-full mt-2 w-64 bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 z-50 p-3 space-y-3">
+                <div>
+                  <label className="block text-xs text-[#888] mb-1">Date from</label>
+                  <input
+                    type="date"
+                    value={photoFilter.dateFrom ?? ''}
+                    onChange={(e) => onPhotoFilterChange({ ...photoFilter, dateFrom: e.target.value || undefined })}
+                    className="w-full h-8 px-2 text-sm bg-[#252525] border border-[#333] rounded text-white focus:outline-none focus:ring-1 focus:ring-[#3ECF8E]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-[#888] mb-1">Date to</label>
+                  <input
+                    type="date"
+                    value={photoFilter.dateTo ?? ''}
+                    onChange={(e) => onPhotoFilterChange({ ...photoFilter, dateTo: e.target.value || undefined })}
+                    className="w-full h-8 px-2 text-sm bg-[#252525] border border-[#333] rounded text-white focus:outline-none focus:ring-1 focus:ring-[#3ECF8E]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-[#888] mb-1">Camera make</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Canon"
+                    value={photoFilter.cameraMake ?? ''}
+                    onChange={(e) => onPhotoFilterChange({ ...photoFilter, cameraMake: e.target.value || undefined })}
+                    className="w-full h-8 px-2 text-sm bg-[#252525] border border-[#333] rounded text-white placeholder:text-[#666] focus:outline-none focus:ring-1 focus:ring-[#3ECF8E]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-[#888] mb-1">Camera model</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. EOS R5"
+                    value={photoFilter.cameraModel ?? ''}
+                    onChange={(e) => onPhotoFilterChange({ ...photoFilter, cameraModel: e.target.value || undefined })}
+                    className="w-full h-8 px-2 text-sm bg-[#252525] border border-[#333] rounded text-white placeholder:text-[#666] focus:outline-none focus:ring-1 focus:ring-[#3ECF8E]"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onPhotoFilterChange({})}
+                  className="w-full py-1.5 text-xs text-[#888] hover:text-white border border-[#333] rounded-lg hover:bg-[#252525]"
+                >
+                  Clear filters
+                </button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       {/* Divider */}
       <div className="w-px h-6 bg-[#333]" />
