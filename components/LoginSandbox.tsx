@@ -269,7 +269,7 @@ function SandboxImageNode({
   );
 }
 
-export function LoginSandbox({ signInSectionRef }: { signInSectionRef: React.RefObject<HTMLDivElement | null> }) {
+export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -623,8 +623,8 @@ export function LoginSandbox({ signInSectionRef }: { signInSectionRef: React.Ref
   }, [sandboxImages, sandboxFolders]);
 
   const handleExportClick = useCallback(() => {
-    signInSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [signInSectionRef]);
+    if (onSignInClick) onSignInClick();
+  }, [onSignInClick]);
 
   const handleStageMouseDown = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
     if (e.target === e.target.getStage()) setSelectedId(null);
