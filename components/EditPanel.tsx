@@ -141,6 +141,10 @@ interface EditPanelProps {
   onResetToOriginal?: () => void;
   onSave?: () => void;
   onExport?: () => void;
+  /** Auto-save status for feedback (Saving... / Saved / Save failed). */
+  saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
+  /** Called when user clicks Retry after a save failure. */
+  onRetrySave?: () => void;
   bypassedTabs?: Set<BypassTab>;
   onToggleBypass?: (tab: BypassTab) => void;
   /** When true, delete button shows loading spinner (e.g. while deleting photo). */
@@ -241,7 +245,7 @@ function Slider({
   );
 }
 
-export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSave, onExport, bypassedTabs, onToggleBypass, isDeleting }: EditPanelProps) {
+export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSave, onExport, saveStatus = 'idle', onRetrySave, bypassedTabs, onToggleBypass, isDeleting }: EditPanelProps) {
   const isImage = 'src' in object;
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
@@ -1387,17 +1391,30 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
                     </button>
                   )}
 
-                  {/* Save */}
-                  {onSave && (
-                    <button
-                      onClick={onSave}
-                      className="p-2 rounded-lg bg-[#3ECF8E]/20 text-[#3ECF8E] hover:bg-[#3ECF8E]/30 transition-colors cursor-pointer"
-                      title="Save Edits"
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 13l4 4L19 7" />
-                      </svg>
-                    </button>
+                  {/* Auto-save status (no Save button – edits auto-save) */}
+                  {(saveStatus === 'saving' || saveStatus === 'saved' || saveStatus === 'error') && (
+                    <div className="flex items-center gap-2">
+                      {saveStatus === 'saving' && (
+                        <span className="text-[10px] text-[#888]">Saving…</span>
+                      )}
+                      {saveStatus === 'saved' && (
+                        <span className="text-[10px] text-[#3ECF8E]">Saved</span>
+                      )}
+                      {saveStatus === 'error' && (
+                        <>
+                          <span className="text-[10px] text-[#f87171]">Save failed</span>
+                          {onRetrySave && (
+                            <button
+                              type="button"
+                              onClick={onRetrySave}
+                              className="text-[10px] text-[#3ECF8E] hover:underline cursor-pointer"
+                            >
+                              Retry
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
                   )}
 
                   {/* Export */}

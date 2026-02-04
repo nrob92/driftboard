@@ -10,7 +10,6 @@ import { EditPanel } from './EditPanel';
 import { snapToGrid, findNearestPhoto } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
-import { processCamanImage, hasActiveEdits, CamanEditValues } from '@/lib/camanFilters'; // Keep for export
 
 // DNG support - runtime script loading to avoid bundler issues
 const isDNG = (name: string) => name.toLowerCase().endsWith('.dng');
@@ -899,6 +898,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const [createPresetName, setCreatePresetName] = useState('');
   const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
   const [isDeletingFolder, setIsDeletingFolder] = useState(false);
+  const [exportProgress, setExportProgress] = useState<{ current: number; total: number } | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const saveStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [zoomedImageId, setZoomedImageId] = useState<string | null>(null);
   const preZoomViewRef = useRef<{ scale: number; x: number; y: number } | null>(null);
   const zoomAnimationRef = useRef<number | null>(null);
@@ -3413,22 +3416,23 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     [images, folders, user, resolveOverlapsAndReflow]
   );
 
-  // Save edits to Supabase database
-  const handleSave = useCallback(async () => {
+  // Save edits to Supabase database. silent = true for auto-save (no alerts, use saveStatus).
+  const handleSave = useCallback(async (silent = false) => {
     if (!user) {
-      alert('Please sign in to save your edits');
+      if (!silent) alert('Please sign in to save your edits');
+      return;
+    }
+
+    setSaveStatus('saving');
+
+    const imagesToSave = images.filter(img => img.storagePath || img.originalStoragePath);
+    if (imagesToSave.length === 0) {
+      setSaveStatus('idle');
+      if (!silent) alert('No photos to save. Upload some photos first!');
       return;
     }
 
     try {
-      // Save images that have a cloud path (photos or originals bucket)
-      const imagesToSave = images.filter(img => img.storagePath || img.originalStoragePath);
-      
-      if (imagesToSave.length === 0) {
-        alert('No photos to save. Upload some photos first!');
-        return;
-      }
-
       // Canonical key: prefer photos path, else originals path (for DNG-only)
       const editsToSave = imagesToSave.map(img => ({
         storage_path: img.storagePath || img.originalStoragePath!,
@@ -3488,206 +3492,215 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
       if (error) {
         console.error('Save error:', error);
-        alert(`Failed to save edits: ${error.message}`);
+        setSaveStatus('error');
+        if (!silent) alert(`Failed to save edits: ${error.message}`);
         return;
       }
 
-      alert('Edits saved successfully! Your original photos are preserved.');
+      setSaveStatus('saved');
+      if (!silent) alert('Edits saved successfully! Your original photos are preserved.');
+
+      // Reset to idle after a short delay (for auto-save feedback)
+      if (saveStatusTimeoutRef.current) clearTimeout(saveStatusTimeoutRef.current);
+      saveStatusTimeoutRef.current = setTimeout(() => {
+        setSaveStatus('idle');
+        saveStatusTimeoutRef.current = null;
+      }, 2000);
     } catch (error) {
       console.error('Save error:', error);
-      alert('Failed to save edits');
+      setSaveStatus('error');
+      if (!silent) alert('Failed to save edits');
     }
   }, [user, images]);
 
-  // Handle export with edits applied
-  const handleExport = useCallback(async () => {
-    const singleId = selectedIds.length === 1 ? selectedIds[0] : null;
-    if (!singleId) return;
+  // Auto-save: debounce save when the selected photo's edits change
+  const selectedImageEditSignature = useMemo(() => {
+    if (selectedIds.length !== 1) return null;
+    const img = images.find((i) => i.id === selectedIds[0]);
+    if (!img || !('src' in img) || !(img.storagePath || img.originalStoragePath)) return null;
+    return JSON.stringify({
+      folder_id: img.folderId || null,
+      x: Math.round(img.x),
+      y: Math.round(img.y),
+      width: Math.round(img.width),
+      height: Math.round(img.height),
+      rotation: img.rotation,
+      scale_x: img.scaleX,
+      scale_y: img.scaleY,
+      exposure: img.exposure,
+      contrast: img.contrast,
+      highlights: img.highlights,
+      shadows: img.shadows,
+      whites: img.whites,
+      blacks: img.blacks,
+      texture: img.texture ?? 0,
+      temperature: img.temperature,
+      vibrance: img.vibrance,
+      saturation: img.saturation,
+      shadow_tint: img.shadowTint ?? 0,
+      color_hsl: img.colorHSL ?? null,
+      split_toning: img.splitToning ?? null,
+      color_grading: img.colorGrading ?? null,
+      color_calibration: img.colorCalibration ?? null,
+      clarity: img.clarity,
+      dehaze: img.dehaze,
+      vignette: img.vignette,
+      grain: img.grain,
+      grain_size: img.grainSize ?? 0,
+      grain_roughness: img.grainRoughness ?? 0,
+      curves: img.curves,
+      brightness: img.brightness,
+      hue: img.hue,
+      blur: img.blur,
+      filters: img.filters,
+    });
+  }, [images, selectedIds]);
 
-    const image = images.find(img => img.id === singleId);
-    const hasCloudPath = image?.storagePath || image?.originalStoragePath;
-    if (!image || !hasCloudPath) {
-      alert('Cannot export: Image not saved to cloud');
-      return;
-    }
+  useEffect(() => {
+    if (!selectedImageEditSignature || !user) return;
+    if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
+    autoSaveTimeoutRef.current = setTimeout(() => {
+      handleSave(true);
+      autoSaveTimeoutRef.current = null;
+    }, 800);
+    return () => {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current);
+        autoSaveTimeoutRef.current = null;
+      }
+    };
+  }, [selectedImageEditSignature, user, handleSave]);
+
+  // Export a single image with edits (DNG full-res or server). silent = true for multi-export (no per-image alerts).
+  const exportImageToDownload = useCallback(async (image: CanvasImage, silent = false): Promise<boolean> => {
+    const hasCloudPath = image.storagePath || image.originalStoragePath;
+    if (!hasCloudPath) return false;
 
     try {
-      // Check if this is a DNG - export at full resolution client-side
       const pathIsDng = (p: string | undefined) => p?.toLowerCase().endsWith('.dng') ?? false;
       const isDngSource = image.originalStoragePath && pathIsDng(image.originalStoragePath);
 
       if (isDngSource && image.originalStoragePath) {
-        console.log('Full-res DNG export starting...');
-        alert('Decoding DNG at full resolution... This may take 10-20 seconds.');
-
+        if (!silent) alert('Decoding DNG at full resolution... This may take 10-20 seconds.');
         try {
-          // Get signed URL from server (bypasses RLS using service role)
           const signedUrlResponse = await fetch('/api/signed-url', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              bucket: 'originals',
-              path: image.originalStoragePath,
-            }),
+            body: JSON.stringify({ bucket: 'originals', path: image.originalStoragePath }),
           });
-
           if (!signedUrlResponse.ok) {
             const err = await signedUrlResponse.json();
             console.error('Failed to get signed URL:', err);
-            alert('Failed to access original DNG. Falling back to preview quality.');
-            // Fall through to server export
+            if (!silent) alert('Failed to access original DNG. Falling back to preview quality.');
           } else {
             const { signedUrl } = await signedUrlResponse.json();
-
-            // Fetch the DNG file using the signed URL
             const response = await fetch(signedUrl);
-            if (!response.ok) {
-              throw new Error(`Failed to download DNG: ${response.status}`);
-            }
+            if (!response.ok) throw new Error(`Failed to download DNG: ${response.status}`);
             const dngBlob = await response.blob();
-            // Decode DNG at full resolution using runtime-loaded LibRaw
             const arrayBuffer = await dngBlob.arrayBuffer();
-            console.log('Decoding DNG...', { size: arrayBuffer.byteLength });
-
-            // Use decodeDNG with forPreview=false for full resolution
             const decoded = await decodeDNG(arrayBuffer, false);
-            console.log('DNG decoded:', { width: decoded.width, height: decoded.height });
-
-            // Create a temporary container for Konva Stage (must be a div)
-            const tempContainer = document.createElement('div');
-            tempContainer.style.position = 'absolute';
-            tempContainer.style.left = '-9999px';
-            document.body.appendChild(tempContainer);
-
-            // Build CamanJS edit values from image properties
-            // Map colorCalibration to camanFilters format
-            const mappedColorCalibration = image.colorCalibration ? {
-              shadowTint: image.shadowTint,
-              redPrimaryHue: image.colorCalibration.redHue,
-              redPrimarySaturation: image.colorCalibration.redSaturation,
-              greenPrimaryHue: image.colorCalibration.greenHue,
-              greenPrimarySaturation: image.colorCalibration.greenSaturation,
-              bluePrimaryHue: image.colorCalibration.blueHue,
-              bluePrimarySaturation: image.colorCalibration.blueSaturation,
-            } : undefined;
-
-            const camanEdits: CamanEditValues = {
-              exposure: image.exposure,
-              contrast: image.contrast,
-              brightness: image.brightness,
-              highlights: image.highlights,
-              shadows: image.shadows,
-              whites: image.whites,
-              blacks: image.blacks,
-              temperature: image.temperature,
-              vibrance: image.vibrance,
-              saturation: image.saturation,
-              clarity: image.clarity,
-              dehaze: image.dehaze,
-              hue: image.hue,
-              vignette: image.vignette,
-              grain: image.grain,
-              blur: image.blur,
-              shadowTint: image.shadowTint,
-              curves: image.curves,
-              colorHSL: image.colorHSL,
-              splitToning: image.splitToning,
-              colorGrading: image.colorGrading,
-              colorCalibration: mappedColorCalibration,
-              filters: image.filters,
-            };
-
-            // Check if any edits need to be applied
-            const needsProcessing = hasActiveEdits(camanEdits);
-
-            let dataUrl: string;
-            if (needsProcessing) {
-              // Apply CamanJS filters to the decoded image
-              console.log('Applying CamanJS filters to full-res DNG...');
-              dataUrl = await processCamanImage(decoded.dataUrl, camanEdits);
-            } else {
-              // No edits, use decoded image directly
-              dataUrl = decoded.dataUrl;
-            }
-
-            // Cleanup temp container (no longer needed since we use CamanJS directly)
-            document.body.removeChild(tempContainer);
-
-            // Download
+            // Use same canvas filter pipeline as UI so DNG export matches what you see (WYSIWYG)
+            const blob = await exportWithCanvasFilters(image, decoded.dataUrl);
+            const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = dataUrl;
+            a.href = url;
             a.download = `${image.id || 'export'}-fullres-${Date.now()}.jpg`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-
-            alert(`Exported at full resolution: ${decoded.width}x${decoded.height}px`);
-            console.log('Full-res DNG export completed');
-            return;
+            URL.revokeObjectURL(url);
+            if (!silent) alert(`Exported at full resolution: ${decoded.width}x${decoded.height}px`);
+            return true;
           }
         } catch (dngError) {
           console.error('DNG export error:', dngError);
-          alert(`DNG export failed: ${dngError instanceof Error ? dngError.message : 'Unknown error'}. Falling back to server export.`);
-          // Fall through to server export
+          if (!silent) alert(`DNG export failed: ${dngError instanceof Error ? dngError.message : 'Unknown error'}. Falling back to preview quality.`);
         }
       }
 
-      // Server export (photos bucket or regular images)
-      const edits = {
-        exposure: image.exposure,
-        contrast: image.contrast,
-        highlights: image.highlights,
-        shadows: image.shadows,
-        whites: image.whites,
-        blacks: image.blacks,
-        brightness: image.brightness,
-        temperature: image.temperature,
-        vibrance: image.vibrance,
-        saturation: image.saturation,
-        clarity: image.clarity,
-        dehaze: image.dehaze,
-        vignette: image.vignette,
-        grain: image.grain,
-        curves: image.curves,
-        colorHSL: image.colorHSL,
-        splitToning: image.splitToning,
-        shadowTint: image.shadowTint,
-        colorGrading: image.colorGrading,
-        colorCalibration: image.colorCalibration,
-      };
-
-      const response = await fetch('/api/export', {
+      // Use client-side canvas filters so export matches the UI (WYSIWYG). Get signed URL and run same pipeline as display.
+      const pathToFetch = image.storagePath || image.originalStoragePath;
+      const bucket = image.storagePath ? 'photos' : 'originals';
+      const signedRes = await fetch('/api/signed-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          storagePath: image.storagePath || undefined,
-          originalStoragePath: image.originalStoragePath || undefined,
-          edits,
-          format: 'jpeg',
-          quality: 95,
-        }),
+        body: JSON.stringify({ bucket, path: pathToFetch }),
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Export failed');
+      if (!signedRes.ok) {
+        const err = await signedRes.json();
+        throw new Error(err.error || 'Failed to get image URL');
       }
-
-      const blob = await response.blob();
+      const { signedUrl } = await signedRes.json();
+      const blob = await exportWithCanvasFilters(image, signedUrl);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `export-${Date.now()}.jpg`;
+      a.download = `${image.id || 'export'}-${Date.now()}.jpg`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-
+      return true;
     } catch (error) {
       console.error('Export error:', error);
-      alert(`Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      if (!silent) alert(`Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      return false;
     }
-  }, [selectedIds, images]);
+  }, []);
+
+  // Handle export with edits applied (single selected image). Runs in background with progress overlay.
+  const handleExport = useCallback(() => {
+    const singleId = selectedIds.length === 1 ? selectedIds[0] : null;
+    if (!singleId) return;
+    const image = images.find(img => img.id === singleId);
+    if (!image || !(image.storagePath || image.originalStoragePath)) {
+      alert('Cannot export: Image not saved to cloud');
+      return;
+    }
+    setExportProgress({ current: 1, total: 1 });
+    (async () => {
+      try {
+        await exportImageToDownload(image, false);
+      } finally {
+        setExportProgress(null);
+      }
+    })();
+  }, [selectedIds, images, exportImageToDownload]);
+
+  // Export multiple selected photos with edits (context menu). Runs in background with "Exporting 1 of N" overlay.
+  const handleExportSelection = useCallback(() => {
+    if (!imageContextMenu) return;
+    const ids = imageContextMenu.selectedIds;
+    const toExport = ids
+      .map((id) => images.find((img) => img.id === id))
+      .filter((img): img is CanvasImage => !!img && 'src' in img && !!(img.storagePath || img.originalStoragePath));
+    setImageContextMenu(null);
+    if (toExport.length === 0) {
+      alert('No photos to export. Selected items must be saved to cloud.');
+      return;
+    }
+    const total = toExport.length;
+    setExportProgress({ current: 1, total });
+    (async () => {
+      const delayMs = 400;
+      let ok = 0;
+      let fail = 0;
+      for (let i = 0; i < toExport.length; i++) {
+        const success = await exportImageToDownload(toExport[i], true);
+        if (success) ok++;
+        else fail++;
+        if (i < toExport.length - 1) {
+          setExportProgress({ current: i + 2, total });
+          await new Promise((r) => setTimeout(r, delayMs));
+        }
+      }
+      setExportProgress(null);
+      if (total > 1 && (ok > 0 || fail > 0)) {
+        if (fail === 0) alert(`Exported ${ok} photo${ok === 1 ? '' : 's'}.`);
+        else alert(`Exported ${ok} photo${ok === 1 ? '' : 's'}. ${fail} failed.`);
+      }
+    })();
+  }, [imageContextMenu, images, exportImageToDownload]);
 
   // Handle folder click to edit
   const handleFolderDoubleClick = useCallback((folder: PhotoFolder) => {
@@ -4090,6 +4103,17 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 bg-[#171717] border border-[#2a2a2a] rounded-xl px-4 py-3 shadow-2xl shadow-black/50">
           <div className="w-5 h-5 border-2 border-[#3ECF8E] border-t-transparent rounded-full animate-spin" />
           <span className="text-white text-sm font-medium">Uploading...</span>
+        </div>
+      )}
+
+      {/* Export progress indicator (background export – you can keep editing) */}
+      {exportProgress && (
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 bg-[#171717] border border-[#2a2a2a] rounded-xl px-4 py-3 shadow-2xl shadow-black/50">
+          <div className="w-5 h-5 border-2 border-[#3ECF8E] border-t-transparent rounded-full animate-spin" />
+          <span className="text-white text-sm font-medium">
+            Exporting {exportProgress.current} of {exportProgress.total}
+          </span>
+          <span className="text-[#888] text-xs">You can keep editing</span>
         </div>
       )}
 
@@ -4937,6 +4961,13 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               </button>
               <button
                 type="button"
+                onClick={handleExportSelection}
+                className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors"
+              >
+                Export selection ({imageContextMenu.selectedIds.length} photos)
+              </button>
+              <button
+                type="button"
                 onClick={handleCreateFolderFromSelection}
                 className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors border-t border-[#2a2a2a]"
               >
@@ -5109,7 +5140,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             );
             saveToHistory();
           } : undefined}
-          onSave={'src' in selectedObject ? handleSave : undefined}
+          onSave={'src' in selectedObject ? () => handleSave(false) : undefined}
+          saveStatus={'src' in selectedObject ? saveStatus : 'idle'}
+          onRetrySave={'src' in selectedObject ? () => handleSave(false) : undefined}
           onExport={'src' in selectedObject ? handleExport : undefined}
           bypassedTabs={bypassedTabs}
           onToggleBypass={(tab) => {
@@ -5472,6 +5505,120 @@ const createCurvesFilter = (curves: ChannelCurves) => {
     }
   };
 };
+
+// Konva Contrast exact formula: adjust = ((contrast+100)/100)^2, then (val/255-0.5)*adjust+0.5. Node gets contrast in -100..100; we pass image.contrast*25.
+const createContrastFilterParam = (konvaContrastValue: number) => {
+  const adjust = Math.pow((konvaContrastValue + 100) / 100, 2);
+  return function(imageData: ImageData) {
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      let r = data[i] / 255 - 0.5; r = (r * adjust + 0.5) * 255; data[i] = r < 0 ? 0 : r > 255 ? 255 : r;
+      let g = data[i + 1] / 255 - 0.5; g = (g * adjust + 0.5) * 255; data[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
+      let b = data[i + 2] / 255 - 0.5; b = (b * adjust + 0.5) * 255; data[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
+    }
+  };
+};
+
+// Konva HSV exact formula: 3x3 RGB matrix from v=2^value(), s=2^saturation(), h=hue°; we only set saturation and hue (value=0). Node: saturation = image.saturation*2, hue = image.hue*180.
+const createHSVFilterParam = (saturationValue: number, hueValue: number) => {
+  const v = Math.pow(2, 0); // value not set on node
+  const s = Math.pow(2, saturationValue);
+  const h = Math.abs(hueValue + 360) % 360;
+  const vsu = v * s * Math.cos((h * Math.PI) / 180);
+  const vsw = v * s * Math.sin((h * Math.PI) / 180);
+  const rr = 0.299 * v + 0.701 * vsu + 0.167 * vsw;
+  const rg = 0.587 * v - 0.587 * vsu + 0.33 * vsw;
+  const rb = 0.114 * v - 0.114 * vsu - 0.497 * vsw;
+  const gr = 0.299 * v - 0.299 * vsu - 0.328 * vsw;
+  const gg = 0.587 * v + 0.413 * vsu + 0.035 * vsw;
+  const gb = 0.114 * v - 0.114 * vsu + 0.293 * vsw;
+  const br = 0.299 * v - 0.3 * vsu + 1.25 * vsw;
+  const bg = 0.587 * v - 0.586 * vsu - 1.05 * vsw;
+  const bb = 0.114 * v + 0.886 * vsu - 0.2 * vsw;
+  return function(imageData: ImageData) {
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const nr = rr * r + rg * g + rb * b;
+      const ng = gr * r + gg * g + gb * b;
+      const nb = br * r + bg * g + bb * b;
+      data[i] = nr < 0 ? 0 : nr > 255 ? 255 : nr;
+      data[i + 1] = ng < 0 ? 0 : ng > 255 ? 255 : ng;
+      data[i + 2] = nb < 0 ? 0 : nb > 255 ? 255 : nb;
+    }
+  };
+};
+
+// Build filter list for export - same order and logic as canvas display (no Konva node, no bypass). Omit blur; applied via ctx.filter.
+function buildExportFilterList(image: CanvasImage): ((imageData: ImageData) => void)[] {
+  const list: ((imageData: ImageData) => void)[] = [];
+  const isCurvesModified = (): boolean => {
+    if (!image.curves) return false;
+    const ch = (points: CurvePoint[]) => {
+      if (!points || points.length === 0) return false;
+      if (points.length > 2) return true;
+      return points.some((p, i) => (i === 0 ? p.x !== 0 || p.y !== 0 : i === points.length - 1 ? p.x !== 255 || p.y !== 255 : true));
+    };
+    return ch(image.curves.rgb) || ch(image.curves.red) || ch(image.curves.green) || ch(image.curves.blue);
+  };
+  if (isCurvesModified() && image.curves) list.push(createCurvesFilter(image.curves));
+  if (image.exposure !== 0) list.push(createExposureFilter(image.exposure));
+  if (image.highlights !== 0 || image.shadows !== 0 || image.whites !== 0 || image.blacks !== 0)
+    list.push(createTonalFilter(image.highlights, image.shadows, image.whites, image.blacks));
+  if (image.clarity !== 0) list.push(createClarityFilter(image.clarity));
+  if (image.brightness !== 0) list.push(createBrightnessFilter(image.brightness));
+  if (image.contrast !== 0) list.push(createContrastFilterParam(image.contrast * 25));
+  if (image.temperature !== 0) list.push(createTemperatureFilter(image.temperature));
+  if (image.saturation !== 0 || image.hue !== 0) list.push(createHSVFilterParam(image.saturation * 2, image.hue * 180));
+  if (image.vibrance !== 0) list.push(createVibranceFilter(image.vibrance));
+  if (image.colorHSL && Object.values(image.colorHSL).some((a) => a && ((a.hue ?? 0) !== 0 || (a.saturation ?? 0) !== 0 || (a.luminance ?? 0) !== 0)))
+    list.push(createHSLColorFilter(image.colorHSL));
+  if (image.splitToning) list.push(createSplitToningFilter(image.splitToning));
+  if (image.shadowTint !== undefined && image.shadowTint !== 0) list.push(createShadowTintFilter(image.shadowTint));
+  if (image.colorGrading) list.push(createColorGradingFilter(image.colorGrading));
+  if (image.colorCalibration) list.push(createColorCalibrationFilter(image.colorCalibration));
+  if (image.dehaze !== 0) list.push(createDehazeFilter(image.dehaze));
+  if (image.vignette !== 0) list.push(createVignetteFilter(image.vignette));
+  if (image.grain !== 0) list.push(createGrainFilter(image.grain));
+  // Blur: use Konva's exact Gaussian blur (same as canvas) instead of ctx.filter
+  if (image.blur > 0) {
+    const radius = Math.round(image.blur * 20);
+    list.push((imageData: ImageData) => {
+      const mock = { blurRadius: () => radius };
+      (Konva.Filters.Blur as (this: { blurRadius(): number }, id: ImageData) => void).call(mock, imageData);
+    });
+  }
+  if (image.filters?.includes('grayscale')) list.push((id: ImageData) => { (Konva.Filters.Grayscale as (id: ImageData) => void)(id); });
+  if (image.filters?.includes('sepia')) list.push((id: ImageData) => { (Konva.Filters.Sepia as (id: ImageData) => void)(id); });
+  if (image.filters?.includes('invert')) list.push((id: ImageData) => { (Konva.Filters.Invert as (id: ImageData) => void)(id); });
+  return list;
+}
+
+// Export using the same filter pipeline as the canvas (WYSIWYG). Load image from URL, apply filters, return JPEG blob.
+async function exportWithCanvasFilters(image: CanvasImage, imageUrl: string): Promise<Blob> {
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image();
+    el.crossOrigin = 'anonymous';
+    el.onload = () => resolve(el);
+    el.onerror = () => reject(new Error('Failed to load image'));
+    el.src = imageUrl;
+  });
+  const w = img.naturalWidth || img.width;
+  const h = img.naturalHeight || img.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas 2D not available');
+  ctx.drawImage(img, 0, 0);
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const filters = buildExportFilterList(image);
+  for (const f of filters) f(imageData);
+  ctx.putImageData(imageData, 0, 0);
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('toBlob failed'))), 'image/jpeg', 0.95);
+  });
+}
 
 // HSL color adjustment filter - applies hue/sat/lum shifts with smooth color blending like Lightroom
 // Optimized with pre-computed lookup tables for all 360 hue values
