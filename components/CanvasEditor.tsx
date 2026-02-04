@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import { Stage, Layer, Image as KonvaImage, Text, Transformer, Rect, Group } from 'react-konva';
+import { Stage, Layer, Image as KonvaImage, Text, Transformer, Rect, Group, Shape } from 'react-konva';
 import useImage from 'use-image';
 import Konva from 'konva';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -4681,6 +4681,30 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           }}
         >
           <Layer>
+            {/* Canvas background: first in layer so it draws behind folders/images and stays visible on redraw */}
+            <Group listening={false}>
+              <Rect x={-100000} y={-100000} width={200000} height={200000} fill="#0d0d0d" listening={false} />
+              <Shape
+                listening={false}
+                sceneFunc={(context, shape) => {
+                  const step = 48;
+                  const min = -100000;
+                  const max = 100000;
+                  context.beginPath();
+                  for (let x = min; x <= max; x += step) {
+                    context.moveTo(x, min);
+                    context.lineTo(x, max);
+                  }
+                  for (let y = min; y <= max; y += step) {
+                    context.moveTo(min, y);
+                    context.lineTo(max, y);
+                  }
+                  context.fillStrokeShape(shape);
+                }}
+                stroke="rgba(62, 207, 142, 0.03)"
+                strokeWidth={1}
+              />
+            </Group>
             {/* Folder Borders and Labels */}
             {folders.map((folder) => {
               // Calculate folder dimensions
@@ -4829,6 +4853,16 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                     />
                   </Group>
 
+                  {/* Folder fill - solid background (not transparent) */}
+                  <Rect
+                    x={borderX}
+                    y={borderY}
+                    width={borderWidth}
+                    height={Math.max(borderHeight, 80)}
+                    fill="#0d0d0d"
+                    cornerRadius={12}
+                    listening={false}
+                  />
                   {/* Folder Border - blinks when image center is over this folder's border (dragging out); solid on hover or when dragging over to drop */}
                   <Rect
                     x={borderX}
