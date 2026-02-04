@@ -24,7 +24,7 @@ function SearchFilterInput({
   return (
     <input
       type="search"
-      placeholder="Search photos (e.g. tree, beach) — press Enter"
+      placeholder="Search photos — press Enter"
       value={value}
       onChange={(e) => {
         const next = e.target.value;
@@ -262,6 +262,8 @@ export function TopBar({
                   <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">Ctrl + Click + edit tab</kbd>toggle edit</li>
                   <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">Space + drag</kbd>pan</li>
                   <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">Ctrl + scroll</kbd>zoom</li>
+                  <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">Ctrl + Z</kbd>undo photo edit</li>
+                  <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">Ctrl + Shift + Z</kbd>redo photo edit</li>
                   <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">2× click + photo</kbd>fullscreen</li>
                   <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">2× click + canvas</kbd>add text</li>
                   <li className="flex gap-2 items-center"><kbd className="kbd shrink-0">Drag + photo into folder</kbd>adds to folder</li>

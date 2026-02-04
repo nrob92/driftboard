@@ -265,13 +265,20 @@ const EDIT_KEYS: (keyof CanvasImage)[] = [
   'curves', 'brightness', 'hue', 'blur', 'filters',
 ];
 
+// Deep-clone nested edit values so undo snapshot is independent (preset apply then undo restores all)
+function cloneEditValue(key: keyof CanvasImage, v: unknown): unknown {
+  if (v === undefined || v === null) return v;
+  if (key === 'curves' && typeof v === 'object') return JSON.parse(JSON.stringify(v));
+  if ((key === 'colorHSL' || key === 'splitToning' || key === 'colorGrading' || key === 'colorCalibration') && typeof v === 'object') return JSON.parse(JSON.stringify(v));
+  if (key === 'filters' && Array.isArray(v)) return [...v];
+  return v;
+}
+
 function getEditSnapshot(img: CanvasImage): Partial<CanvasImage> {
   const out: Partial<CanvasImage> = {};
   for (const key of EDIT_KEYS) {
-    if (key in img) {
-      const v = img[key as keyof CanvasImage];
-      if (v !== undefined) (out as Record<string, unknown>)[key] = v;
-    }
+    const v = img[key as keyof CanvasImage];
+    (out as Record<string, unknown>)[key] = cloneEditValue(key as keyof CanvasImage, v);
   }
   return out;
 }
@@ -874,6 +881,11 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const [stagePosition, setStagePosition] = useState({ x: 0, y: 0 });
   const [history, setHistory] = useState<{ images: CanvasImage[]; texts: CanvasText[]; folders: PhotoFolder[] }[]>([{ images: [], texts: [], folders: [] }]);
   const [historyIndex, setHistoryIndex] = useState(0);
+  // Undo/redo only for photo edits (sliders, curves); does not touch structure, placement, or deleted photos
+  const [editHistory, setEditHistory] = useState<{ imageId: string; snapshot: Partial<CanvasImage> }[]>([]);
+  const [editRedoStack, setEditRedoStack] = useState<{ imageId: string; snapshot: Partial<CanvasImage> }[]>([]);
+  const lastEditHistoryPushRef = useRef(0);
+  const EDIT_HISTORY_DEBOUNCE_MS = 400;
   const [isDragging, setIsDragging] = useState(false);
   const lastOverlapCheckRef = useRef<number>(0);
   const folderNameDragRef = useRef<boolean>(false);
@@ -1519,29 +1531,59 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     return { folders: resolvedFolders, images: updatedImages };
   }, []);
 
-  // Undo
+  // Undo: only last photo edit (sliders, curves). Does not restore deleted photos or change placement.
   const handleUndo = useCallback(() => {
-    if (historyIndex > 0) {
-      const prevState = history[historyIndex - 1];
-      setImages([...prevState.images]);
-      setTexts([...prevState.texts]);
-      setFolders([...(prevState.folders || [])]);
-      setHistoryIndex(historyIndex - 1);
-      setSelectedIds([]);
+    if (editHistory.length === 0) return;
+    const entry = editHistory[editHistory.length - 1];
+    const currentImage = images.find((i) => i.id === entry.imageId);
+    if (currentImage) {
+      setEditRedoStack((prev) => [...prev, { imageId: entry.imageId, snapshot: getEditSnapshot(currentImage) }]);
     }
-  }, [history, historyIndex]);
+    setEditHistory((prev) => prev.slice(0, -1));
+    setImages((prev) =>
+      prev.map((i) => (i.id === entry.imageId ? { ...i, ...entry.snapshot } : i))
+    );
+  }, [editHistory, images]);
 
-  // Redo
+  // Redo: only last undone photo edit.
   const handleRedo = useCallback(() => {
-    if (historyIndex < history.length - 1) {
-      const nextState = history[historyIndex + 1];
-      setImages([...nextState.images]);
-      setTexts([...nextState.texts]);
-      setFolders([...(nextState.folders || [])]);
-      setHistoryIndex(historyIndex + 1);
-      setSelectedIds([]);
+    if (editRedoStack.length === 0) return;
+    const entry = editRedoStack[editRedoStack.length - 1];
+    const currentImage = images.find((i) => i.id === entry.imageId);
+    if (currentImage) {
+      setEditHistory((prev) => [...prev.slice(-49), { imageId: entry.imageId, snapshot: getEditSnapshot(currentImage) }]);
     }
-  }, [history, historyIndex]);
+    setEditRedoStack((prev) => prev.slice(0, -1));
+    setImages((prev) =>
+      prev.map((i) => (i.id === entry.imageId ? { ...i, ...entry.snapshot } : i))
+    );
+  }, [editRedoStack, images]);
+
+  // Keyboard shortcuts: Ctrl+Z undo, Ctrl+Shift+Z redo (photo edits only; same as undo/redo buttons)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'z' && e.key !== 'Z') return;
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const target = e.target as HTMLElement | null;
+      // Only skip when focus is in a *text* input (so Ctrl+Z works with slider/range focus)
+      const inTextInput = target?.closest?.('textarea, [contenteditable="true"]')
+        || (target instanceof HTMLInputElement && target.type !== 'range' && target.type !== 'checkbox' && target.type !== 'radio');
+      if (inTextInput) return;
+      if (e.shiftKey) {
+        if (editRedoStack.length > 0) {
+          e.preventDefault();
+          handleRedo();
+        }
+      } else {
+        if (editHistory.length > 0) {
+          e.preventDefault();
+          handleUndo();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [editHistory.length, editRedoStack.length, handleUndo, handleRedo]);
 
   // Handle file upload - uploads to Supabase Storage
   // Show folder name prompt when uploading
@@ -4447,8 +4489,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         onRecenter={handleRecenterFolders}
         onUndo={handleUndo}
         onRedo={handleRedo}
-        canUndo={historyIndex > 0}
-        canRedo={historyIndex < history.length - 1}
+        canUndo={editHistory.length > 0}
+        canRedo={editRedoStack.length > 0}
         visible={showHeader || folders.length === 0}
         photoFilter={photoFilter}
         onPhotoFilterChange={setPhotoFilter}
@@ -5643,6 +5685,17 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           object={selectedObject}
           onUpdate={(updates) => {
             if ('src' in selectedObject) {
+              const imageId = selectedIds[0];
+              if (imageId) {
+                const now = Date.now();
+                const isBulkUpdate = Object.keys(updates).length > 5; // e.g. preset apply
+                const debounceOk = now - lastEditHistoryPushRef.current >= EDIT_HISTORY_DEBOUNCE_MS;
+                if (isBulkUpdate || debounceOk) {
+                  lastEditHistoryPushRef.current = now;
+                  setEditHistory((prev) => [...prev.slice(-49), { imageId, snapshot: getEditSnapshot(selectedObject as CanvasImage) }]);
+                  setEditRedoStack([]);
+                }
+              }
               setImages((prev) =>
                 prev.map((img) => (img.id === selectedIds[0] ? { ...img, ...updates } : img))
               );
@@ -5668,6 +5721,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           }}
           isDeleting={selectedIds[0] != null && deletingPhotoId === selectedIds[0] && 'src' in selectedObject}
           onResetToOriginal={'src' in selectedObject ? () => {
+            setEditHistory([]);
+            setEditRedoStack([]);
             // Reset ALL edits to default values
             setImages((prev) =>
               prev.map((img) => img.id === selectedIds[0] ? {
