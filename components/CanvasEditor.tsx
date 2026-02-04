@@ -4199,7 +4199,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         onRedo={handleRedo}
         canUndo={historyIndex > 0}
         canRedo={historyIndex < history.length - 1}
-        visible={showHeader}
+        visible={showHeader || folders.length === 0}
       />
 
       {/* Upload loading indicator */}
