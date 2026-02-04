@@ -42,21 +42,9 @@ function getFolderLayoutMode(folderWidth: number): 'grid' | 'stack' {
 
 function getFolderBorderHeight(imageCount: number, folderWidth: number): number {
   if (imageCount === 0) return 100;
-  // Up to 3 photos: single row so folder fits them evenly
-  if (imageCount >= 1 && imageCount <= 3) {
-    const rowHeight = GRID_CONFIG.imageMaxSize;
-    return rowHeight + GRID_CONFIG.folderPadding * 2;
-  }
-  const layoutMode = getFolderLayoutMode(folderWidth);
-  let contentHeight: number;
-  if (layoutMode === 'stack') {
-    contentHeight = imageCount * CELL_SIZE + GRID_CONFIG.folderPadding * 2;
-  } else {
-    const cols = calculateColsFromWidth(folderWidth);
-    const rows = Math.ceil(imageCount / cols) || 1;
-    contentHeight = rows * CELL_SIZE + GRID_CONFIG.folderPadding * 2;
-  }
-  return Math.max(contentHeight, 100);
+  // Sandbox folders always use single row (max 3 photos)
+  const rowHeight = GRID_CONFIG.imageMaxSize;
+  return rowHeight + GRID_CONFIG.folderPadding * 2;
 }
 
 type SandboxFolder = {
@@ -78,51 +66,13 @@ function reflowSandboxImagesInFolder(
   const { folderPadding, imageMaxSize } = GRID_CONFIG;
   const contentStartX = folderX + folderPadding;
   const contentStartY = folderY + LABEL_HEIGHT + folderPadding;
-  const contentWidth = folderWidth - folderPadding * 2;
-  const rowHeight = imageMaxSize;
-  const slotGap = 8; // gap between slots for even spacing
+  
+  // Sandbox folders always use single row with 3 columns (max 3 photos)
+  const cols = 3;
+  const row = 0; // Always row 0 (single row)
 
-  // Up to 3 photos: single row, evenly spaced slots so photos fit in folder
-  if (images.length >= 1 && images.length <= 3) {
-    const n = images.length;
-    const slotWidth = (contentWidth - slotGap * (n - 1)) / n;
-    const maxW = Math.min(slotWidth - slotGap, imageMaxSize);
-    const maxH = Math.min(rowHeight - slotGap, imageMaxSize);
-
-    return images.map((img, index) => {
-      const scale = Math.min(maxW / img.width, maxH / img.height, 1);
-      const w = img.width * scale;
-      const h = img.height * scale;
-      const slotLeft = contentStartX + index * (slotWidth + slotGap);
-      const x = slotLeft + (slotWidth - w) / 2;
-      const y = contentStartY + (rowHeight - h) / 2;
-      return { ...img, x, y, width: w, height: h };
-    });
-  }
-
-  const layoutMode = getFolderLayoutMode(folderWidth);
-  if (layoutMode === 'stack') {
-    return images.map((img, index) => {
-      const scale = Math.min(imageMaxSize / img.width, imageMaxSize / img.height, 1);
-      const w = img.width * scale;
-      const h = img.height * scale;
-      const availableWidth = folderWidth - folderPadding * 2;
-      const cellOffsetX = (availableWidth - w) / 2;
-      const yOffset = index * (imageMaxSize + GRID_CONFIG.imageGap);
-      return {
-        ...img,
-        x: contentStartX + cellOffsetX,
-        y: contentStartY + yOffset,
-        width: w,
-        height: h,
-      };
-    });
-  }
-
-  const cols = calculateColsFromWidth(folderWidth);
   return images.map((img, index) => {
     const col = index % cols;
-    const row = Math.floor(index / cols);
     const scale = Math.min(imageMaxSize / img.width, imageMaxSize / img.height, 1);
     const w = img.width * scale;
     const h = img.height * scale;
@@ -223,6 +173,7 @@ function SandboxImageNode({
   onDoubleClick,
   onDragEnd,
   onCursorOverImage,
+  onNodeRef,
 }: {
   img: SandboxImage;
   isZoomed: boolean;
@@ -231,6 +182,7 @@ function SandboxImageNode({
   onDoubleClick: () => void;
   onDragEnd: (x: number, y: number) => void;
   onCursorOverImage: (over: boolean) => void;
+  onNodeRef?: (node: Konva.Image | null) => void;
 }) {
   const nodeRef = useRef<Konva.Image>(null);
   const [image] = useImage(img.url, 'anonymous');
@@ -273,6 +225,7 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageNodeRefs = useRef<Record<string, Konva.Image>>({});
   const [dimensions, setDimensions] = useState({ width: 400, height: 300 });
   const [sandboxImages, setSandboxImages] = useState<SandboxImage[]>([]);
   const [sandboxFolders, setSandboxFolders] = useState<SandboxFolder[]>([]);
@@ -491,6 +444,50 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
     setZoomedId(null);
   }, []);
 
+  const getSnappedPositionInFolder = useCallback((img: SandboxImage, x: number, y: number, folder: SandboxFolder): { x: number; y: number } | null => {
+    const folderImages = sandboxImages.filter((i) => i.folderId === folder.id);
+    if (folderImages.length > 3) return null; // Use grid snapping for >3 images
+    
+    const { folderPadding, imageMaxSize } = GRID_CONFIG;
+    const contentStartX = folder.x + folderPadding;
+    const contentStartY = folder.y + LABEL_HEIGHT + folderPadding;
+    const contentWidth = folder.width - folderPadding * 2;
+    const slotGap = 8;
+    const slotWidth = (contentWidth - slotGap * 2) / 3; // Always 3 slots
+    
+    // Calculate slot centers
+    const slotCenters: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const slotLeft = contentStartX + i * (slotWidth + slotGap);
+      slotCenters.push(slotLeft + slotWidth / 2);
+    }
+    
+    // Find nearest slot
+    const dropCenterX = x + img.width / 2;
+    let nearestSlotIndex = 0;
+    let minDist = Math.abs(dropCenterX - slotCenters[0]);
+    for (let i = 1; i < 3; i++) {
+      const dist = Math.abs(dropCenterX - slotCenters[i]);
+      if (dist < minDist) {
+        minDist = dist;
+        nearestSlotIndex = i;
+      }
+    }
+    
+    // Calculate snapped position for nearest slot
+    const slotLeft = contentStartX + nearestSlotIndex * (slotWidth + slotGap);
+    const maxW = Math.min(slotWidth - slotGap, imageMaxSize);
+    const maxH = Math.min(imageMaxSize - slotGap, imageMaxSize);
+    const scale = Math.min(maxW / img.width, maxH / img.height, 1);
+    const w = img.width * scale;
+    const h = img.height * scale;
+    const snappedX = slotLeft + (slotWidth - w) / 2;
+    const snappedY = contentStartY + (imageMaxSize - h) / 2;
+    
+    return { x: snappedX, y: snappedY };
+  }, [sandboxImages]);
+
+
   const handleImageDragEnd = useCallback((id: string, x: number, y: number) => {
     const img = sandboxImages.find((i) => i.id === id);
     if (!img) return;
@@ -546,19 +543,49 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
       }
 
       if (targetFolderId && targetFolder) {
+        // When moving image INTO a folder, ALWAYS snap to one of exactly 3 positions
         const contentStartX = targetFolder.x + GRID_CONFIG.folderPadding;
         const contentStartY = targetFolder.y + LABEL_HEIGHT + GRID_CONFIG.folderPadding;
-        const cols = Math.max(1, Math.floor((targetFolder.width - GRID_CONFIG.folderPadding * 2 + GRID_CONFIG.imageGap) / CELL_SIZE));
-        const relativeX = x - contentStartX;
-        const relativeY = y - contentStartY;
-        const targetCol = Math.max(0, Math.min(cols - 1, Math.round(relativeX / CELL_SIZE)));
-        const targetRow = Math.max(0, Math.floor(relativeY / CELL_SIZE));
+        
+        // Sandbox folders always have exactly 3 column positions
+        const cols = 3;
+        const row = 0;
+        
+        // Calculate the exact center X for each of the 3 spots
+        const spotCenterXs: number[] = [];
+        for (let col = 0; col < cols; col++) {
+          const spotCenterX = contentStartX + col * CELL_SIZE + GRID_CONFIG.imageMaxSize / 2;
+          spotCenterXs.push(spotCenterX);
+        }
+        
+        // Find which of the 3 spots is closest to the image's center
+        // Use image center (x + width/2) to determine nearest spot based on X
+        // Y is ALWAYS snapped to row 0 regardless of drop Y position
+        const imageCenterX = x + (img.width || GRID_CONFIG.imageMaxSize) / 2;
+        let nearestSpotIndex = 0;
+        let minDist = Math.abs(imageCenterX - spotCenterXs[0]);
+        for (let spot = 1; spot < cols; spot++) {
+          const dist = Math.abs(imageCenterX - spotCenterXs[spot]);
+          if (dist < minDist) {
+            minDist = dist;
+            nearestSpotIndex = spot;
+          }
+        }
+        
+        // ALWAYS snap to this nearest spot (one of exactly 3 positions: 0, 1, or 2)
+        // Y will always be snapped to row 0 (single row layout)
+        const targetCol = nearestSpotIndex;
+        
         const imgW = Math.min(img.width, GRID_CONFIG.imageMaxSize);
         const imgH = Math.min(img.height, GRID_CONFIG.imageMaxSize);
         const cellOffsetX = (GRID_CONFIG.imageMaxSize - imgW) / 2;
         const cellOffsetY = (GRID_CONFIG.imageMaxSize - imgH) / 2;
+        
+        // Calculate exact position for the snapped spot
+        // X snaps to one of 3 column positions, Y ALWAYS snaps to row 0
+        // This ensures that no matter where you drop (X, Y), it snaps to one of 3 exact positions
         const newX = contentStartX + targetCol * CELL_SIZE + cellOffsetX;
-        const newY = contentStartY + targetRow * CELL_SIZE + cellOffsetY;
+        const newY = contentStartY + row * CELL_SIZE + cellOffsetY; // Always row 0, regardless of drop Y
 
         const updatedFolders = sandboxFolders.map((f) => {
           if (f.id === oldFolderId) return { ...f, imageIds: f.imageIds.filter((i) => i !== id) };
@@ -570,14 +597,32 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
         const targetFolderImages = sandboxImages
           .filter((i) => (i.folderId === targetFolderId && i.id !== id) || i.id === id)
           .map((i) => (i.id === id ? movedImg : i));
+        
+        // Reflow all images in target folder to ensure they're in correct 3-position layout
         const reflowed = reflowSandboxImagesInFolder(
           targetFolderImages,
           targetFolder.x,
           targetFolder.y,
           targetFolder.width
         );
+        
+        // Find the final snapped position for the moved image
+        const reflowedImg = reflowed.find((r) => r.id === id);
+        const finalX = reflowedImg ? reflowedImg.x : newX;
+        const finalY = reflowedImg ? reflowedImg.y : newY;
+        
+        // Update Konva node position FIRST to prevent visual glitch
+        const node = imageNodeRefs.current[id];
+        if (node) {
+          node.x(finalX);
+          node.y(finalY);
+        }
+        
         const updatedImages = sandboxImages.map((i) => {
-          if (i.id === id) return { ...movedImg, x: reflowed.find((r) => r.id === id)!.x, y: reflowed.find((r) => r.id === id)!.y };
+          if (i.id === id) {
+            // Use reflowed position to ensure it's in one of the 3 spots
+            return reflowedImg ? { ...movedImg, x: reflowedImg.x, y: reflowedImg.y, width: reflowedImg.width, height: reflowedImg.height } : movedImg;
+          }
           if (i.folderId === targetFolderId) {
             const r = reflowed.find((x) => x.id === i.id);
             return r ? r : i;
@@ -602,20 +647,127 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
     }
 
     if (targetFolderId && targetFolder && targetFolderId === oldFolderId) {
-      const contentStartX = targetFolder.x + GRID_CONFIG.folderPadding;
-      const contentStartY = targetFolder.y + LABEL_HEIGHT + GRID_CONFIG.folderPadding;
-      const cols = Math.max(1, Math.floor((targetFolder.width - GRID_CONFIG.folderPadding * 2 + GRID_CONFIG.imageGap) / CELL_SIZE));
-      const relativeX = x - contentStartX;
-      const relativeY = y - contentStartY;
-      const targetCol = Math.max(0, Math.min(cols - 1, Math.round(relativeX / CELL_SIZE)));
-      const targetRow = Math.max(0, Math.floor(relativeY / CELL_SIZE));
-      const imgW = Math.min(img.width, GRID_CONFIG.imageMaxSize);
-      const imgH = Math.min(img.height, GRID_CONFIG.imageMaxSize);
-      const cellOffsetX = (GRID_CONFIG.imageMaxSize - imgW) / 2;
-      const cellOffsetY = (GRID_CONFIG.imageMaxSize - imgH) / 2;
-      const newX = contentStartX + targetCol * CELL_SIZE + cellOffsetX;
-      const newY = contentStartY + targetRow * CELL_SIZE + cellOffsetY;
-      setSandboxImages((prev) => prev.map((i) => (i.id === id ? { ...i, x: newX, y: newY } : i)));
+      // ALWAYS snap to one of exactly 3 positions when dropped in folder - NO EXCEPTIONS
+      const folderImages = sandboxImages.filter((i) => i.folderId === targetFolderId);
+      const { folderPadding, imageMaxSize } = GRID_CONFIG;
+      const contentStartX = targetFolder.x + folderPadding;
+      const contentStartY = targetFolder.y + LABEL_HEIGHT + folderPadding;
+      
+      // Sandbox folders always have exactly 3 column positions (0, 1, 2)
+      const cols = 3;
+      const row = 0;
+      
+      // Calculate the exact center X for each of the 3 spots
+      const spotCenterXs: number[] = [];
+      for (let col = 0; col < cols; col++) {
+        const spotCenterX = contentStartX + col * CELL_SIZE + imageMaxSize / 2;
+        spotCenterXs.push(spotCenterX);
+      }
+      
+      // Find which of the 3 spots is closest to the image's center
+      // Use image center (x + width/2) to determine nearest spot based on X
+      // Y is ALWAYS snapped to row 0 regardless of drop Y position
+      const imageCenterX = x + (img.width || imageMaxSize) / 2;
+      let nearestSpotIndex = 0;
+      let minDist = Math.abs(imageCenterX - spotCenterXs[0]);
+      for (let spot = 1; spot < cols; spot++) {
+        const dist = Math.abs(imageCenterX - spotCenterXs[spot]);
+        if (dist < minDist) {
+          minDist = dist;
+          nearestSpotIndex = spot;
+        }
+      }
+      
+      // ALWAYS snap to this nearest spot (one of exactly 3 positions: 0, 1, or 2)
+      // Y will always be snapped to row 0 (single row layout)
+      const targetCol = nearestSpotIndex;
+      
+      // Get other images in folder (excluding dragged one)
+      const otherImages = folderImages.filter((i) => i.id !== id);
+      
+      // Calculate which of the 3 spots each other image occupies
+      const occupiedSpots = new Set<number>();
+      otherImages.forEach((otherImg) => {
+        const otherImgRelativeX = otherImg.x - contentStartX;
+        const otherImgCol = Math.floor(otherImgRelativeX / CELL_SIZE);
+        // Clamp to valid range [0, 2]
+        if (otherImgCol >= 0 && otherImgCol < cols) {
+          occupiedSpots.add(otherImgCol);
+        }
+      });
+      
+      // Calculate current image's spot (if it's already in a valid spot)
+      const currentImgRelativeX = img.x - contentStartX;
+      const currentImgCol = Math.floor(currentImgRelativeX / CELL_SIZE);
+      const isInValidSpot = currentImgCol >= 0 && currentImgCol < cols;
+      
+      let swapX: number | undefined;
+      let swapY: number | undefined;
+      let swapImgId: string | undefined;
+      let finalCol = targetCol;
+      
+      // If target spot is occupied, swap positions
+      if (occupiedSpots.has(targetCol)) {
+        if (isInValidSpot) {
+          // Swap: move occupied image to current image's spot
+          const occupiedImg = otherImages.find((otherImg) => {
+            const otherImgRelativeX = otherImg.x - contentStartX;
+            const otherImgCol = Math.floor(otherImgRelativeX / CELL_SIZE);
+            return otherImgCol >= 0 && otherImgCol < cols && otherImgCol === targetCol;
+          });
+          
+          if (occupiedImg) {
+            const swapImgWidth = Math.min(occupiedImg.width, imageMaxSize);
+            const swapImgHeight = Math.min(occupiedImg.height, imageMaxSize);
+            const swapOffsetX = (imageMaxSize - swapImgWidth) / 2;
+            const swapOffsetY = (imageMaxSize - swapImgHeight) / 2;
+            
+            swapX = contentStartX + currentImgCol * CELL_SIZE + swapOffsetX;
+            swapY = contentStartY + row * CELL_SIZE + swapOffsetY;
+            swapImgId = occupiedImg.id;
+          }
+        } else {
+          // Image coming from outside folder - find nearest empty spot
+          for (let checkCol = 0; checkCol < cols; checkCol++) {
+            if (!occupiedSpots.has(checkCol)) {
+              finalCol = checkCol;
+              break;
+            }
+          }
+        }
+      }
+      
+      // Calculate final position - ALWAYS one of exactly 3 spots (0, 1, or 2)
+      // Ensure finalCol is always 0, 1, or 2
+      finalCol = Math.max(0, Math.min(2, finalCol));
+      
+      const imgWidth = Math.min(img.width, imageMaxSize);
+      const imgHeight = Math.min(img.height, imageMaxSize);
+      const cellOffsetX = (imageMaxSize - imgWidth) / 2;
+      const cellOffsetY = (imageMaxSize - imgHeight) / 2;
+      
+      // Calculate exact position for spot finalCol (one of 0, 1, or 2)
+      const finalX = contentStartX + finalCol * CELL_SIZE + cellOffsetX;
+      const finalY = contentStartY + row * CELL_SIZE + cellOffsetY;
+      
+      // Update Konva node position FIRST to prevent visual glitch
+      const node = imageNodeRefs.current[id];
+      if (node) {
+        node.x(finalX);
+        node.y(finalY);
+      }
+      
+      // Then update state to match
+      const updatedImages = sandboxImages.map((i) => {
+        if (i.id === id) {
+          return { ...i, x: finalX, y: finalY };
+        }
+        if (swapImgId && i.id === swapImgId && swapX !== undefined && swapY !== undefined) {
+          return { ...i, x: swapX, y: swapY };
+        }
+        return i;
+      });
+      setSandboxImages(updatedImages);
       return;
     }
 
@@ -857,6 +1009,10 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
                 onDoubleClick={() => setZoomedId((id) => (id === img.id ? null : img.id))}
                 onDragEnd={(x, y) => handleImageDragEnd(img.id, x, y)}
                 onCursorOverImage={setCursorOverImage}
+                onNodeRef={(node: Konva.Image | null) => {
+                  if (node) imageNodeRefs.current[img.id] = node;
+                  else delete imageNodeRefs.current[img.id];
+                }}
               />
             ))}
           </Layer>
