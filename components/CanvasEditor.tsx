@@ -924,7 +924,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
   const [confirmDeletePhotoIds, setConfirmDeletePhotoIds] = useState<string[] | null>(null);
   const [deletePhotoDontAskAgain, setDeletePhotoDontAskAgain] = useState(false);
-  const [isDeletingFolder, setIsDeletingFolder] = useState(false);
+  const [deleteFolderProgress, setDeleteFolderProgress] = useState<{ current: number; total: number } | null>(null);
   const [exportProgress, setExportProgress] = useState<{ current: number; total: number } | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const saveStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1025,23 +1025,14 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, []);
 
-  // React Query for fetching photo metadata (cached for fast reloads)
+  // React Query for fetching photo metadata (cached for fast reloads). Fetch all data; filter is show/hide in UI only.
   const { data: photoData } = useQuery({
-    queryKey: ['user-photos', user?.id, photoFilter],
+    queryKey: ['user-photos', user?.id],
     queryFn: async () => {
       if (!user) return null;
 
-      let editsQuery = supabase.from('photo_edits').select('*').eq('user_id', user.id);
-      if (photoFilter.dateFrom) editsQuery = editsQuery.gte('taken_at', photoFilter.dateFrom);
-      if (photoFilter.dateTo) editsQuery = editsQuery.lte('taken_at', photoFilter.dateTo);
-      if (photoFilter.cameraMake) editsQuery = editsQuery.eq('camera_make', photoFilter.cameraMake);
-      if (photoFilter.cameraModel) editsQuery = editsQuery.eq('camera_model', photoFilter.cameraModel);
-      if (photoFilter.contentSearch?.trim()) {
-        editsQuery = editsQuery.contains('labels', [photoFilter.contentSearch.trim().toLowerCase()]);
-      }
-
       const [editsResult, foldersResult, photosResult, originalsResult] = await Promise.all([
-        editsQuery,
+        supabase.from('photo_edits').select('*').eq('user_id', user.id),
         supabase.from('photo_folders').select('*').eq('user_id', user.id),
         supabase.storage.from('photos').list(user.id, {
           limit: 500,
@@ -1067,12 +1058,19 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
   // Track load key (user + filter) to prevent duplicate processing
   const loadKeyRef = useRef<string | null>(null);
+  // After upload or create-folder we invalidate; skip the next effect run so we don't overwrite canvas/positions
+  const skipNextPhotosLoadRef = useRef(false);
 
-  // Process photos from cached query data
+  // Process photos from cached query data (load all; filter is show/hide in UI only)
   useEffect(() => {
     const loadUserPhotos = async () => {
       if (!user || !photoData) return;
-      const loadKey = `${user.id}:${JSON.stringify(photoFilter)}`;
+      if (skipNextPhotosLoadRef.current) {
+        skipNextPhotosLoadRef.current = false;
+        onPhotosLoadStateChange?.(false);
+        return;
+      }
+      const loadKey = user.id;
       if (loadKeyRef.current === loadKey) {
         onPhotosLoadStateChange?.(false);
         return;
@@ -1099,21 +1097,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
         // Combined list: all from photos, plus originals-only files (no preview)
         type FileEntry = { name: string; bucket: 'photos' | 'originals' };
-        let validFiles: FileEntry[] = [
+        const validFiles: FileEntry[] = [
           ...photosList.map((f) => ({ name: f.name, bucket: 'photos' as const })),
           ...originalsOnly.map((f) => ({ name: f.name, bucket: 'originals' as const })),
         ];
-
-        // When any filter is active, only show files that have a matching photo_edit row
-        const hasFilter = photoFilter.contentSearch?.trim() || photoFilter.dateFrom || photoFilter.dateTo || photoFilter.cameraMake || photoFilter.cameraModel;
-        if (hasFilter && savedEdits && savedEdits.length >= 0) {
-          const editPaths = new Set<string>();
-          for (const e of savedEdits as { storage_path?: string; original_storage_path?: string }[]) {
-            if (e.storage_path) editPaths.add(e.storage_path);
-            if (e.original_storage_path) editPaths.add(e.original_storage_path);
-          }
-          validFiles = validFiles.filter((f) => editPaths.has(`${user.id}/${f.name}`));
-        }
 
         if (photosError) return;
 
@@ -1123,6 +1110,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           setFolders([]);
           setHistory([{ images: [], texts: [], folders: [] }]);
           setHistoryIndex(0);
+          onPhotosLoadStateChange?.(false);
           return;
         }
 
@@ -1292,8 +1280,44 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           }
         };
 
-        const results = await Promise.all(validFiles.map((file, i) => loadOne(file, i)));
-        const newImages: CanvasImage[] = results.filter((img): img is CanvasImage => img != null);
+        // Build folders from saved data + current images (for incremental updates)
+        const defaultFolderX = 100;
+        const defaultFolderY = 100;
+        const buildFoldersFromImages = (imagesList: CanvasImage[]): PhotoFolder[] => {
+          const out: PhotoFolder[] = [];
+          if (!savedFolders?.length) return out;
+          for (const sf of savedFolders) {
+            const folderId = String(sf.id);
+            const folderImageIds = imagesList.filter((img) => img.folderId === folderId).map((img) => img.id);
+            const sfX = sf.x != null && Number.isFinite(Number(sf.x)) ? Number(sf.x) : defaultFolderX;
+            const sfY = sf.y != null && Number.isFinite(Number(sf.y)) ? Number(sf.y) : defaultFolderY;
+            const sfWidth = sf.width != null && Number.isFinite(Number(sf.width)) ? Number(sf.width) : GRID_CONFIG.defaultFolderWidth;
+            const sfHeight = sf.height != null && Number.isFinite(Number(sf.height)) ? Number(sf.height) : undefined;
+            out.push({
+              id: folderId,
+              name: String(sf.name ?? 'Untitled'),
+              x: sfX,
+              y: sfY,
+              width: sfWidth,
+              height: sfHeight,
+              color: String(sf.color ?? FOLDER_COLORS[0]),
+              imageIds: folderImageIds,
+            });
+          }
+          return out;
+        };
+
+        // Load one image at a time; display each as soon as it's ready to avoid glitchy parallel pop-in
+        const loadedImages: CanvasImage[] = [];
+        for (let i = 0; i < validFiles.length; i++) {
+          const image = await loadOne(validFiles[i], i);
+          if (image) {
+            loadedImages.push(image);
+            setImages([...loadedImages]);
+            setFolders(buildFoldersFromImages(loadedImages));
+          }
+        }
+        const newImages = loadedImages;
 
         // Apply any remaining edit fields to images we might have missed (e.g. originalStoragePath from storage_path key)
         if (savedEdits && savedEdits.length > 0) {
@@ -1367,38 +1391,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           }
         }
 
-        // Reconstruct folders from saved data; coerce position/dimensions so folder is tracked correctly
-        const loadedFolders: PhotoFolder[] = [];
-        const defaultFolderX = 100;
-        const defaultFolderY = 100;
-        if (savedFolders && savedFolders.length > 0) {
-          for (const sf of savedFolders) {
-            const folderId = String(sf.id);
-            // Find all images that belong to this folder (match by folder_id from photo_edits)
-            const folderImageIds = newImages
-              .filter(img => img.folderId === folderId)
-              .map(img => img.id);
-
-            const sfX = sf.x != null && Number.isFinite(Number(sf.x)) ? Number(sf.x) : defaultFolderX;
-            const sfY = sf.y != null && Number.isFinite(Number(sf.y)) ? Number(sf.y) : defaultFolderY;
-            const sfWidth = sf.width != null && Number.isFinite(Number(sf.width)) ? Number(sf.width) : GRID_CONFIG.defaultFolderWidth;
-            const sfHeight = sf.height != null && Number.isFinite(Number(sf.height)) ? Number(sf.height) : undefined;
-
-            loadedFolders.push({
-              id: folderId,
-              name: String(sf.name ?? 'Untitled'),
-              x: sfX,
-              y: sfY,
-              width: sfWidth,
-              height: sfHeight,
-              color: String(sf.color ?? FOLDER_COLORS[0]),
-              imageIds: folderImageIds,
-            });
-          }
-        }
-
-        console.log('Final loaded folders:', loadedFolders);
-        console.log('Images with folderIds:', newImages.map(img => ({ id: img.id, folderId: img.folderId })));
+        const loadedFolders = buildFoldersFromImages(newImages);
 
         loadKeyRef.current = loadKey;
         setImages(newImages);
@@ -1449,10 +1442,41 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     };
 
     loadUserPhotos();
-    // Don't depend on photoFilter: we only run when photoData changes. When user presses Enter,
-    // the query key (which includes photoFilter) changes and React Query refetches; when the
-    // refetch completes, photoData updates and we run with the correct filtered result.
   }, [user, photoData, onPhotosLoadStateChange, queryClient]);
+
+  // Filter is show/hide only: which image IDs pass the current filter (labels, date, camera). null = show all.
+  const visibleImageIds = useMemo(() => {
+    const hasFilter = !!(
+      photoFilter.contentSearch?.trim() ||
+      photoFilter.dateFrom ||
+      photoFilter.dateTo ||
+      photoFilter.cameraMake ||
+      photoFilter.cameraModel
+    );
+    if (!hasFilter) return null;
+    const set = new Set<string>();
+    const term = photoFilter.contentSearch?.trim().toLowerCase();
+    for (const img of images) {
+      if (term && !img.labels?.some((l) => l.toLowerCase().includes(term))) continue;
+      if (photoFilter.dateFrom && img.takenAt && img.takenAt < photoFilter.dateFrom) continue;
+      if (photoFilter.dateTo && img.takenAt && img.takenAt > photoFilter.dateTo) continue;
+      if (photoFilter.cameraMake && img.cameraMake !== photoFilter.cameraMake) continue;
+      if (photoFilter.cameraModel && img.cameraModel !== photoFilter.cameraModel) continue;
+      set.add(img.id);
+    }
+    return set;
+  }, [images, photoFilter]);
+
+  // When label-photo API returns labels, update the image in state so filter search works without refresh
+  const updateImageLabels = useCallback((storagePath: string, labels: string[]) => {
+    setImages((prev) =>
+      prev.map((img) =>
+        img.storagePath === storagePath || img.originalStoragePath === storagePath
+          ? { ...img, labels }
+          : img
+      )
+    );
+  }, []);
 
   // Save state to history
   const saveToHistory = useCallback(() => {
@@ -1734,7 +1758,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ storagePath: previewFilePath, userId: user.id }),
-                          }).catch(() => {});
+                          })
+                            .then((r) => (r.ok ? r.json() : null))
+                            .then((data) => { if (data?.labels) updateImageLabels(previewFilePath, data.labels); })
+                            .catch(() => {});
                         }
                       }
                     });
@@ -1770,7 +1797,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({ storagePath: previewFilePath, userId: user.id }),
-                        }).catch(() => {});
+                        })
+                          .then((r) => (r.ok ? r.json() : null))
+                          .then((data) => { if (data?.labels) updateImageLabels(previewFilePath, data.labels); })
+                          .catch(() => {});
                       }
                     }
                   });
@@ -1806,7 +1836,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ storagePath: previewFilePath, userId: user.id }),
-                      }).catch(() => {});
+                      })
+                        .then((r) => (r.ok ? r.json() : null))
+                        .then((data) => { if (data?.labels) updateImageLabels(previewFilePath, data.labels); })
+                        .catch(() => {});
                     }
                   }
                 });
@@ -2045,14 +2078,20 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ storagePath: path, userId: user.id }),
-                  }).catch(() => {});
+                  })
+                    .then((r) => (r.ok ? r.json() : null))
+                    .then((data) => { if (data?.labels) updateImageLabels(path, data.labels); })
+                    .catch(() => {});
                 }
               }
             }
           }
         }
         
-        if (user) queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
+        if (user) {
+          skipNextPhotosLoadRef.current = true;
+          queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
+        }
         setTimeout(() => saveToHistory(), 100);
       } else {
         console.log('No images were processed successfully');
@@ -2061,7 +2100,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       pendingFilesRef.current = [];
       setIsUploading(false);
     },
-    [folders, images, saveToHistory, user, resolveOverlapsAndReflow, queryClient]
+    [folders, images, saveToHistory, user, resolveOverlapsAndReflow, queryClient, updateImageLabels]
   );
 
   // Add files to an existing folder
@@ -2159,7 +2198,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ storagePath: previewFilePath, userId: user.id }),
-                          }).catch(() => {});
+                          })
+                            .then((r) => (r.ok ? r.json() : null))
+                            .then((data) => { if (data?.labels) updateImageLabels(previewFilePath, data.labels); })
+                            .catch(() => {});
                         }
                       }
                     });
@@ -2193,7 +2235,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ storagePath: previewFilePath, userId: user.id }),
-                          }).catch(() => {});
+                          })
+                            .then((r) => (r.ok ? r.json() : null))
+                            .then((data) => { if (data?.labels) updateImageLabels(previewFilePath, data.labels); })
+                            .catch(() => {});
                         }
                       }
                     });
@@ -2449,7 +2494,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ storagePath: path, userId: user.id }),
-                  }).catch(() => {});
+                  })
+                    .then((r) => (r.ok ? r.json() : null))
+                    .then((data) => { if (data?.labels) updateImageLabels(path, data.labels); })
+                    .catch(() => {});
                 }
               }
             }
@@ -2486,14 +2534,17 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           }
         }
         
-        if (user) queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
+        if (user) {
+          skipNextPhotosLoadRef.current = true;
+          queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
+        }
         setTimeout(() => saveToHistory(), 100);
       }
       
       pendingFilesRef.current = [];
       setIsUploading(false);
     },
-    [folders, images, saveToHistory, user, resolveOverlapsAndReflow, queryClient]
+    [folders, images, saveToHistory, user, resolveOverlapsAndReflow, queryClient, updateImageLabels]
   );
 
   // Handle adding photos to a specific folder via plus button
@@ -2959,7 +3010,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       } catch (err) {
         console.error('Failed to create folder / update edits:', err);
       }
-      queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
+      if (user) {
+        skipNextPhotosLoadRef.current = true;
+        queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
+      }
     }
 
     saveToHistory();
@@ -4049,18 +4103,28 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     saveToHistory();
   }, [editingFolder, editingFolderName, folders, user, saveToHistory]);
 
-  // Delete folder and all its photos (no ungroup option)
+  // Delete folder and all its photos (no ungroup option). Closes modals and shows "Deleting 1 of N" banner.
   const handleDeleteFolder = useCallback(async () => {
     if (!editingFolder) return;
 
-    setIsDeletingFolder(true);
-    const folderImageIds = editingFolder.imageIds;
+    const folder = editingFolder;
+    const folderImageIds = [...folder.imageIds];
+    const total = folderImageIds.length;
+
+    // Close modals immediately so user isn't stuck on loading in modal
+    setConfirmDeleteFolderOpen(false);
+    setEditingFolder(null);
+    setEditingFolderName('');
+    setFolderNameError('');
+    setDeleteFolderProgress(total > 0 ? { current: 0, total } : { current: 0, total: 0 });
 
     try {
       // Delete images via API (service role) so photos + originals buckets are removed
       if (user) {
-        for (const imgId of folderImageIds) {
-          const img = images.find(i => i.id === imgId);
+        for (let i = 0; i < folderImageIds.length; i++) {
+          setDeleteFolderProgress({ current: i + 1, total });
+          const imgId = folderImageIds[i];
+          const img = images.find(im => im.id === imgId);
           if (!img) continue;
           const payload = getDeletePhotoPayload(img);
           if (!payload.storagePath && !payload.originalStoragePath) continue;
@@ -4083,6 +4147,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         }
       }
 
+      if (total === 0) setDeleteFolderProgress({ current: 0, total: 0 });
+
       // Remove images from canvas
       setImages((prev) => prev.filter(img => !folderImageIds.includes(img.id)));
 
@@ -4092,21 +4158,18 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           await supabase
             .from('photo_folders')
             .delete()
-            .eq('id', editingFolder.id)
+            .eq('id', folder.id)
             .eq('user_id', user.id);
         } catch (error) {
           console.error('Failed to delete folder:', error);
         }
       }
 
-      setFolders((prev) => prev.filter(f => f.id !== editingFolder.id));
-      setEditingFolder(null);
-      setEditingFolderName('');
-      setFolderNameError('');
+      setFolders((prev) => prev.filter(f => f.id !== folder.id));
       if (user) queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
       saveToHistory();
     } finally {
-      setIsDeletingFolder(false);
+      setDeleteFolderProgress(null);
     }
   }, [editingFolder, images, user, saveToHistory, queryClient]);
 
@@ -4399,6 +4462,18 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         </div>
       )}
 
+      {/* Delete folder progress (same style as upload – modal closes, banner shows) */}
+      {deleteFolderProgress && (
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 bg-[#171717] border border-[#2a2a2a] rounded-xl px-4 py-3 shadow-2xl shadow-black/50">
+          <div className="w-5 h-5 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
+          <span className="text-white text-sm font-medium">
+            {deleteFolderProgress.total > 0
+              ? `Deleting ${deleteFolderProgress.current} of ${deleteFolderProgress.total}`
+              : 'Deleting folder...'}
+          </span>
+        </div>
+      )}
+
       {/* Export progress indicator (background export – you can keep editing) */}
       {exportProgress && (
         <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 bg-[#171717] border border-[#2a2a2a] rounded-xl px-4 py-3 shadow-2xl shadow-black/50">
@@ -4597,20 +4672,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                       setConfirmDeleteFolderOpen(true);
                     }
                   }}
-                  disabled={isDeletingFolder}
+                  disabled={!!deleteFolderProgress}
                   className="w-full px-4 py-2.5 text-sm font-medium text-red-400 bg-red-400/10 hover:bg-red-400/20 disabled:opacity-60 disabled:cursor-not-allowed rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
                 >
-                  {isDeletingFolder ? (
-                    <>
-                      <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24" aria-hidden="true">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                      </svg>
-                      Deleting…
-                    </>
-                  ) : (
-                    editingFolder.imageIds.length > 0 ? 'Delete folder + photos' : 'Delete folder'
-                  )}
+                  {editingFolder.imageIds.length > 0 ? 'Delete folder + photos' : 'Delete folder'}
                 </button>
               </div>
             </div>
@@ -4894,8 +4959,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 strokeWidth={1}
               />
             </Group>
-            {/* Folder Borders and Labels */}
-            {folders.map((folder) => {
+            {/* Folder Borders and Labels — only show folders that have at least one visible image when filter is on */}
+            {folders
+              .filter((folder) => visibleImageIds === null || folder.imageIds.some((id) => visibleImageIds.has(id)))
+              .map((folder) => {
               // Calculate folder dimensions
               const folderImages = images.filter(img => folder.imageIds.includes(img.id));
               const { folderPadding } = GRID_CONFIG;
@@ -5356,7 +5423,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               );
             })}
 
-            {images.map((img) => (
+            {(visibleImageIds === null ? images : images.filter((img) => visibleImageIds.has(img.id))).map((img) => (
               <ImageNode
                 key={img.id}
                 image={img}
@@ -5379,7 +5446,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             ))}
             {/* Selection outlines at parent level so they don't affect image cache/edits */}
             {images
-              .filter((img) => selectedIds.includes(img.id))
+              .filter((img) => selectedIds.includes(img.id) && (visibleImageIds === null || visibleImageIds.has(img.id)))
               .map((img) => {
                 const folder = folders.find(f => f.id === img.folderId || f.imageIds.includes(img.id));
                 const strokeColor = folder ? hexToRgba(folder.color, 0.4) : hexToRgba('#3ECF8E', 0.4);
