@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
+import { useCallback, useState, useRef, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CurvesEditor } from './CurvesEditor';
 import { supabase } from '@/lib/supabase';
@@ -173,14 +173,7 @@ function Slider({
   const [localValue, setLocalValue] = useState(value);
   const rafRef = useRef<number | undefined>(undefined);
   const lastUpdateRef = useRef(0);
-  const isDraggingRef = useRef(false);
-
-  // Sync local value when prop changes (from undo/reset/etc)
-  useEffect(() => {
-    if (!isDraggingRef.current) {
-      setLocalValue(value);
-    }
-  }, [value]);
+  const [isDragging, setIsDragging] = useState(false);
 
   // Throttled update - max 30fps during drag for better performance
   const handleChange = useCallback((newValue: number) => {
@@ -204,11 +197,12 @@ function Slider({
   }, [onChange]);
 
   const handleMouseDown = useCallback(() => {
-    isDraggingRef.current = true;
-  }, []);
+    setIsDragging(true);
+    setLocalValue(value);
+  }, [value]);
 
   const handleMouseUp = useCallback(() => {
-    isDraggingRef.current = false;
+    setIsDragging(false);
     // Ensure final value is committed
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current);
@@ -225,7 +219,7 @@ function Slider({
           min={min}
           max={max}
           step={step}
-          value={localValue}
+          value={isDragging ? localValue : value}
           onChange={(e) => handleChange(parseFloat(e.target.value))}
           onMouseDown={handleMouseDown}
           onMouseUp={handleMouseUp}
@@ -245,10 +239,10 @@ function Slider({
   );
 }
 
-export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSave, onExport, saveStatus = 'idle', onRetrySave, bypassedTabs, onToggleBypass, isDeleting }: EditPanelProps) {
+export function EditPanel(props: EditPanelProps) {
+  const { object, onUpdate, onDelete, onResetToOriginal, onExport, bypassedTabs, onToggleBypass, isDeleting } = props;
   const isImage = 'src' in object;
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
-  const [presets, setPresets] = useState<Preset[]>([]);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [renamingPresetId, setRenamingPresetId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -260,8 +254,10 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
   const queryClient = useQueryClient();
 
   // Load presets from database with React Query caching
-  const { data: loadedPresets } = useQuery({
-    queryKey: ['presets', user?.id],
+  const presetsQueryKey = useMemo(() => ['presets', user?.id] as const, [user?.id]);
+
+  const { data: presets = [] } = useQuery({
+    queryKey: presetsQueryKey,
     queryFn: async () => {
       if (!user) return [];
 
@@ -286,12 +282,9 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
     staleTime: 5 * 60 * 1000, // Cache presets for 5 minutes
   });
 
-  // Sync query data to local state for mutations
-  useEffect(() => {
-    if (loadedPresets) {
-      setPresets(loadedPresets);
-    }
-  }, [loadedPresets]);
+  const updatePresets = useCallback((updater: (prev: Preset[]) => Preset[]) => {
+    queryClient.setQueryData<Preset[]>(presetsQueryKey, (prev) => updater(prev ?? []));
+  }, [queryClient, presetsQueryKey]);
 
   const handleCurvesChange = useCallback(
     (curves: ChannelCurves) => {
@@ -590,14 +583,14 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
             name: name,
             settings: settings,
           };
-          setPresets(prev => [...prev, preset]);
+          updatePresets(prev => [...prev, preset]);
         } else if (data) {
           const preset: Preset = {
             id: data.id,
             name: data.name,
             settings: data.settings as Partial<CanvasImage>,
           };
-          setPresets(prev => [...prev, preset]);
+          updatePresets(prev => [...prev, preset]);
           // Invalidate cache so next mount gets fresh data
           queryClient.invalidateQueries({ queryKey: ['presets', user.id] });
         }
@@ -608,10 +601,10 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
           name: name,
           settings: settings,
         };
-        setPresets(prev => [...prev, preset]);
+        updatePresets(prev => [...prev, preset]);
       }
     }
-  }, [user, queryClient]);
+  }, [user, queryClient, updatePresets]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -695,8 +688,8 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
     }
 
     // Remove from local state
-    setPresets(prev => prev.filter(p => p.id !== presetId));
-  }, [user, queryClient]);
+    updatePresets(prev => prev.filter(p => p.id !== presetId));
+  }, [user, queryClient, updatePresets]);
 
   const handlePresetDoubleClick = useCallback((preset: Preset) => {
     setRenamingPresetId(preset.id);
@@ -728,13 +721,13 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
     }
 
     // Update local state
-    setPresets(prev =>
+    updatePresets(prev =>
       prev.map(p => (p.id === renamingPresetId ? { ...p, name: newName } : p))
     );
 
     setRenamingPresetId(null);
     setRenameValue('');
-  }, [renamingPresetId, renameValue, user, queryClient]);
+  }, [renamingPresetId, renameValue, user, queryClient, updatePresets]);
 
   const handleRenameCancel = useCallback(() => {
     setRenamingPresetId(null);
@@ -745,11 +738,13 @@ export function EditPanel({ object, onUpdate, onDelete, onResetToOriginal, onSav
     <>
       {/* Curves Editor Popup */}
       {activePanel === 'curves' && isImage && (
-        <CurvesEditor
-          curves={img.curves || DEFAULT_CURVES}
-          onChange={handleCurvesChange}
-          onClose={() => setActivePanel(null)}
-        />
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-20">
+          <CurvesEditor
+            curves={img.curves || DEFAULT_CURVES}
+            onChange={handleCurvesChange}
+            onClose={() => setActivePanel(null)}
+          />
+        </div>
       )}
 
       {/* Light Panel Popup */}

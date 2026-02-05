@@ -237,6 +237,9 @@ interface CanvasImage {
   cameraMake?: string;
   cameraModel?: string;
   labels?: string[];
+  // Border
+  borderWidth?: number; // Border thickness in pixels (0 = no border)
+  borderColor?: string; // Border color (hex, e.g., "#ffffff")
 }
 
 // Build delete-photo API payload: storagePath = path in photos bucket, originalStoragePath = path in originals bucket
@@ -946,6 +949,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const lastOverlapCheckRef = useRef<number>(0);
   const folderNameDragRef = useRef<boolean>(false);
   const lastSwappedImageRef = useRef<{ id: string; x: number; y: number } | null>(null);
+  const dragPrevCellRef = useRef<{ imageId: string; col: number; row: number; cellIndex: number } | null>(null);
   const dragMoveRafRef = useRef<number | null>(null);
   const dragMoveNodeRef = useRef<Konva.Image | null>(null);
   // Refs for latest state so drag-end always uses current folders/images (avoids "another image moves" glitch)
@@ -997,6 +1001,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const [copiedEdit, setCopiedEdit] = useState<Partial<CanvasImage> | null>(null);
   const [imageContextMenu, setImageContextMenu] = useState<{ x: number; y: number; imageId: string; selectedIds: string[] } | null>(null);
   const imageContextMenuRef = useRef<HTMLDivElement>(null);
+  const [borderDialogImageId, setBorderDialogImageId] = useState<string | null>(null);
+  const borderDialogRef = useRef<HTMLDivElement>(null);
   const [canvasContextMenu, setCanvasContextMenu] = useState<{ x: number; y: number } | null>(null);
   const canvasContextMenuRef = useRef<HTMLDivElement>(null);
   const [createPresetFromImageId, setCreatePresetFromImageId] = useState<string | null>(null);
@@ -1395,6 +1401,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               canvasImg.hue = edit.hue ?? 0;
               canvasImg.blur = edit.blur ?? 0;
               canvasImg.filters = edit.filters ?? [];
+              // Border
+              canvasImg.borderWidth = edit.border_width ?? undefined;
+              canvasImg.borderColor = edit.border_color ?? undefined;
             }
 
             return canvasImg;
@@ -1614,9 +1623,17 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         : folderImgs;
 
       if (existingImgs.length > 0) {
-        const reflowed = isSocialLayout(newFolder)
+        const oldHeight = oldFolder.height ?? getFolderBorderHeight(oldFolder, oldFolder.imageIds.length);
+        const newHeight = newFolder.height ?? getFolderBorderHeight(newFolder, newFolder.imageIds.length);
+        const movedOnly = oldFolder.width === newFolder.width && oldHeight === newHeight;
+        const shouldKeepPositions = movedOnly && !isChangedFolderWithAdd && !isSocialLayout(newFolder);
+
+        const reflowed = shouldKeepPositions
           ? existingImgs.map((img) => ({ ...img, x: img.x + dx(newFolder, oldFolder), y: img.y + dy(newFolder, oldFolder) }))
-          : reflowImagesInFolder(existingImgs, newFolder.x, newFolder.y, newFolder.width);
+          : isSocialLayout(newFolder)
+            ? existingImgs.map((img) => ({ ...img, x: img.x + dx(newFolder, oldFolder), y: img.y + dy(newFolder, oldFolder) }))
+            : reflowImagesInFolder(existingImgs, newFolder.x, newFolder.y, newFolder.width);
+
         updatedImages = updatedImages.map(img => {
           const r = reflowed.find(ri => ri.id === img.id);
           return r || img;
@@ -2025,17 +2042,14 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             height = img.height;
           }
 
-          // Resize to layout size (360×450) — one size everywhere, no scaling
-          const layoutSized = await resizeImageToFit(
-            imageSrc,
-            width,
-            height,
-            LAYOUT_IMPORT_MAX_WIDTH,
-            LAYOUT_IMPORT_MAX_HEIGHT
+          // Keep original source for quality; only scale display size to fit layout bounds
+          const layoutScale = Math.min(
+            LAYOUT_IMPORT_MAX_WIDTH / width,
+            LAYOUT_IMPORT_MAX_HEIGHT / height,
+            1
           );
-          imageSrc = layoutSized.dataUrl;
-          width = layoutSized.width;
-          height = layoutSized.height;
+          width = Math.round(width * layoutScale);
+          height = Math.round(height * layoutScale);
 
           // Position within folder grid (below the folder label) - using folder width
           const cols = calculateColsFromWidth(GRID_CONFIG.defaultFolderWidth);
@@ -2218,6 +2232,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               taken_at: img.takenAt ?? null,
               camera_make: img.cameraMake ?? null,
               camera_model: img.cameraModel ?? null,
+              // Border
+              border_width: img.borderWidth ?? null,
+              border_color: img.borderColor ?? null,
             }));
             const { error: editsError } = await supabase
               .from('photo_edits')
@@ -2456,17 +2473,14 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             height = img.height;
           }
 
-          // Resize to grid cell size (360×450) so added photos match existing folder images
-          const layoutSized = await resizeImageToFit(
-            imageSrc,
-            width,
-            height,
-            LAYOUT_IMPORT_MAX_WIDTH,
-            LAYOUT_IMPORT_MAX_HEIGHT
+          // Keep original source for quality; only scale display size to fit layout bounds
+          const layoutScale = Math.min(
+            LAYOUT_IMPORT_MAX_WIDTH / width,
+            LAYOUT_IMPORT_MAX_HEIGHT / height,
+            1
           );
-          imageSrc = layoutSized.dataUrl;
-          width = layoutSized.width;
-          height = layoutSized.height;
+          width = Math.round(width * layoutScale);
+          height = Math.round(height * layoutScale);
 
           let x: number;
           let y: number;
@@ -2646,6 +2660,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               taken_at: img.takenAt ?? null,
               camera_make: img.cameraMake ?? null,
               camera_model: img.cameraModel ?? null,
+              // Border
+              border_width: img.borderWidth ?? null,
+              border_color: img.borderColor ?? null,
             }));
 
             const { error: editsError } = await supabase
@@ -3461,22 +3478,25 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     }
   }, [folders, user, saveToHistory]);
 
-  // Close image/canvas/folder context menu on click outside or escape
+  // Close image/canvas/folder context menu and border dialog on click outside or escape
   useEffect(() => {
-    if (!imageContextMenu && !canvasContextMenu && !folderContextMenu) return;
+    if (!imageContextMenu && !canvasContextMenu && !folderContextMenu && !borderDialogImageId) return;
     const close = (e?: MouseEvent) => {
       if (e?.target && imageContextMenuRef.current?.contains(e.target as Node)) return;
       if (e?.target && canvasContextMenuRef.current?.contains(e.target as Node)) return;
       if (e?.target && folderContextMenuRef.current?.contains(e.target as Node)) return;
+      if (e?.target && borderDialogRef.current?.contains(e.target as Node)) return;
       setImageContextMenu(null);
       setCanvasContextMenu(null);
       setFolderContextMenu(null);
+      setBorderDialogImageId(null);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setImageContextMenu(null);
         setCanvasContextMenu(null);
         setFolderContextMenu(null);
+        setBorderDialogImageId(null);
       }
     };
     window.addEventListener('click', close, true);
@@ -3581,8 +3601,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           return;
         }
         
-        const targetCellIndex = targetRow * cols + clampedCol;
-        
         // Get other images in folder
         const otherFolderImages = images.filter(img => 
           targetFolder!.imageIds.includes(img.id) && img.id !== currentImg.id
@@ -3594,107 +3612,23 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           const imgRelativeX = img.x - contentStartX;
           const imgRelativeY = img.y - contentStartY;
           const imgCol = Math.floor(imgRelativeX / CELL_SIZE);
-          const imgRow = Math.floor(imgRelativeY / CELL_SIZE);
+          const imgRow = Math.floor(imgRelativeY / CELL_HEIGHT);
           const cellIndex = imgRow * cols + imgCol;
           imageCellMap.set(img.id, cellIndex);
         });
         
-        // Calculate current image's cell
-        const currentImgRelativeX = currentImg.x - contentStartX;
-        const currentImgRelativeY = currentImg.y - contentStartY;
-        const currentImgCol = Math.floor(currentImgRelativeX / CELL_SIZE);
-        const currentImgRow = Math.floor(currentImgRelativeY / CELL_HEIGHT);
-        const currentImgCell = currentImgRow * cols + currentImgCol;
-        
-        // Check if target cell is occupied
-        const occupiedBy = Array.from(imageCellMap.entries()).find(([, cellIndex]) => cellIndex === targetCellIndex);
-        
-        let swapX: number | undefined;
-        let swapY: number | undefined;
-        let swapImgId: string | undefined;
-        let finalCol = clampedCol;
-        let finalRow = targetRow;
-        
-        if (occupiedBy) {
-          const [occupiedImgId] = occupiedBy;
-          
-          // Swap if current image has a valid cell position
-          if (currentImgCell >= 0 && currentImgCell < cols * 1000 && 
-              currentImg.folderId === targetFolderId) {
-            const occupiedImg = otherFolderImages.find(img => img.id === occupiedImgId);
-            if (occupiedImg) {
-              const swapCol = currentImgCell % cols;
-              const swapRow = Math.floor(currentImgCell / cols);
-              const swapImgWidth = Math.min(occupiedImg.width * occupiedImg.scaleX, imageMaxSize);
-              const swapImgHeight = Math.min(occupiedImg.height * occupiedImg.scaleY, imageMaxSize);
-              const swapOffsetX = (imageMaxSize - swapImgWidth) / 2;
-              const swapOffsetY = (imageMaxSize - swapImgHeight) / 2;
-              
-              swapX = contentStartX + swapCol * CELL_SIZE + swapOffsetX;
-              swapY = contentStartY + swapRow * CELL_SIZE + swapOffsetY;
-              swapImgId = occupiedImgId;
-            }
-          } else {
-            // Find nearest empty cell
-            const occupiedCells = new Set(Array.from(imageCellMap.values()));
-            const maxRows = Math.max(10, Math.ceil((otherFolderImages.length + 1) / cols));
-            
-            for (let radius = 0; radius < maxRows * cols; radius++) {
-              let foundEmpty = false;
-              for (let dr = -radius; dr <= radius && !foundEmpty; dr++) {
-                for (let dc = -radius; dc <= radius && !foundEmpty; dc++) {
-                  if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue;
-                  
-                  const checkRow = targetRow + dr;
-                  const checkCol = clampedCol + dc;
-                  
-                  if (checkRow >= 0 && checkCol >= 0 && checkCol < cols) {
-                    const checkCellIndex = checkRow * cols + checkCol;
-                    if (!occupiedCells.has(checkCellIndex)) {
-                      finalRow = checkRow;
-                      finalCol = checkCol;
-                      foundEmpty = true;
-                    }
-                  }
-                }
-              }
-              if (foundEmpty) break;
-            }
-          }
+        // Track the dragged image's previous cell (before this move) for reliable swaps
+        if (!dragPrevCellRef.current || dragPrevCellRef.current.imageId !== currentImg.id) {
+          const currentImgRelativeX = currentImg.x - contentStartX;
+          const currentImgRelativeY = currentImg.y - contentStartY;
+          const currentImgCol = Math.max(0, Math.min(cols - 1, Math.floor(currentImgRelativeX / CELL_SIZE)));
+          const currentImgRow = Math.max(0, Math.floor(currentImgRelativeY / CELL_HEIGHT));
+          const currentImgCell = currentImgRow * cols + currentImgCol;
+          dragPrevCellRef.current = { imageId: currentImg.id, col: currentImgCol, row: currentImgRow, cellIndex: currentImgCell };
         }
         
-        // Calculate final position for dragged image
-        const imgWidth = Math.min(currentImg.width * currentImg.scaleX, imageMaxSize);
-        const imgHeight = Math.min(currentImg.height * currentImg.scaleY, GRID_CONFIG.imageMaxHeight);
-        const cellOffsetX = (imageMaxSize - imgWidth) / 2;
-        const cellOffsetY = (GRID_CONFIG.imageMaxHeight - imgHeight) / 2;
-        const finalX = contentStartX + finalCol * CELL_SIZE + cellOffsetX;
-        const finalY = contentStartY + finalRow * CELL_HEIGHT + cellOffsetY;
-
-        // Don't show ghost at all when snapping in folder — no green dashed border
+        // Don't mutate image positions during drag; resolve swaps on drag end only
         setDragGhostPosition(null);
-
-        // Update positions in real-time
-        setImages((prev) =>
-          prev.map((img) => {
-            if (img.id === currentImg.id) {
-              return { ...img, x: finalX, y: finalY };
-            }
-            if (swapImgId && img.id === swapImgId && swapX !== undefined && swapY !== undefined) {
-              return { ...img, x: swapX, y: swapY };
-            }
-            return img;
-          })
-        );
-
-        // Track swapped image for saving later
-        if (swapImgId && swapX !== undefined && swapY !== undefined) {
-          lastSwappedImageRef.current = { id: swapImgId, x: swapX, y: swapY };
-        }
-
-        // Update dragged image position
-        node.x(finalX);
-        node.y(finalY);
       }
 
       // Update folder hover state for visual feedback
@@ -3761,6 +3695,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           }
 
           // If image is IN a folder, snap to grid (social layout: no snap — keep position)
+          // Ensure targetFolder is set (fallback if detection loop didn't find it)
+          if (!targetFolder && targetFolderId) {
+            targetFolder = latestFolders.find(f => f.id === targetFolderId);
+          }
           if (targetFolderId && targetFolder) {
             if (isSocialLayout(targetFolder)) {
               // Social layout: no snap — newX/newY already = currentX/currentY
@@ -3794,6 +3732,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               newY = nearest.y - currentImg.height / 2;
               newX = snapToGrid(newX, GRID_SIZE);
               newY = snapToGrid(newY, GRID_SIZE);
+              node.position({ x: newX, y: newY });
             }
           }
 
@@ -4058,20 +3997,127 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             }
           }
 
-          // If image is in a folder (same folder move), positions are already updated in real-time
-          // Just save to Supabase and ensure folder assignment is correct
+          // If image is in a folder (same folder move), snap to grid for regular folders
           if (targetFolderId && targetFolderId === oldFolderId) {
-            // Use node position directly - it was updated synchronously by handleImageDragMove
-            const finalX = node.x();
-            const finalY = node.y();
+            // Ensure we have the target folder (fallback if not found in detection loop)
+            if (!targetFolder && targetFolderId) {
+              targetFolder = latestFolders.find(f => f.id === targetFolderId);
+            }
+            if (!targetFolder) {
+              // Folder not found, skip snapping
+              return;
+            }
+            
+            let finalX = node.x();
+            let finalY = node.y();
+            let swapImgId: string | undefined;
+            let swapX: number | undefined;
+            let swapY: number | undefined;
+            
+            // Snap to grid for regular folders (social layout: keep free position)
+            if (!isSocialLayout(targetFolder)) {
+              const { folderPadding, imageMaxSize, imageMaxHeight } = GRID_CONFIG;
+              const cols = calculateColsFromWidth(targetFolder.width);
+              const contentStartX = targetFolder.x + folderPadding;
+              const contentStartY = targetFolder.y + 30 + folderPadding;
+              const folderHeight = targetFolder.height ?? getFolderBorderHeight(targetFolder, targetFolder.imageIds.length);
+              const contentHeight = folderHeight - (2 * folderPadding);
+              const maxRows = Math.max(1, Math.floor(contentHeight / CELL_HEIGHT));
+              const relativeX = currentX - contentStartX;
+              const relativeY = currentY - contentStartY;
+              const targetCol = Math.max(0, Math.min(cols - 1, Math.round(relativeX / CELL_SIZE)));
+              const targetRow = Math.max(0, Math.min(maxRows - 1, Math.round(relativeY / CELL_HEIGHT)));
+
+              // Build occupied cell map from latest state (excluding current image)
+              const otherFolderImages = latestImages.filter(img =>
+                targetFolder!.imageIds.includes(img.id) && img.id !== currentImg.id
+              );
+              const occupiedCells = new Set<number>();
+              let occupiedById: string | undefined;
+              otherFolderImages.forEach((img) => {
+                const imgRelativeX = img.x - contentStartX;
+                const imgRelativeY = img.y - contentStartY;
+                const imgCol = Math.floor(imgRelativeX / CELL_SIZE);
+                const imgRow = Math.floor(imgRelativeY / CELL_HEIGHT);
+                const cellIndex = imgRow * cols + imgCol;
+                occupiedCells.add(cellIndex);
+                if (cellIndex === targetRow * cols + targetCol) {
+                  occupiedById = img.id;
+                }
+              });
+
+              let finalCol = targetCol;
+              let finalRow = targetRow;
+              const targetCellIndex = targetRow * cols + targetCol;
+
+              if (occupiedById) {
+                const prevCell = dragPrevCellRef.current;
+                if (prevCell && prevCell.imageId === currentImg.id && prevCell.cellIndex !== targetCellIndex) {
+                  // Swap into the previous cell
+                  const occupiedImg = otherFolderImages.find(img => img.id === occupiedById);
+                  if (occupiedImg) {
+                    swapImgId = occupiedById;
+                    const swapImgWidth = Math.min(occupiedImg.width * occupiedImg.scaleX, imageMaxSize);
+                    const swapImgHeight = Math.min(occupiedImg.height * occupiedImg.scaleY, imageMaxHeight);
+                    const swapOffsetX = (imageMaxSize - swapImgWidth) / 2;
+                    const swapOffsetY = (imageMaxHeight - swapImgHeight) / 2;
+                    swapX = contentStartX + prevCell.col * CELL_SIZE + swapOffsetX;
+                    swapY = contentStartY + prevCell.row * CELL_HEIGHT + swapOffsetY;
+                  }
+                } else {
+                  // Find nearest empty cell
+                  for (let radius = 0; radius < maxRows * cols; radius++) {
+                    let foundEmpty = false;
+                    for (let dr = -radius; dr <= radius && !foundEmpty; dr++) {
+                      for (let dc = -radius; dc <= radius && !foundEmpty; dc++) {
+                        if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue;
+                        const checkRow = targetRow + dr;
+                        const checkCol = targetCol + dc;
+                        if (checkRow >= 0 && checkRow < maxRows && checkCol >= 0 && checkCol < cols) {
+                          const checkCellIndex = checkRow * cols + checkCol;
+                          if (!occupiedCells.has(checkCellIndex)) {
+                            finalRow = checkRow;
+                            finalCol = checkCol;
+                            foundEmpty = true;
+                          }
+                        }
+                      }
+                    }
+                    if (foundEmpty) break;
+                  }
+                }
+              }
+
+              const imgWidth = Math.min(currentImg.width * currentImg.scaleX, imageMaxSize);
+              const imgHeight = Math.min(currentImg.height * currentImg.scaleY, imageMaxHeight);
+              const cellOffsetX = (imageMaxSize - imgWidth) / 2;
+              const cellOffsetY = (imageMaxHeight - imgHeight) / 2;
+              finalX = contentStartX + finalCol * CELL_SIZE + cellOffsetX;
+              finalY = contentStartY + finalRow * CELL_HEIGHT + cellOffsetY;
+              node.position({ x: finalX, y: finalY });
+
+              if (swapImgId && swapX !== undefined && swapY !== undefined) {
+                lastSwappedImageRef.current = { id: swapImgId, x: swapX, y: swapY };
+              }
+
+              dragPrevCellRef.current = { imageId: currentImg.id, col: finalCol, row: finalRow, cellIndex: finalRow * cols + finalCol };
+            } else {
+              // Social layout: use current position (no snap)
+              finalX = newX;
+              finalY = newY;
+            }
             
             // Update folder assignment if needed (should already be set)
             setImages((prev) =>
-              prev.map((img) =>
-                img.id === currentImg.id
-                  ? { ...img, folderId: targetFolderId, x: finalX, y: finalY }
-                  : img
-              )
+              prev.map((img) => {
+                if (img.id === currentImg.id) {
+                  return { ...img, folderId: targetFolderId, x: finalX, y: finalY };
+                }
+                if (swapImgId && img.id === swapImgId && swapX !== undefined && swapY !== undefined) {
+                  return { ...img, x: swapX, y: swapY };
+                }
+                return img;
+              })
             );
 
             // Save to Supabase if user is logged in
@@ -4297,6 +4343,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       hue: img.hue,
       blur: img.blur,
       filters: img.filters,
+      borderWidth: img.borderWidth,
+      borderColor: img.borderColor,
     });
   }, [images, selectedIds]);
 
@@ -5474,9 +5522,11 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                       const folderImgs = images.filter(img => currentFolder.imageIds.includes(img.id));
                       let updatedImages = [...images];
                       if (folderImgs.length > 0) {
-                        const reflowedImages = isSocialLayout(currentFolder)
-                          ? folderImgs.map((img) => ({ ...img, x: img.x + (newX - currentFolder.x), y: img.y + (newY - currentFolder.y) }))
-                          : reflowImagesInFolder(folderImgs, newX, newY, currentFolder.width);
+                        const reflowedImages = folderImgs.map((img) => ({
+                          ...img,
+                          x: img.x + (newX - currentFolder.x),
+                          y: img.y + (newY - currentFolder.y),
+                        }));
                         updatedImages = images.map((img) => {
                           const reflowed = reflowedImages.find(r => r.id === img.id);
                           return reflowed ? reflowed : img;
@@ -6221,6 +6271,17 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               >
                 Paste edit
               </button>
+              <div className="my-1 border-t border-[#2a2a2a]" />
+              <button
+                type="button"
+                onClick={() => {
+                  setBorderDialogImageId(imageContextMenu.imageId);
+                  setImageContextMenu(null);
+                }}
+                className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors"
+              >
+                Border…
+              </button>
               {user && (
                 <button
                   type="button"
@@ -6234,6 +6295,96 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           )}
         </div>
       )}
+
+      {/* Border dialog */}
+      {borderDialogImageId && (() => {
+        const img = images.find((i) => i.id === borderDialogImageId);
+        if (!img) return null;
+        const borderWidth = img.borderWidth ?? 0;
+        const borderColor = img.borderColor ?? '#ffffff';
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+            <div
+              ref={borderDialogRef}
+              className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96"
+            >
+              <h3 className="text-lg font-semibold text-white mb-4">Border</h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm text-[#888] mb-2">
+                    Thickness: {borderWidth}px
+                  </label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="50"
+                    value={borderWidth}
+                    onChange={(e) => {
+                      const width = parseInt(e.target.value, 10);
+                      setImages((prev) =>
+                        prev.map((i) =>
+                          i.id === borderDialogImageId
+                            ? { ...i, borderWidth: width }
+                            : i
+                        )
+                      );
+                    }}
+                    className="w-full h-2 bg-[#252525] rounded-lg appearance-none cursor-pointer accent-[#3ECF8E]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-[#888] mb-2">Color</label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="color"
+                      value={borderColor}
+                      onChange={(e) => {
+                        setImages((prev) =>
+                          prev.map((i) =>
+                            i.id === borderDialogImageId
+                              ? { ...i, borderColor: e.target.value }
+                              : i
+                          )
+                        );
+                      }}
+                      className="w-12 h-12 rounded cursor-pointer border border-[#333] bg-transparent"
+                    />
+                    <input
+                      type="text"
+                      value={borderColor}
+                      onChange={(e) => {
+                        const color = e.target.value;
+                        if (/^#[0-9A-Fa-f]{6}$/.test(color) || color === '') {
+                          setImages((prev) =>
+                            prev.map((i) =>
+                              i.id === borderDialogImageId
+                                ? { ...i, borderColor: color || '#ffffff' }
+                                : i
+                            )
+                          );
+                        }
+                      }}
+                      placeholder="#ffffff"
+                      className="flex-1 px-4 py-2 bg-[#252525] border border-[#333] rounded-xl text-white placeholder-[#666] focus:outline-none focus:border-[#3ECF8E] focus:ring-1 focus:ring-[#3ECF8E]/20"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-2 justify-end mt-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBorderDialogImageId(null);
+                  }}
+                  className="px-4 py-2.5 text-sm text-[#888] hover:text-white transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Create preset modal: name the preset from current image edits */}
       {createPresetFromImageId && (
@@ -7281,14 +7432,15 @@ const ImageNode = React.memo(function ImageNode({
 }) {
   const [img, imgStatus] = useImage(image.src, 'anonymous');
   const imageRef = useRef<Konva.Image>(null);
+  const groupRef = useRef<Konva.Group>(null);
   const prevPosRef = useRef({ x: image.x, y: image.y });
   const isDraggingRef = useRef(false);
   const cacheTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Sync position when x/y change from state (e.g. after drop) – no animation, drop into place
   useEffect(() => {
-    const node = imageRef.current;
-    if (!node || isDraggingRef.current) return;
+    const group = groupRef.current;
+    if (!group || isDraggingRef.current) return;
 
     const newX = image.x;
     const newY = image.y;
@@ -7296,7 +7448,7 @@ const ImageNode = React.memo(function ImageNode({
     const prevY = prevPosRef.current.y;
 
     if (Math.abs(newX - prevX) > 0.5 || Math.abs(newY - prevY) > 0.5) {
-      node.position({ x: newX, y: newY });
+      group.position({ x: newX, y: newY });
       prevPosRef.current = { x: newX, y: newY };
     }
   }, [image.x, image.y]);
@@ -7484,15 +7636,16 @@ const ImageNode = React.memo(function ImageNode({
     return null;
   }
 
+  const borderWidth = image.borderWidth ?? 0;
+  const borderColor = image.borderColor ?? '#ffffff';
+  const hasBorder = borderWidth > 0;
+
   return (
-    <KonvaImage
-      ref={imageRef}
+    <Group
+      ref={groupRef}
       id={image.id}
-      image={img}
       x={image.x}
       y={image.y}
-      width={image.width}
-      height={image.height}
       rotation={image.rotation}
       scaleX={image.scaleX}
       scaleY={image.scaleY}
@@ -7520,16 +7673,52 @@ const ImageNode = React.memo(function ImageNode({
       }}
       onDragEnd={(e) => {
         isDraggingRef.current = false;
-        prevPosRef.current = { x: image.x, y: image.y };
+        // Don't call onUpdate here - let handleObjectDragEnd calculate snapped position first
+        // The snapped position will be set by handleObjectDragEnd which calls setImages
         onDragEnd(e);
+        // Update prevPosRef after drag end handler has potentially snapped the position
+        const group = e.target as Konva.Group;
+        prevPosRef.current = { x: group.x(), y: group.y() };
       }}
-      onDragMove={onDragMove}
-      onTransformEnd={() => {
-        const node = imageRef.current;
-        if (!node) return;
-        onUpdate({ scaleX: node.scaleX(), scaleY: node.scaleY(), rotation: node.rotation() });
+      onDragMove={(e) => {
+        const group = e.target as Konva.Group;
+        const newX = group.x();
+        const newY = group.y();
+        prevPosRef.current = { x: newX, y: newY };
+        onDragMove?.(e);
       }}
-    />
+    >
+      {hasBorder && (
+        <Rect
+          x={-borderWidth}
+          y={-borderWidth}
+          width={image.width + borderWidth * 2}
+          height={image.height + borderWidth * 2}
+          fill={borderColor}
+        />
+      )}
+      <KonvaImage
+        ref={imageRef}
+        id={image.id}
+        image={img}
+        x={0}
+        y={0}
+        width={image.width}
+        height={image.height}
+        onTransformEnd={() => {
+          const node = imageRef.current;
+          if (!node) return;
+          const group = node.getParent();
+          if (group) {
+            onUpdate({
+              scaleX: group.scaleX(),
+              scaleY: group.scaleY(),
+              rotation: group.rotation(),
+            });
+          }
+        }}
+      />
+    </Group>
   );
 }, (prevProps, nextProps) => {
   // Custom comparison - only re-render if relevant props changed
