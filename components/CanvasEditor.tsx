@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import { Stage, Layer, Image as KonvaImage, Text, Transformer, Rect, Group, Shape } from 'react-konva';
+import { Stage, Layer, Image as KonvaImage, Text, Rect, Group, Shape } from 'react-konva';
 import useImage from 'use-image';
 import Konva from 'konva';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -349,7 +349,6 @@ const SOCIAL_LAYOUT_ASPECT = { w: 4, h: 5 };
 const SOCIAL_LAYOUT_PAGE_WIDTH = 400; // canvas units per page
 const SOCIAL_LAYOUT_MAX_PAGES = 10;
 const DEFAULT_SOCIAL_LAYOUT_BG = '#1a1a1a';
-const CENTER_ASSIST_THRESHOLD = 40;
 
 interface PhotoFolder {
   id: string;
@@ -370,7 +369,7 @@ function isSocialLayout(folder: PhotoFolder): boolean {
   return folder.type === 'social_layout';
 }
 
-function getSocialLayoutDimensions(_folder: PhotoFolder): { pageWidth: number; pageHeight: number; contentHeight: number } {
+function getSocialLayoutDimensions(): { pageWidth: number; pageHeight: number; contentHeight: number } {
   const pageWidth = SOCIAL_LAYOUT_PAGE_WIDTH;
   const pageHeight = (pageWidth * SOCIAL_LAYOUT_ASPECT.h) / SOCIAL_LAYOUT_ASPECT.w;
   return { pageWidth, pageHeight, contentHeight: pageHeight };
@@ -413,39 +412,6 @@ const CELL_HEIGHT = GRID_CONFIG.imageMaxHeight + GRID_CONFIG.imageGap;
 const LAYOUT_IMPORT_MAX_WIDTH = 360;
 const LAYOUT_IMPORT_MAX_HEIGHT = 450;
 
-/** Resize image from URL/dataURL to fit within maxW×maxH; returns new dataURL and dimensions. */
-async function resizeImageToFit(
-  imageSrc: string,
-  currentWidth: number,
-  currentHeight: number,
-  maxW: number,
-  maxH: number
-): Promise<{ dataUrl: string; width: number; height: number }> {
-  if (currentWidth <= maxW && currentHeight <= maxH) {
-    return { dataUrl: imageSrc, width: currentWidth, height: currentHeight };
-  }
-  const ratio = Math.min(maxW / currentWidth, maxH / currentHeight);
-  const newW = Math.round(currentWidth * ratio);
-  const newH = Math.round(currentHeight * ratio);
-
-  const img = new window.Image();
-  img.crossOrigin = 'anonymous';
-  await new Promise<void>((resolve, reject) => {
-    img.onload = () => resolve();
-    img.onerror = () => reject(new Error('Failed to load image for resize'));
-    img.src = imageSrc;
-  });
-
-  const canvas = document.createElement('canvas');
-  canvas.width = newW;
-  canvas.height = newH;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(img, 0, 0, newW, newH);
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
-  return { dataUrl, width: newW, height: newH };
-}
 
 // Calculate columns based on folder width
 const calculateColsFromWidth = (folderWidth: number): number => {
@@ -479,7 +445,6 @@ const reflowImagesInFolder = (
   if (layoutMode === 'stack') {
     return folderImages.map((img, index) => {
       const imgWidth = Math.min(img.width * img.scaleX, imageMaxSize);
-      const imgHeight = Math.min(img.height * img.scaleY, imageMaxHeight);
       const availableWidth = folderWidth - (2 * folderPadding);
       const cellOffsetX = (availableWidth - imgWidth) / 2;
       const yOffset = index * (imageMaxHeight + imageGap);
@@ -507,7 +472,7 @@ const reflowImagesInFolder = (
 const getFolderBounds = (folder: PhotoFolder, imageCount: number) => {
   if (isSocialLayout(folder)) {
     const n = Math.max(1, Math.min(SOCIAL_LAYOUT_MAX_PAGES, folder.pageCount ?? 1));
-    const { pageHeight } = getSocialLayoutDimensions(folder);
+    const { pageHeight } = getSocialLayoutDimensions();
     const width = n * SOCIAL_LAYOUT_PAGE_WIDTH;
     const height = 30 + pageHeight; // 30px label
     return {
@@ -547,7 +512,7 @@ const getFolderBounds = (folder: PhotoFolder, imageCount: number) => {
 // Get folder border/content height (below label) for rendering
 const getFolderBorderHeight = (folder: PhotoFolder, imageCount: number): number => {
   if (isSocialLayout(folder)) {
-    const { pageHeight } = getSocialLayoutDimensions(folder);
+    const { pageHeight } = getSocialLayoutDimensions();
     return pageHeight;
   }
 
@@ -854,16 +819,16 @@ const resolveFolderOverlaps = (
         const folderB = updated[j];
         const imageCountB = images.filter((img) => folderB.imageIds.includes(img.id)).length;
         const boundsB = getFolderBounds(folderB, imageCountB);
-        
+
         if (rectsOverlap(boundsA, boundsB, folderGap)) {
           hasOverlap = true;
-          
+
           // Calculate centers
           const centerAX = boundsA.x + boundsA.width / 2;
           const centerAY = boundsA.y + boundsA.height / 2;
           const centerBX = boundsB.x + boundsB.width / 2;
           const centerBY = boundsB.y + boundsB.height / 2;
-          
+
           // Determine which folder to move (prefer moving the one that wasn't changed)
           const moveB = changedFolderId === folderA.id || !changedFolderId;
           const mover = moveB ? folderB : folderA;
@@ -873,22 +838,22 @@ const resolveFolderOverlaps = (
           const staticCenterY = moveB ? centerAY : centerBY;
           const moverCenterX = moveB ? centerBX : centerAX;
           const moverCenterY = moveB ? centerBY : centerAY;
-          
+
           // Calculate push direction based on relative position
           const dx = moverCenterX - staticCenterX;
           const dy = moverCenterY - staticCenterY;
-          
+
           // Calculate the minimum push needed in each direction
           const pushRight = staticBounds.right + folderGap - moverBounds.x;
           const pushLeft = moverBounds.right + folderGap - staticBounds.x;
           const pushDown = staticBounds.bottom + folderGap - moverBounds.y;
           const pushUp = moverBounds.bottom + folderGap - staticBounds.y;
-          
+
           // Choose direction based on where mover is relative to static
           // and which push distance is smallest
           let newX = mover.x;
           let newY = mover.y;
-          
+
           if (Math.abs(dx) > Math.abs(dy)) {
             // More horizontal separation - push left or right
             if (dx > 0) {
@@ -908,7 +873,7 @@ const resolveFolderOverlaps = (
               newY = mover.y - pushUp;
             }
           }
-          
+
           if (moveB) {
             updated[j] = { ...folderB, x: newX, y: newY };
           } else {
@@ -918,7 +883,7 @@ const resolveFolderOverlaps = (
       }
     }
   }
-  
+
   return updated;
 };
 
@@ -928,7 +893,6 @@ type CanvasEditorProps = {
 
 export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}) {
   const stageRef = useRef<Konva.Stage>(null);
-  const transformerRef = useRef<Konva.Transformer>(null);
   const folderLabelRefs = useRef<Record<string, Konva.Text>>({});
   const [folderLabelWidths, setFolderLabelWidths] = useState<Record<string, number>>({});
   const [images, setImages] = useState<CanvasImage[]>([]);
@@ -938,7 +902,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const lastMultiSelectionRef = useRef<string[] | null>(null);
   const [stageScale, setStageScale] = useState(1);
   const [stagePosition, setStagePosition] = useState({ x: 0, y: 0 });
-  const [history, setHistory] = useState<{ images: CanvasImage[]; texts: CanvasText[]; folders: PhotoFolder[] }[]>([{ images: [], texts: [], folders: [] }]);
+  const [, setHistory] = useState<{ images: CanvasImage[]; texts: CanvasText[]; folders: PhotoFolder[] }[]>([{ images: [], texts: [], folders: [] }]);
   const [historyIndex, setHistoryIndex] = useState(0);
   // Undo/redo only for photo edits (sliders, curves); does not touch structure, placement, or deleted photos
   const [editHistory, setEditHistory] = useState<{ imageId: string; snapshot: Partial<CanvasImage> }[]>([]);
@@ -1511,7 +1475,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             // Calculate bounding box of all folders
             let minX = Infinity, maxX = -Infinity;
             let minY = Infinity, maxY = -Infinity;
-            
+
             for (const folder of loadedFolders) {
               const folderImgCount = newImages.filter(img => folder.imageIds.includes(img.id)).length;
               const bounds = getFolderBounds(folder, folderImgCount);
@@ -1520,15 +1484,15 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               minY = Math.min(minY, bounds.y);
               maxY = Math.max(maxY, bounds.bottom);
             }
-            
+
             // Calculate center of all content
             const contentCenterX = (minX + maxX) / 2;
             const contentCenterY = (minY + maxY) / 2;
-            
+
             // Pan so content is centered in viewport
             const viewportCenterX = window.innerWidth / 2;
             const viewportCenterY = window.innerHeight / 2;
-            
+
             setStagePosition({
               x: viewportCenterX - contentCenterX,
               y: viewportCenterY - contentCenterY,
@@ -1715,12 +1679,12 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const handleFileUpload = useCallback(
     (files: FileList | null) => {
       console.log('handleFileUpload called with files:', files, 'length:', files?.length);
-      
+
       if (!files || files.length === 0) {
         console.log('No files provided');
         return;
       }
-      
+
       // Validate and COPY files into an array (FileList becomes empty when input is reset)
       const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/x-adobe-dng'];
       const validFiles = Array.from(files).filter(f => validTypes.includes(f.type) || f.name.toLowerCase().endsWith('.dng'));
@@ -1731,7 +1695,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         alert('Please upload JPEG, PNG, WebP, or DNG files only.');
         return;
       }
-      
+
       // Store COPY of files in ref (not the live FileList reference)
       pendingFilesRef.current = validFiles;
       console.log('Stored in ref:', pendingFilesRef.current);
@@ -1755,7 +1719,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       const isDuplicate = folders.some(
         f => f.name.toLowerCase() === folderName.toLowerCase()
       );
-      
+
       if (isDuplicate) {
         setFolderNameError('A folder with this name already exists');
         return;
@@ -1782,7 +1746,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       let accumulatedImages: CanvasImage[] = [...images];
 
       // Grid layout for images within folder - using centralized config
-      const { imageMaxSize } = GRID_CONFIG;
       let imageIndex = 0;
 
       // files is already an array of validated files
@@ -1928,7 +1891,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                           })
                             .then((r) => (r.ok ? r.json() : null))
                             .then((data) => { if (data?.labels) updateImageLabels(previewFilePath, data.labels); })
-                            .catch(() => {});
+                            .catch(() => { });
                         }
                       }
                     });
@@ -1967,7 +1930,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                         })
                           .then((r) => (r.ok ? r.json() : null))
                           .then((data) => { if (data?.labels) updateImageLabels(previewFilePath, data.labels); })
-                          .catch(() => {});
+                          .catch(() => { });
                       }
                     }
                   });
@@ -2006,7 +1969,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                       })
                         .then((r) => (r.ok ? r.json() : null))
                         .then((data) => { if (data?.labels) updateImageLabels(previewFilePath, data.labels); })
-                        .catch(() => {});
+                        .catch(() => { });
                     }
                   }
                 });
@@ -2055,7 +2018,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           const cols = calculateColsFromWidth(GRID_CONFIG.defaultFolderWidth);
           const col = imageIndex % cols;
           const row = Math.floor(imageIndex / cols);
-          
+
           // Center images in their cells for consistent spacing
           // Border starts at folderX, content starts at folderX + padding
           // Border is 30px below label, add padding for content area
@@ -2164,7 +2127,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
         setImages(resolvedImages);
         setFolders(resolvedFolders);
-        
+
         // Save folder and photo_edits to Supabase after reflow (so x,y match what's on canvas)
         if (user) {
           const resolvedFolder = resolvedFolders.find(f => f.id === folderId);
@@ -2254,13 +2217,13 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                   })
                     .then((r) => (r.ok ? r.json() : null))
                     .then((data) => { if (data?.labels) updateImageLabels(path, data.labels); })
-                    .catch(() => {});
+                    .catch(() => { });
                 }
               }
             }
           }
         }
-        
+
         if (user) {
           skipNextPhotosLoadRef.current = true;
           queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
@@ -2269,7 +2232,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       } else {
         console.log('No images were processed successfully');
       }
-      
+
       pendingFilesRef.current = [];
       setIsUploading(false);
     },
@@ -2290,7 +2253,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       setIsUploading(true);
 
       const newImages: CanvasImage[] = [];
-      const { imageMaxSize } = GRID_CONFIG;
 
       // Find how many images already exist in folder to continue grid layout
       let imageIndex = targetFolder.imageIds.length;
@@ -2374,7 +2336,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                           })
                             .then((r) => (r.ok ? r.json() : null))
                             .then((data) => { if (data?.labels) updateImageLabels(previewFilePath, data.labels); })
-                            .catch(() => {});
+                            .catch(() => { });
                         }
                       }
                     });
@@ -2387,35 +2349,35 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               dngBuffer = buffer;
               const decoded = await decodeDNG(buffer, true);
               imageSrc = decoded.dataUrl;
-                  const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
-                  const previewFilePath = `${user.id}/${previewFileName}`;
-                  storagePath = previewFilePath; // Set optimistically for immediate use
-                  photosUploadSucceeded = true;
-                  fetch(decoded.dataUrl).then(r => r.blob()).then(previewBlob => {
-                    supabase.storage.from('photos').upload(previewFilePath, previewBlob, {
-                      contentType: 'image/jpeg',
-                      cacheControl: '3600',
-                    }).then(({ error }) => {
-                      if (error) {
-                        console.error('Failed to upload preview:', error);
-                        storagePath = undefined; // Clear if upload failed
-                        photosUploadSucceeded = false;
-                      } else {
-                        console.log('Uploaded client-decoded preview:', previewFilePath);
-                        // Trigger labeling after preview is uploaded (needs to exist in storage)
-                        if (user) {
-                          fetch('/api/label-photo', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ storagePath: previewFilePath, userId: user.id }),
-                          })
-                            .then((r) => (r.ok ? r.json() : null))
-                            .then((data) => { if (data?.labels) updateImageLabels(previewFilePath, data.labels); })
-                            .catch(() => {});
-                        }
-                      }
-                    });
-                  });
+              const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
+              const previewFilePath = `${user.id}/${previewFileName}`;
+              storagePath = previewFilePath; // Set optimistically for immediate use
+              photosUploadSucceeded = true;
+              fetch(decoded.dataUrl).then(r => r.blob()).then(previewBlob => {
+                supabase.storage.from('photos').upload(previewFilePath, previewBlob, {
+                  contentType: 'image/jpeg',
+                  cacheControl: '3600',
+                }).then(({ error }) => {
+                  if (error) {
+                    console.error('Failed to upload preview:', error);
+                    storagePath = undefined; // Clear if upload failed
+                    photosUploadSucceeded = false;
+                  } else {
+                    console.log('Uploaded client-decoded preview:', previewFilePath);
+                    // Trigger labeling after preview is uploaded (needs to exist in storage)
+                    if (user) {
+                      fetch('/api/label-photo', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ storagePath: previewFilePath, userId: user.id }),
+                      })
+                        .then((r) => (r.ok ? r.json() : null))
+                        .then((data) => { if (data?.labels) updateImageLabels(previewFilePath, data.labels); })
+                        .catch(() => { });
+                    }
+                  }
+                });
+              });
               isRaw = true;
             }
           } else if (supabaseUrl && user && !isDNG(file.name)) {
@@ -2486,7 +2448,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           let y: number;
           if (isSocialLayout(targetFolder)) {
             const contentTop = folderY + 30;
-            const { pageHeight } = getSocialLayoutDimensions(targetFolder);
+            const { pageHeight } = getSocialLayoutDimensions();
             const centerY = contentTop + pageHeight / 2;
             const firstPageCenterX = folderX + SOCIAL_LAYOUT_PAGE_WIDTH / 2;
             const offsetIndex = imageIndex - targetFolder.imageIds.length;
@@ -2583,11 +2545,11 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           const reflowedImages = isSocialLayout(updatedFolder)
             ? allFolderImages
             : reflowImagesInFolder(
-                allFolderImages,
-                updatedFolder.x,
-                updatedFolder.y,
-                updatedFolder.width
-              );
+              allFolderImages,
+              updatedFolder.x,
+              updatedFolder.y,
+              updatedFolder.width
+            );
           finalImages = allImages.map(img => {
             const reflowed = reflowedImages.find(r => r.id === img.id);
             return reflowed ? reflowed : img;
@@ -2682,7 +2644,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                   })
                     .then((r) => (r.ok ? r.json() : null))
                     .then((data) => { if (data?.labels) updateImageLabels(path, data.labels); })
-                    .catch(() => {});
+                    .catch(() => { });
                 }
               }
             }
@@ -2718,14 +2680,14 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             }
           }
         }
-        
+
         if (user) {
           skipNextPhotosLoadRef.current = true;
           queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
         }
         setTimeout(() => saveToHistory(), 100);
       }
-      
+
       pendingFilesRef.current = [];
       setIsUploading(false);
     },
@@ -2909,24 +2871,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     }
   }, []);
 
-  // Update transformer when selection changes (single selection only)
-  useEffect(() => {
-    if (!transformerRef.current) return;
-
-    const transformer = transformerRef.current;
-    const stage = transformer.getStage();
-    if (!stage) return;
-
-    const singleId = selectedIds.length === 1 ? selectedIds[0] : null;
-    const selectedNode = singleId ? stage.findOne(`#${singleId}`) : null;
-    if (selectedNode) {
-      transformer.nodes([selectedNode]);
-      transformer.getLayer()?.batchDraw();
-    } else {
-      transformer.nodes([]);
-    }
-  }, [selectedIds]);
-
   // Remember last multi-selection so context menu can use it even if a spurious click overwrote selectedIds. Only clear when selection is empty, not when it becomes single.
   useEffect(() => {
     if (selectedIds.length > 1) lastMultiSelectionRef.current = selectedIds.slice();
@@ -3008,8 +2952,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     const multi = selectedIds.length > 1
       ? imageIdsOnly(selectedIds)
       : (lastMultiSelectionRef.current && lastMultiSelectionRef.current.includes(imageId)
-          ? imageIdsOnly(lastMultiSelectionRef.current)
-          : null);
+        ? imageIdsOnly(lastMultiSelectionRef.current)
+        : null);
     const menuSelectedIds = multi && multi.length > 1 ? multi : [imageId];
     setImageContextMenu({ x: e.evt.clientX, y: e.evt.clientY, imageId, selectedIds: menuSelectedIds });
   }, [selectedIds, images]);
@@ -3507,7 +3451,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       window.removeEventListener('contextmenu', close, true);
       window.removeEventListener('keydown', onKey);
     };
-  }, [imageContextMenu, canvasContextMenu, folderContextMenu]);
+  }, [imageContextMenu, canvasContextMenu, folderContextMenu, borderDialogImageId]);
 
   // Handle object drag end with smart snapping (only if near another photo)
   // Handle real-time grid snapping and shuffling during drag
@@ -3528,111 +3472,111 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         const currentCenterY = currentY + currentImg.height / 2;
 
         // Blink source folder border only when image center is over the border line
-      const BORDER_BLINK_THRESHOLD = 28;
-      if (currentImg.folderId) {
-        const sourceFolder = folders.find((f) => f.id === currentImg.folderId);
-        if (sourceFolder) {
-          const folderImageCount = images.filter((img) => sourceFolder.imageIds.includes(img.id)).length;
-          const borderH = getFolderBorderHeight(sourceFolder, folderImageCount);
-          const left = sourceFolder.x;
-          const top = sourceFolder.y + 30;
-          const dist = distanceToRectBorder(currentCenterX, currentCenterY, left, top, sourceFolder.width, borderH);
-          setDragSourceFolderBorderHovered(dist <= BORDER_BLINK_THRESHOLD ? currentImg.folderId : null);
+        const BORDER_BLINK_THRESHOLD = 28;
+        if (currentImg.folderId) {
+          const sourceFolder = folders.find((f) => f.id === currentImg.folderId);
+          if (sourceFolder) {
+            const folderImageCount = images.filter((img) => sourceFolder.imageIds.includes(img.id)).length;
+            const borderH = getFolderBorderHeight(sourceFolder, folderImageCount);
+            const left = sourceFolder.x;
+            const top = sourceFolder.y + 30;
+            const dist = distanceToRectBorder(currentCenterX, currentCenterY, left, top, sourceFolder.width, borderH);
+            setDragSourceFolderBorderHovered(dist <= BORDER_BLINK_THRESHOLD ? currentImg.folderId : null);
+          } else {
+            setDragSourceFolderBorderHovered(null);
+          }
         } else {
           setDragSourceFolderBorderHovered(null);
         }
-      } else {
-        setDragSourceFolderBorderHovered(null);
-      }
 
-      // Detect which folder is being hovered
-      let targetFolderId: string | undefined = currentImg.folderId;
-      let targetFolder: PhotoFolder | undefined = folders.find(f => f.id === currentImg.folderId);
-      
-      for (const folder of folders) {
-        const bounds = getFolderBounds(folder, folder.imageIds.length);
-        const boundTop = folder.y + 30;
-        const boundBottom = bounds.bottom;
-        
-        if (currentCenterX >= bounds.x && currentCenterX <= bounds.right &&
+        // Detect which folder is being hovered
+        let targetFolderId: string | undefined = currentImg.folderId;
+        let targetFolder: PhotoFolder | undefined = folders.find(f => f.id === currentImg.folderId);
+
+        for (const folder of folders) {
+          const bounds = getFolderBounds(folder, folder.imageIds.length);
+          const boundTop = folder.y + 30;
+          const boundBottom = bounds.bottom;
+
+          if (currentCenterX >= bounds.x && currentCenterX <= bounds.right &&
             currentCenterY >= boundTop && currentCenterY <= boundBottom) {
-          targetFolderId = folder.id;
-          targetFolder = folder;
-          break;
+            targetFolderId = folder.id;
+            targetFolder = folder;
+            break;
+          }
         }
-      }
 
-      // If image is in a folder, calculate grid position and shuffle in real-time (grid only; social layout = free placement, images can stack)
-      if (targetFolderId && targetFolder) {
-        if (isSocialLayout(targetFolder)) {
+        // If image is in a folder, calculate grid position and shuffle in real-time (grid only; social layout = free placement, images can stack)
+        if (targetFolderId && targetFolder) {
+          if (isSocialLayout(targetFolder)) {
+            setDragHoveredFolderId(targetFolderId);
+            return; // Social layout: no snap, no swap — free placement, images can stack
+          }
           setDragHoveredFolderId(targetFolderId);
-          return; // Social layout: no snap, no swap — free placement, images can stack
-        }
-        setDragHoveredFolderId(targetFolderId);
-        const cols = calculateColsFromWidth(targetFolder.width);
-        const { folderPadding, imageMaxSize } = GRID_CONFIG;
-        const contentStartX = targetFolder.x + folderPadding;
-        const contentStartY = targetFolder.y + 30 + folderPadding;
-        
-        // Calculate which cell the drag position corresponds to
-        const relativeX = currentX - contentStartX;
-        const relativeY = currentY - contentStartY;
-        const targetCol = Math.max(0, Math.floor(relativeX / CELL_SIZE));
-        const targetRow = Math.max(0, Math.floor(relativeY / CELL_HEIGHT));
-        const clampedCol = Math.min(targetCol, cols - 1);
-        const { imageMaxHeight } = GRID_CONFIG;
-        const targetCellCenterX = contentStartX + clampedCol * CELL_SIZE + imageMaxSize / 2;
-        const targetCellCenterY = contentStartY + targetRow * CELL_HEIGHT + imageMaxHeight / 2;
-        
-        // Snap threshold - only snap when within 40px of cell center
-        const snapThreshold = 40;
-        const distanceToCellCenter = Math.sqrt(
-          Math.pow(currentX + currentImg.width / 2 - targetCellCenterX, 2) +
-          Math.pow(currentY + currentImg.height / 2 - targetCellCenterY, 2)
-        );
-        
-        // Update folder hover state
-        setDragHoveredFolderId(targetFolderId || null);
-        
-        // Only snap if close enough to cell center
-        if (distanceToCellCenter > snapThreshold) {
-          // Too far from cell center - clear ghost and allow free dragging
-          setDragGhostPosition(null);
-          return;
-        }
-        
-        // Get other images in folder
-        const otherFolderImages = images.filter(img => 
-          targetFolder!.imageIds.includes(img.id) && img.id !== currentImg.id
-        );
-        
-        // Calculate current cell positions for other images
-        const imageCellMap = new Map<string, number>();
-        otherFolderImages.forEach((img) => {
-          const imgRelativeX = img.x - contentStartX;
-          const imgRelativeY = img.y - contentStartY;
-          const imgCol = Math.floor(imgRelativeX / CELL_SIZE);
-          const imgRow = Math.floor(imgRelativeY / CELL_HEIGHT);
-          const cellIndex = imgRow * cols + imgCol;
-          imageCellMap.set(img.id, cellIndex);
-        });
-        
-        // Track the dragged image's previous cell (before this move) for reliable swaps
-        if (!dragPrevCellRef.current || dragPrevCellRef.current.imageId !== currentImg.id) {
-          const currentImgRelativeX = currentImg.x - contentStartX;
-          const currentImgRelativeY = currentImg.y - contentStartY;
-          const currentImgCol = Math.max(0, Math.min(cols - 1, Math.floor(currentImgRelativeX / CELL_SIZE)));
-          const currentImgRow = Math.max(0, Math.floor(currentImgRelativeY / CELL_HEIGHT));
-          const currentImgCell = currentImgRow * cols + currentImgCol;
-          dragPrevCellRef.current = { imageId: currentImg.id, col: currentImgCol, row: currentImgRow, cellIndex: currentImgCell };
-        }
-        
-        // Don't mutate image positions during drag; resolve swaps on drag end only
-        setDragGhostPosition(null);
-      }
+          const cols = calculateColsFromWidth(targetFolder.width);
+          const { folderPadding, imageMaxSize } = GRID_CONFIG;
+          const contentStartX = targetFolder.x + folderPadding;
+          const contentStartY = targetFolder.y + 30 + folderPadding;
 
-      // Update folder hover state for visual feedback
-      setDragHoveredFolderId(targetFolderId || null);
+          // Calculate which cell the drag position corresponds to
+          const relativeX = currentX - contentStartX;
+          const relativeY = currentY - contentStartY;
+          const targetCol = Math.max(0, Math.floor(relativeX / CELL_SIZE));
+          const targetRow = Math.max(0, Math.floor(relativeY / CELL_HEIGHT));
+          const clampedCol = Math.min(targetCol, cols - 1);
+          const { imageMaxHeight } = GRID_CONFIG;
+          const targetCellCenterX = contentStartX + clampedCol * CELL_SIZE + imageMaxSize / 2;
+          const targetCellCenterY = contentStartY + targetRow * CELL_HEIGHT + imageMaxHeight / 2;
+
+          // Snap threshold - only snap when within 40px of cell center
+          const snapThreshold = 40;
+          const distanceToCellCenter = Math.sqrt(
+            Math.pow(currentX + currentImg.width / 2 - targetCellCenterX, 2) +
+            Math.pow(currentY + currentImg.height / 2 - targetCellCenterY, 2)
+          );
+
+          // Update folder hover state
+          setDragHoveredFolderId(targetFolderId || null);
+
+          // Only snap if close enough to cell center
+          if (distanceToCellCenter > snapThreshold) {
+            // Too far from cell center - clear ghost and allow free dragging
+            setDragGhostPosition(null);
+            return;
+          }
+
+          // Get other images in folder
+          const otherFolderImages = images.filter(img =>
+            targetFolder!.imageIds.includes(img.id) && img.id !== currentImg.id
+          );
+
+          // Calculate current cell positions for other images
+          const imageCellMap = new Map<string, number>();
+          otherFolderImages.forEach((img) => {
+            const imgRelativeX = img.x - contentStartX;
+            const imgRelativeY = img.y - contentStartY;
+            const imgCol = Math.floor(imgRelativeX / CELL_SIZE);
+            const imgRow = Math.floor(imgRelativeY / CELL_HEIGHT);
+            const cellIndex = imgRow * cols + imgCol;
+            imageCellMap.set(img.id, cellIndex);
+          });
+
+          // Track the dragged image's previous cell (before this move) for reliable swaps
+          if (!dragPrevCellRef.current || dragPrevCellRef.current.imageId !== currentImg.id) {
+            const currentImgRelativeX = currentImg.x - contentStartX;
+            const currentImgRelativeY = currentImg.y - contentStartY;
+            const currentImgCol = Math.max(0, Math.min(cols - 1, Math.floor(currentImgRelativeX / CELL_SIZE)));
+            const currentImgRow = Math.max(0, Math.floor(currentImgRelativeY / CELL_HEIGHT));
+            const currentImgCell = currentImgRow * cols + currentImgCol;
+            dragPrevCellRef.current = { imageId: currentImg.id, col: currentImgCol, row: currentImgRow, cellIndex: currentImgCell };
+          }
+
+          // Don't mutate image positions during drag; resolve swaps on drag end only
+          setDragGhostPosition(null);
+        }
+
+        // Update folder hover state for visual feedback
+        setDragHoveredFolderId(targetFolderId || null);
       });
     },
     [images, folders]
@@ -3665,7 +3609,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           // Get the current position (already updated by handleImageDragMove if in folder)
           newX = currentX;
           newY = currentY;
-          
+
           // Calculate current center position
           const currentCenterX = currentX + currentImg.width / 2;
           const currentCenterY = currentY + currentImg.height / 2;
@@ -3684,7 +3628,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             const boundBottom = folder.y + 30 + folderHeight;
 
             if (currentCenterX >= boundLeft && currentCenterX <= boundRight &&
-                currentCenterY >= boundTop && currentCenterY <= boundBottom) {
+              currentCenterY >= boundTop && currentCenterY <= boundBottom) {
               const area = (boundRight - boundLeft) * (boundBottom - boundTop);
               if (area < smallestArea) {
                 smallestArea = area;
@@ -3738,7 +3682,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
           // Update image's folder assignment
           const oldFolderId = currentImg.folderId;
-          
+
           if (targetFolderId !== oldFolderId) {
             // If dropped outside all folders AND image was in a folder, create a new "Untitled" folder
             if (!targetFolderId && oldFolderId) {
@@ -3746,7 +3690,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               const existingUntitledNames = latestFolders
                 .filter(f => f.name.toLowerCase().startsWith('untitled'))
                 .map(f => f.name.toLowerCase());
-              
+
               let untitledName = 'Untitled';
               if (existingUntitledNames.includes('untitled')) {
                 let counter = 2;
@@ -3770,7 +3714,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               const cellOffsetY = Math.max(0, (imageMaxHeight - imgH) / 2);
               const centeredX = contentStartX + cellOffsetX;
               const centeredY = contentStartY + cellOffsetY;
-              
+
               const updatedFolders = latestFolders
                 .map((f) =>
                   f.id === oldFolderId
@@ -3861,10 +3805,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                     });
                 }
               }
-              
+
               return; // Exit early since we already updated images
             }
-            
+
             // Moving between existing folders or into a folder — use snapped drop position (newX, newY from above)
             if (targetFolderId) {
               let gridX = newX;
@@ -3926,7 +3870,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 targetFolderId,
                 currentImg.id
               );
-              
+
               setFolders(resolvedFolders);
               setImages(resolvedImages);
 
@@ -3951,7 +3895,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                       });
                   }
                 }
-                
+
                 // Save the dragged image (canonical key), including dimensions when scaled on drop into layout
                 const currentCanonical = currentImg.storagePath || currentImg.originalStoragePath;
                 if (currentCanonical && finalImg) {
@@ -3971,7 +3915,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                       if (error) console.error('Failed to update photo folder:', error);
                     });
                 }
-                
+
                 // Save swapped image if there was a swap (when moving within same folder before folder change)
                 if (lastSwappedImageRef.current) {
                   const swappedImg = resolvedImages.find(img => img.id === lastSwappedImageRef.current!.id);
@@ -4007,13 +3951,13 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               // Folder not found, skip snapping
               return;
             }
-            
+
             let finalX = node.x();
             let finalY = node.y();
             let swapImgId: string | undefined;
             let swapX: number | undefined;
             let swapY: number | undefined;
-            
+
             // Snap to grid for regular folders (social layout: keep free position)
             if (!isSocialLayout(targetFolder)) {
               const { folderPadding, imageMaxSize, imageMaxHeight } = GRID_CONFIG;
@@ -4106,7 +4050,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               finalX = newX;
               finalY = newY;
             }
-            
+
             // Update folder assignment if needed (should already be set)
             setImages((prev) =>
               prev.map((img) => {
@@ -4133,7 +4077,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                     if (error) console.error('Failed to update photo position:', error);
                   });
               }
-              
+
               // Save swapped image if there was a swap - use the position from ref (calculated during drag)
               if (lastSwappedImageRef.current) {
                 const swappedRef = lastSwappedImageRef.current;
@@ -4199,7 +4143,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         );
       }
     },
-    [images, folders, user, resolveOverlapsAndReflow]
+    [images, user, resolveOverlapsAndReflow, saveToHistory]
   );
 
   // Save edits to Supabase database. silent = true for auto-save (no alerts, use saveStatus).
@@ -4276,7 +4220,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       // Upsert edits (insert or update)
       const { error } = await supabase
         .from('photo_edits')
-        .upsert(editsToSave, { 
+        .upsert(editsToSave, {
           onConflict: 'storage_path,user_id',
         });
 
@@ -4508,19 +4452,19 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     if (!editingFolder || !editingFolderName.trim()) return;
 
     const newName = editingFolderName.trim();
-    
+
     // Check for duplicate name
     const isDuplicate = folders.some(
       f => f.id !== editingFolder.id && f.name.toLowerCase() === newName.toLowerCase()
     );
-    
+
     if (isDuplicate) {
       setFolderNameError('A folder with this name already exists');
       return;
     }
-    
+
     setFolderNameError('');
-    
+
     // Update local state
     setFolders((prev) =>
       prev.map((f) => f.id === editingFolder.id ? { ...f, name: newName } : f)
@@ -4653,40 +4597,40 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     } finally {
       setDeletingPhotoId(null);
     }
-  }, [images, user, getDeletePhotoPayload, queryClient, saveToHistory]);
+  }, [images, user, queryClient, saveToHistory]);
 
   // Recenter all folders horizontally in the middle of the canvas
   const handleRecenterFolders = useCallback(async () => {
     if (folders.length === 0) return;
-    
+
     const { folderGap } = GRID_CONFIG;
-    
+
     // Calculate total width needed for all folders
     let totalWidth = 0;
     const folderWidths: number[] = [];
-    
+
     for (const folder of folders) {
       folderWidths.push(folder.width);
       totalWidth += folder.width;
     }
-    
+
     // Add gaps between folders
     totalWidth += (folders.length - 1) * folderGap;
-    
+
     // Calculate center of viewport in stage coordinates
     const viewportCenterX = (dimensions.width / 2 - stagePosition.x) / stageScale;
     const viewportCenterY = (dimensions.height / 2 - stagePosition.y) / stageScale;
-    
+
     // Calculate starting X position (left edge of first folder)
     let currentX = viewportCenterX - totalWidth / 2;
-    
+
     // Sort folders by current x position to preserve user's left-to-right arrangement
     const sortedFolders = [...folders].sort((a, b) => a.x - b.x);
-    
+
     // Position all folders horizontally
     const recenteredFolders: PhotoFolder[] = [];
     let recenteredImages = [...images];
-    
+
     for (let i = 0; i < sortedFolders.length; i++) {
       const folder = sortedFolders[i];
       const newFolder = {
@@ -4706,14 +4650,14 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         }
         return img;
       });
-      
+
       currentX += folder.width + folderGap;
     }
-    
+
     setFolders(recenteredFolders);
     setImages(recenteredImages);
     saveToHistory();
-    
+
     // Persist to Supabase
     if (user) {
       for (const f of recenteredFolders) {
@@ -4725,7 +4669,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             if (error) console.error('Failed to update folder position:', error);
           });
       }
-      
+
       const folderImages = recenteredImages.filter(img => (img.storagePath || img.originalStoragePath) && img.folderId);
       for (const img of folderImages) {
         const canonicalPath = img.storagePath || img.originalStoragePath!;
@@ -4935,7 +4879,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             <p className="text-sm text-[#888] mb-4">
               Choose an existing folder or create a new one
             </p>
-            
+
             {/* Existing Folders */}
             {folders.length > 0 && (
               <div className="mb-4">
@@ -4949,11 +4893,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                         setNewFolderName('');
                         setFolderNameError('');
                       }}
-                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors text-left cursor-pointer ${
-                        selectedExistingFolderId === folder.id
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors text-left cursor-pointer ${selectedExistingFolderId === folder.id
                           ? 'bg-[#3ECF8E]/20 border border-[#3ECF8E]'
                           : 'bg-[#252525] border border-[#333] hover:border-[#444]'
-                      }`}
+                        }`}
                     >
                       <div
                         className="w-3 h-3 rounded-full flex-shrink-0"
@@ -4987,9 +4930,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 setFolderNameError('');
               }}
               placeholder="e.g., Beach Trip 2024"
-              className={`w-full px-4 py-3 text-white bg-[#252525] border rounded-xl focus:outline-none transition-colors mb-1 ${
-                folderNameError ? 'border-red-500 focus:border-red-500' : 'border-[#333] focus:border-[#3ECF8E] focus:ring-1 focus:ring-[#3ECF8E]/20'
-              }`}
+              className={`w-full px-4 py-3 text-white bg-[#252525] border rounded-xl focus:outline-none transition-colors mb-1 ${folderNameError ? 'border-red-500 focus:border-red-500' : 'border-[#333] focus:border-[#3ECF8E] focus:ring-1 focus:ring-[#3ECF8E]/20'
+                }`}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && newFolderName.trim()) {
                   processFilesWithFolder(newFolderName.trim());
@@ -5000,7 +4942,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               <p className="text-xs text-red-400 mb-3">{folderNameError}</p>
             )}
             {!folderNameError && <div className="mb-4" />}
-            
+
             <div className="flex gap-3">
               <button
                 onClick={() => {
@@ -5044,7 +4986,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
           <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96">
             <h2 className="text-lg font-semibold text-white mb-4">Edit Folder</h2>
-            
+
             {/* Rename Section */}
             <div className="mb-4">
               <label className="block text-sm text-[#888] mb-2">Folder Name</label>
@@ -5056,9 +4998,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                   setFolderNameError('');
                 }}
                 placeholder="Folder name"
-                className={`w-full px-4 py-3 text-white bg-[#252525] border rounded-xl focus:outline-none transition-colors ${
-                  folderNameError ? 'border-red-500 focus:border-red-500' : 'border-[#333] focus:border-[#3ECF8E] focus:ring-1 focus:ring-[#3ECF8E]/20'
-                }`}
+                className={`w-full px-4 py-3 text-white bg-[#252525] border rounded-xl focus:outline-none transition-colors ${folderNameError ? 'border-red-500 focus:border-red-500' : 'border-[#333] focus:border-[#3ECF8E] focus:ring-1 focus:ring-[#3ECF8E]/20'
+                  }`}
                 autoFocus
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && editingFolderName.trim()) {
@@ -5231,9 +5172,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 setCreateEmptyFolderNameError('');
               }}
               placeholder="e.g., Beach Trip 2024"
-              className={`w-full px-4 py-3 text-white bg-[#252525] border rounded-xl focus:outline-none transition-colors mb-1 ${
-                createEmptyFolderNameError ? 'border-red-500 focus:border-red-500' : 'border-[#333] focus:border-[#3ECF8E] focus:ring-1 focus:ring-[#3ECF8E]/20'
-              }`}
+              className={`w-full px-4 py-3 text-white bg-[#252525] border rounded-xl focus:outline-none transition-colors mb-1 ${createEmptyFolderNameError ? 'border-red-500 focus:border-red-500' : 'border-[#333] focus:border-[#3ECF8E] focus:ring-1 focus:ring-[#3ECF8E]/20'
+                }`}
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === 'Enter') handleCreateEmptyFolderSave();
@@ -5282,9 +5222,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 setCreateSocialLayoutNameError('');
               }}
               placeholder="e.g., Instagram carousel"
-              className={`w-full px-4 py-3 text-white bg-[#252525] border rounded-xl focus:outline-none transition-colors mb-1 ${
-                createSocialLayoutNameError ? 'border-red-500 focus:border-red-500' : 'border-[#333] focus:border-[#3ECF8E] focus:ring-1 focus:ring-[#3ECF8E]/20'
-              }`}
+              className={`w-full px-4 py-3 text-white bg-[#252525] border rounded-xl focus:outline-none transition-colors mb-1 ${createSocialLayoutNameError ? 'border-red-500 focus:border-red-500' : 'border-[#333] focus:border-[#3ECF8E] focus:ring-1 focus:ring-[#3ECF8E]/20'
+                }`}
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === 'Enter') handleCreateSocialLayoutSave();
@@ -5344,9 +5283,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 setCreateFolderFromSelectionNameError('');
               }}
               placeholder="e.g., Beach Trip 2024"
-              className={`w-full px-4 py-3 text-white bg-[#252525] border rounded-xl focus:outline-none transition-colors mb-1 ${
-                createFolderFromSelectionNameError ? 'border-red-500 focus:border-red-500' : 'border-[#333] focus:border-[#3ECF8E] focus:ring-1 focus:ring-[#3ECF8E]/20'
-              }`}
+              className={`w-full px-4 py-3 text-white bg-[#252525] border rounded-xl focus:outline-none transition-colors mb-1 ${createFolderFromSelectionNameError ? 'border-red-500 focus:border-red-500' : 'border-[#333] focus:border-[#3ECF8E] focus:ring-1 focus:ring-[#3ECF8E]/20'
+                }`}
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === 'Enter') handleCreateFolderFromSelectionSave();
@@ -5467,367 +5405,90 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             {folders
               .filter((folder) => visibleImageIds === null || folder.imageIds.some((id) => visibleImageIds.has(id)))
               .map((folder) => {
-              // Calculate folder dimensions
-              const folderImages = images.filter(img => folder.imageIds.includes(img.id));
-              const { folderPadding } = GRID_CONFIG;
-              
-              // Get current folder from state to ensure we have latest width
-              const currentFolder = folders.find(f => f.id === folder.id) || folder;
-              
-              // Border starts at folder.x aligned with the label
-              const borderX = currentFolder.x;
-              const borderY = currentFolder.y + 30; // Start below the label
-              const borderWidth = currentFolder.width;
-              const borderHeight = getFolderBorderHeight(currentFolder, folderImages.length);
-              
-              const isHovered = hoveredFolderBorder === currentFolder.id;
-              const isResizing = resizingFolderId === currentFolder.id;
+                // Calculate folder dimensions
+                const folderImages = images.filter(img => folder.imageIds.includes(img.id));
 
-              return (
-                <Group
-                  key={folder.id}
-                  onContextMenu={(e) => {
-                    e.evt.preventDefault();
-                    e.cancelBubble = true;
-                    setCanvasContextMenu(null);
-                    setFolderContextMenu({ x: e.evt.clientX, y: e.evt.clientY, folderId: currentFolder.id });
-                  }}
-                >
-                  {/* Folder Label (name + plus) - one Group so they scale and move together */}
+                // Get current folder from state to ensure we have latest width
+                const currentFolder = folders.find(f => f.id === folder.id) || folder;
+
+                // Border starts at folder.x aligned with the label
+                const borderX = currentFolder.x;
+                const borderY = currentFolder.y + 30; // Start below the label
+                const borderWidth = currentFolder.width;
+                const borderHeight = getFolderBorderHeight(currentFolder, folderImages.length);
+
+                const isHovered = hoveredFolderBorder === currentFolder.id;
+                const isResizing = resizingFolderId === currentFolder.id;
+
+                return (
                   <Group
-                    x={currentFolder.x}
-                    y={currentFolder.y}
-                    draggable
-                    listening={true}
-                    onMouseEnter={(e) => {
-                      const container = e.target.getStage()?.container();
-                      if (container) container.style.cursor = 'pointer';
-                    }}
-                    onMouseLeave={(e) => {
-                      const container = e.target.getStage()?.container();
-                      if (container && !isDragging) container.style.cursor = 'default';
-                    }}
-                    onDragStart={() => {
-                      folderNameDragRef.current = true;
-                    }}
-                    onDragMove={(e) => {
-                      const newX = e.target.x();
-                      const newY = e.target.y();
-                      const now = Date.now();
-
-                      const updatedFolders = folders.map((f) =>
-                        f.id === currentFolder.id ? { ...f, x: newX, y: newY } : f
-                      );
-
-                      const folderImgs = images.filter(img => currentFolder.imageIds.includes(img.id));
-                      let updatedImages = [...images];
-                      if (folderImgs.length > 0) {
-                        const reflowedImages = folderImgs.map((img) => ({
-                          ...img,
-                          x: img.x + (newX - currentFolder.x),
-                          y: img.y + (newY - currentFolder.y),
-                        }));
-                        updatedImages = images.map((img) => {
-                          const reflowed = reflowedImages.find(r => r.id === img.id);
-                          return reflowed ? reflowed : img;
-                        });
-                      }
-
-                      if (now - lastOverlapCheckRef.current >= overlapThrottleMs) {
-                        lastOverlapCheckRef.current = now;
-                        const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
-                          updatedFolders,
-                          updatedImages,
-                          currentFolder.id
-                        );
-                        setFolders(resolvedFolders);
-                        setImages(resolvedImages);
-                      } else {
-                        setFolders(updatedFolders);
-                        setImages(updatedImages);
-                      }
-                    }}
-                    onDragEnd={async () => {
-                      setTimeout(() => {
-                        folderNameDragRef.current = false;
-                      }, 100);
-
-                      const { folders: finalFolders, images: finalImages } = resolveOverlapsAndReflow(
-                        folders,
-                        images,
-                        currentFolder.id
-                      );
-                      setFolders(finalFolders);
-                      setImages(finalImages);
-                      saveToHistory();
-
-                      if (user) {
-                        for (const f of finalFolders) {
-                          supabase.from('photo_folders')
-                            .update({ x: Math.round(f.x), y: Math.round(f.y) })
-                            .eq('id', f.id)
-                            .eq('user_id', user.id)
-                            .then(({ error }) => {
-                              if (error) console.error('Failed to update folder position:', error);
-                            });
-                        }
-
-                        const allFolderImages = finalImages.filter((img: CanvasImage) => (img.storagePath || img.originalStoragePath) && img.folderId);
-                        for (const img of allFolderImages) {
-                          const canonicalPath = img.storagePath || img.originalStoragePath!;
-                          supabase.from('photo_edits')
-                            .update({ x: Math.round(img.x), y: Math.round(img.y) })
-                            .eq('storage_path', canonicalPath)
-                            .eq('user_id', user.id)
-                            .then(({ error }) => {
-                              if (error) console.error('Failed to update image position:', error);
-                            });
-                        }
-                      }
+                    key={folder.id}
+                    onContextMenu={(e) => {
+                      e.evt.preventDefault();
+                      e.cancelBubble = true;
+                      setCanvasContextMenu(null);
+                      setFolderContextMenu({ x: e.evt.clientX, y: e.evt.clientY, folderId: currentFolder.id });
                     }}
                   >
-                    <Text
-                      ref={(el) => {
-                        if (el) {
-                          folderLabelRefs.current[currentFolder.id] = el;
-                          requestAnimationFrame(() => {
-                            const w = el.width();
-                            setFolderLabelWidths(prev => prev[currentFolder.id] === w ? prev : { ...prev, [currentFolder.id]: w });
+                    {/* Folder Label (name + plus) - one Group so they scale and move together */}
+                    <Group
+                      x={currentFolder.x}
+                      y={currentFolder.y}
+                      draggable
+                      listening={true}
+                      onMouseEnter={(e) => {
+                        const container = e.target.getStage()?.container();
+                        if (container) container.style.cursor = 'pointer';
+                      }}
+                      onMouseLeave={(e) => {
+                        const container = e.target.getStage()?.container();
+                        if (container && !isDragging) container.style.cursor = 'default';
+                      }}
+                      onDragStart={() => {
+                        folderNameDragRef.current = true;
+                      }}
+                      onDragMove={(e) => {
+                        const newX = e.target.x();
+                        const newY = e.target.y();
+                        const now = Date.now();
+
+                        const updatedFolders = folders.map((f) =>
+                          f.id === currentFolder.id ? { ...f, x: newX, y: newY } : f
+                        );
+
+                        const folderImgs = images.filter(img => currentFolder.imageIds.includes(img.id));
+                        let updatedImages = [...images];
+                        if (folderImgs.length > 0) {
+                          const reflowedImages = folderImgs.map((img) => ({
+                            ...img,
+                            x: img.x + (newX - currentFolder.x),
+                            y: img.y + (newY - currentFolder.y),
+                          }));
+                          updatedImages = images.map((img) => {
+                            const reflowed = reflowedImages.find(r => r.id === img.id);
+                            return reflowed ? reflowed : img;
                           });
                         }
-                      }}
-                      x={0}
-                      y={0}
-                      text={currentFolder.name}
-                      fontSize={16}
-                      fontStyle="600"
-                      fill={currentFolder.color}
-                      listening={true}
-                      onClick={() => handleFolderDoubleClick(currentFolder)}
-                      onTap={() => handleFolderDoubleClick(currentFolder)}
-                    />
-                    <Text
-                      x={folderLabelWidths[currentFolder.id] ?? 0}
-                      y={2}
-                      text=" +"
-                      fontSize={16}
-                      fontStyle="600"
-                      fill={currentFolder.color}
-                      listening={true}
-                      onClick={(e) => {
-                        e.cancelBubble = true;
-                        handleAddPhotosToFolder(currentFolder.id);
-                      }}
-                      onTap={(e) => {
-                        e.cancelBubble = true;
-                        handleAddPhotosToFolder(currentFolder.id);
-                      }}
-                    />
-                  </Group>
 
-                  {/* Folder fill - solid background (not transparent); social layout: N pages with backgroundColor */}
-                  {isSocialLayout(currentFolder) ? (() => {
-                    const n = Math.max(1, Math.min(SOCIAL_LAYOUT_MAX_PAGES, currentFolder.pageCount ?? 1));
-                    const pageW = SOCIAL_LAYOUT_PAGE_WIDTH;
-                    const bg = currentFolder.backgroundColor ?? DEFAULT_SOCIAL_LAYOUT_BG;
-                    const h = Math.max(borderHeight, 80);
-                    return (
-                      <>
-                        {Array.from({ length: n }, (_, i) => (
-                          <Rect
-                            key={i}
-                            x={borderX + i * pageW}
-                            y={borderY}
-                            width={pageW}
-                            height={h}
-                            fill={bg}
-                            cornerRadius={0}
-                            listening={false}
-                          />
-                        ))}
-                        {n > 1 && Array.from({ length: n - 1 }, (_, i) => (
-                          <Rect
-                            key={`div-${i}`}
-                            x={borderX + (i + 1) * pageW - 1}
-                            y={borderY}
-                            width={2}
-                            height={h}
-                            fill="rgba(255,255,255,0.06)"
-                            listening={false}
-                          />
-                        ))}
-                      </>
-                    );
-                  })() : (
-                    <Rect
-                      x={borderX}
-                      y={borderY}
-                      width={borderWidth}
-                      height={Math.max(borderHeight, 80)}
-                      fill="#0d0d0d"
-                      cornerRadius={12}
-                      listening={false}
-                    />
-                  )}
-                  {/* Folder Border - blinks when image center is over this folder's border (dragging out); solid on hover or when dragging over to drop */}
-                  <Rect
-                    x={borderX}
-                    y={borderY}
-                    width={borderWidth}
-                    height={Math.max(borderHeight, 80)}
-                    stroke={currentFolder.color}
-                    strokeWidth={dragSourceFolderBorderHovered === currentFolder.id ? (dragBorderBlink ? 3 : 2) : (dragHoveredFolderId === currentFolder.id || isHovered ? 3 : 1)}
-                    cornerRadius={12}
-                    dash={dragSourceFolderBorderHovered === currentFolder.id ? (dragBorderBlink ? undefined : [8, 4]) : (dragHoveredFolderId === currentFolder.id || isHovered ? undefined : [8, 4])}
-                    opacity={dragSourceFolderBorderHovered === currentFolder.id ? (dragBorderBlink ? 0.36 : 0.9) : (dragHoveredFolderId === currentFolder.id || isHovered ? 0.9 : 0.4)}
-                    shadowColor={currentFolder.color}
-                    shadowBlur={dragSourceFolderBorderHovered === currentFolder.id ? (dragBorderBlink ? 20 : 0) : (dragHoveredFolderId === currentFolder.id || isHovered ? 20 : 0)}
-                    shadowOpacity={dragSourceFolderBorderHovered === currentFolder.id ? (dragBorderBlink ? 0.2 : 0) : (dragHoveredFolderId === currentFolder.id || isHovered ? 0.6 : 0)}
-                    onMouseEnter={() => setHoveredFolderBorder(currentFolder.id)}
-                    onMouseLeave={() => {
-                      if (!resizingFolderId) setHoveredFolderBorder(null);
-                    }}
-                    onClick={(e) => {
-                      e.cancelBubble = true;
-                      if (isSocialLayout(currentFolder)) setSelectedFolderId(currentFolder.id);
-                    }}
-                  />
-                  
-                  {/* Resize Handle - Bottom-right corner (hidden for social layout) */}
-                  {!isSocialLayout(currentFolder) && (
-                  <Rect
-                    x={borderX + borderWidth - 20}
-                    y={borderY + borderHeight - 20}
-                    width={20}
-                    height={20}
-                    fill={isHovered || isResizing ? currentFolder.color : 'transparent'}
-                    opacity={isHovered || isResizing ? 0.6 : 0}
-                    cornerRadius={4}
-                    draggable
-                    dragBoundFunc={(pos) => pos}
-                    onMouseEnter={(e) => {
-                      const container = e.target.getStage()?.container();
-                      if (container) container.style.cursor = 'nwse-resize';
-                      setHoveredFolderBorder(currentFolder.id);
-                    }}
-                    onMouseLeave={(e) => {
-                      const container = e.target.getStage()?.container();
-                      if (container && !resizingFolderId) container.style.cursor = 'default';
-                      if (!resizingFolderId) setHoveredFolderBorder(null);
-                    }}
-                    onDragStart={() => {
-                      setResizingFolderId(currentFolder.id);
-                    }}
-                    onDragMove={(e) => {
-                      const handleSize = 20;
-                      const proposedWidth = Math.max(GRID_CONFIG.minFolderWidth, e.target.x() - borderX + handleSize);
-                      const proposedContentHeight = Math.max(100, e.target.y() - borderY + handleSize);
-                      const proposedHeight = 30 + proposedContentHeight;
-                      const now = Date.now();
-
-                      // Get folder images
-                      const folderImgs = images.filter(img => currentFolder.imageIds.includes(img.id));
-
-                      // Calculate minimum size to fit all images
-                      const minSize = calculateMinimumFolderSize(folderImgs.length, proposedWidth);
-
-                      // Enforce minimum size (user cannot resize smaller than needed)
-                      const newWidth = Math.max(proposedWidth, minSize.width);
-                      const newHeight = Math.max(proposedHeight, minSize.height);
-                      const newContentHeight = newHeight - 30;
-
-                      // Get current cell positions for images
-                      const oldCols = calculateColsFromWidth(currentFolder.width);
-                      const newCols = calculateColsFromWidth(newWidth);
-                      const dimensionsChanged = newWidth !== currentFolder.width || newHeight !== currentFolder.height;
-                      const needsRepack = newCols !== oldCols || newHeight < (currentFolder.height ?? Infinity);
-
-                      // Get current positions
-                      const currentPositions = folderImgs.length > 0
-                        ? getImageCellPositions(folderImgs, currentFolder.x, currentFolder.y, currentFolder.width)
-                        : [];
-
-                      // Calculate cell assignments - preserve positions unless collision
-                      let cellAssignments: CellAssignment[] = [];
-                      if (folderImgs.length > 0) {
-                        if (dimensionsChanged && needsRepack) {
-                          // Need to repack - some images may need to move
-                          cellAssignments = smartRepackImages(
-                            folderImgs,
-                            currentPositions,
-                            currentFolder.width,
-                            newWidth,
-                            newHeight
+                        if (now - lastOverlapCheckRef.current >= overlapThrottleMs) {
+                          lastOverlapCheckRef.current = now;
+                          const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
+                            updatedFolders,
+                            updatedImages,
+                            currentFolder.id
                           );
+                          setFolders(resolvedFolders);
+                          setImages(resolvedImages);
                         } else {
-                          // No repack needed - keep images in their current cells
-                          cellAssignments = currentPositions.map(pos => ({
-                            imageId: pos.imageId,
-                            col: pos.col,
-                            row: pos.row,
-                          }));
+                          setFolders(updatedFolders);
+                          setImages(updatedImages);
                         }
-                      }
+                      }}
+                      onDragEnd={async () => {
+                        setTimeout(() => {
+                          folderNameDragRef.current = false;
+                        }, 100);
 
-                      // Update folder with new dimensions (keep same imageIds order)
-                      const updatedFolders = folders.map((f) =>
-                        f.id === currentFolder.id
-                          ? { ...f, width: newWidth, height: newHeight }
-                          : f
-                      );
-
-                      // Keep handle at bottom-right corner
-                      e.target.x(borderX + newWidth - handleSize);
-                      e.target.y(borderY + newContentHeight - handleSize);
-
-                      // Position images at their specific cells (preserving positions)
-                      let updatedImages = [...images];
-                      if (folderImgs.length > 0 && cellAssignments.length > 0) {
-                        const positionedImages = positionImagesInCells(
-                          folderImgs,
-                          cellAssignments,
-                          currentFolder.x,
-                          currentFolder.y,
-                          newWidth
-                        );
-
-                        updatedImages = images.map((img) => {
-                          const positioned = positionedImages.find(p => p.id === img.id);
-                          return positioned ? positioned : img;
-                        });
-                      }
-
-                      // Throttled overlap checking
-                      if (now - lastOverlapCheckRef.current >= overlapThrottleMs) {
-                        lastOverlapCheckRef.current = now;
-                        const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
-                          updatedFolders,
-                          updatedImages,
-                          currentFolder.id
-                        );
-                        setFolders(resolvedFolders);
-                        setImages(resolvedImages);
-                      } else {
-                        setFolders(updatedFolders);
-                        setImages(updatedImages);
-                      }
-                    }}
-                    onDragEnd={async (e) => {
-                      const container = e.target.getStage()?.container();
-                      if (container) container.style.cursor = 'default';
-                      setResizingFolderId(null);
-                      setHoveredFolderBorder(null);
-
-                      // Get current folder from state (may have been updated during drag)
-                      const resizedFolder = folders.find(f => f.id === currentFolder.id);
-                      if (!resizedFolder) return;
-
-                      // Get folder images and their current positions
-                      const folderImgs = images.filter(img => resizedFolder.imageIds.includes(img.id));
-                      const imageCount = folderImgs.length;
-
-                      if (imageCount === 0) {
-                        // No images - just finalize
                         const { folders: finalFolders, images: finalImages } = resolveOverlapsAndReflow(
                           folders,
                           images,
@@ -5836,148 +5497,424 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                         setFolders(finalFolders);
                         setImages(finalImages);
                         saveToHistory();
-                        return;
-                      }
 
-                      // Get current cell positions of images
-                      const currentPositions = getImageCellPositions(
-                        folderImgs,
-                        resizedFolder.x,
-                        resizedFolder.y,
-                        resizedFolder.width
-                      );
+                        if (user) {
+                          for (const f of finalFolders) {
+                            supabase.from('photo_folders')
+                              .update({ x: Math.round(f.x), y: Math.round(f.y) })
+                              .eq('id', f.id)
+                              .eq('user_id', user.id)
+                              .then(({ error }) => {
+                                if (error) console.error('Failed to update folder position:', error);
+                              });
+                          }
 
-                      // Calculate snapped dimensions based on USER'S resize (not image count)
-                      // This allows empty cells for dragging photos into
-                      const cols = calculateColsFromWidth(resizedFolder.width);
-
-                      // Calculate rows based on the height the user dragged to
-                      const currentContentHeight = (resizedFolder.height ?? 130) - 30; // Subtract label
-                      const availableForCells = currentContentHeight - (2 * GRID_CONFIG.folderPadding) + GRID_CONFIG.imageGap;
-                      const rowsFromHeight = Math.max(1, Math.floor(availableForCells / CELL_HEIGHT));
-
-                      // But ensure we have enough rows for all images (minimum needed)
-                      const maxRowWithImage = imageCount > 0 ? Math.max(0, ...currentPositions.map(p => p.row)) : 0;
-                      const minRowsNeeded = maxRowWithImage + 1;
-                      const rows = Math.max(rowsFromHeight, minRowsNeeded);
-
-                      // Calculate snapped width: exact fit for columns with proper padding
-                      const snappedWidth = (2 * GRID_CONFIG.folderPadding) + (cols * CELL_SIZE) - GRID_CONFIG.imageGap;
-
-                      // Calculate snapped height: based on rows the user wants (with minimum for images)
-                      const snappedContentHeight = (2 * GRID_CONFIG.folderPadding) + (rows * CELL_HEIGHT) - GRID_CONFIG.imageGap;
-                      const snappedHeight = 30 + Math.max(snappedContentHeight, 100);
-
-                      // Check if snapped dimensions would cut off any images
-                      const snappedCols = calculateColsFromWidth(snappedWidth);
-                      const snappedMaxRows = Math.max(1, Math.floor((snappedHeight - 30 - 2 * GRID_CONFIG.folderPadding + GRID_CONFIG.imageGap) / CELL_HEIGHT));
-
-                      // Determine cell assignments - preserve positions if possible
-                      let cellAssignments: CellAssignment[];
-                      const needsRepack = currentPositions.some(p => p.col >= snappedCols || p.row >= snappedMaxRows);
-
-                      if (needsRepack) {
-                        // Some images would be cut off - need to repack
-                        cellAssignments = smartRepackImages(
-                          folderImgs,
-                          currentPositions,
-                          resizedFolder.width,
-                          snappedWidth,
-                          snappedHeight
-                        );
-                      } else {
-                        // No images cut off - keep them in their current cells (PRESERVE POSITIONS)
-                        cellAssignments = currentPositions.map(pos => ({
-                          imageId: pos.imageId,
-                          col: pos.col,
-                          row: pos.row,
-                        }));
-                      }
-
-                      // Update folder with snapped dimensions
-                      const snappedFolders = folders.map(f =>
-                        f.id === resizedFolder.id
-                          ? { ...f, width: snappedWidth, height: snappedHeight }
-                          : f
-                      );
-
-                      // Position images at their cells (preserving positions when expanding)
-                      const positionedImages = positionImagesInCells(
-                        folderImgs,
-                        cellAssignments,
-                        resizedFolder.x,
-                        resizedFolder.y,
-                        snappedWidth
-                      );
-
-                      const snappedImages = images.map(img => {
-                        const positioned = positionedImages.find(p => p.id === img.id);
-                        return positioned ? positioned : img;
-                      });
-
-                      // Final overlap resolution to ensure clean state
-                      const { folders: finalFolders, images: finalImages } = resolveOverlapsAndReflow(
-                        snappedFolders,
-                        snappedImages,
-                        currentFolder.id
-                      );
-                      setFolders(finalFolders);
-                      setImages(finalImages);
-                      saveToHistory();
-                      
-                      // Persist folder positions/widths and image positions to Supabase
-                      if (user) {
-                        // Save all folder positions (some may have been pushed)
-                        for (const f of finalFolders) {
-                          supabase.from('photo_folders')
-                            .update({
-                              x: Math.round(f.x),
-                              y: Math.round(f.y),
-                              width: Math.round(f.width),
-                              ...(f.height != null && { height: Math.round(f.height) }),
-                            })
-                            .eq('id', f.id)
-                            .eq('user_id', user.id)
-                            .then(({ error }) => {
-                              if (error) console.error('Failed to update folder:', error);
-                            });
+                          const allFolderImages = finalImages.filter((img: CanvasImage) => (img.storagePath || img.originalStoragePath) && img.folderId);
+                          for (const img of allFolderImages) {
+                            const canonicalPath = img.storagePath || img.originalStoragePath!;
+                            supabase.from('photo_edits')
+                              .update({ x: Math.round(img.x), y: Math.round(img.y) })
+                              .eq('storage_path', canonicalPath)
+                              .eq('user_id', user.id)
+                              .then(({ error }) => {
+                                if (error) console.error('Failed to update image position:', error);
+                              });
+                          }
                         }
-                        
-                        // Save all images positions (canonical key)
-                        const allFolderImages = finalImages.filter((img: CanvasImage) => (img.storagePath || img.originalStoragePath) && img.folderId);
-                        for (const img of allFolderImages) {
-                          const canonicalPath = img.storagePath || img.originalStoragePath!;
-                          supabase.from('photo_edits')
-                            .update({ x: Math.round(img.x), y: Math.round(img.y) })
-                            .eq('storage_path', canonicalPath)
-                            .eq('user_id', user.id)
-                            .then(({ error }) => {
-                              if (error) console.error('Failed to update image position:', error);
+                      }}
+                    >
+                      <Text
+                        ref={(el) => {
+                          if (el) {
+                            folderLabelRefs.current[currentFolder.id] = el;
+                            requestAnimationFrame(() => {
+                              const w = el.width();
+                              setFolderLabelWidths(prev => prev[currentFolder.id] === w ? prev : { ...prev, [currentFolder.id]: w });
                             });
-                        }
-                      }
-                    }}
-                  />
-                  )}
+                          }
+                        }}
+                        x={0}
+                        y={0}
+                        text={currentFolder.name}
+                        fontSize={16}
+                        fontStyle="600"
+                        fill={currentFolder.color}
+                        listening={true}
+                        onClick={() => handleFolderDoubleClick(currentFolder)}
+                        onTap={() => handleFolderDoubleClick(currentFolder)}
+                      />
+                      <Text
+                        x={folderLabelWidths[currentFolder.id] ?? 0}
+                        y={2}
+                        text=" +"
+                        fontSize={16}
+                        fontStyle="600"
+                        fill={currentFolder.color}
+                        listening={true}
+                        onClick={(e) => {
+                          e.cancelBubble = true;
+                          handleAddPhotosToFolder(currentFolder.id);
+                        }}
+                        onTap={(e) => {
+                          e.cancelBubble = true;
+                          handleAddPhotosToFolder(currentFolder.id);
+                        }}
+                      />
+                    </Group>
 
-                  {/* Ghost/placeholder for drag target */}
-                  {dragGhostPosition && dragGhostPosition.folderId === currentFolder.id && (
+                    {/* Folder fill - solid background (not transparent); social layout: N pages with backgroundColor */}
+                    {isSocialLayout(currentFolder) ? (() => {
+                      const n = Math.max(1, Math.min(SOCIAL_LAYOUT_MAX_PAGES, currentFolder.pageCount ?? 1));
+                      const pageW = SOCIAL_LAYOUT_PAGE_WIDTH;
+                      const bg = currentFolder.backgroundColor ?? DEFAULT_SOCIAL_LAYOUT_BG;
+                      const h = Math.max(borderHeight, 80);
+                      return (
+                        <>
+                          {Array.from({ length: n }, (_, i) => (
+                            <Rect
+                              key={i}
+                              x={borderX + i * pageW}
+                              y={borderY}
+                              width={pageW}
+                              height={h}
+                              fill={bg}
+                              cornerRadius={0}
+                              listening={false}
+                            />
+                          ))}
+                          {n > 1 && Array.from({ length: n - 1 }, (_, i) => (
+                            <Rect
+                              key={`div-${i}`}
+                              x={borderX + (i + 1) * pageW - 1}
+                              y={borderY}
+                              width={2}
+                              height={h}
+                              fill="rgba(255,255,255,0.06)"
+                              listening={false}
+                            />
+                          ))}
+                        </>
+                      );
+                    })() : (
+                      <Rect
+                        x={borderX}
+                        y={borderY}
+                        width={borderWidth}
+                        height={Math.max(borderHeight, 80)}
+                        fill="#0d0d0d"
+                        cornerRadius={12}
+                        listening={false}
+                      />
+                    )}
+                    {/* Folder Border - blinks when image center is over this folder's border (dragging out); solid on hover or when dragging over to drop */}
                     <Rect
-                      x={dragGhostPosition.x}
-                      y={dragGhostPosition.y}
-                      width={dragGhostPosition.width}
-                      height={dragGhostPosition.height}
-                      fill="rgba(62, 207, 142, 0.2)"
-                      stroke="#3ECF8E"
-                      strokeWidth={2}
-                      dash={[5, 5]}
-                      cornerRadius={8}
-                      listening={false}
+                      x={borderX}
+                      y={borderY}
+                      width={borderWidth}
+                      height={Math.max(borderHeight, 80)}
+                      stroke={currentFolder.color}
+                      strokeWidth={dragSourceFolderBorderHovered === currentFolder.id ? (dragBorderBlink ? 3 : 2) : (dragHoveredFolderId === currentFolder.id || isHovered ? 3 : 1)}
+                      cornerRadius={12}
+                      dash={dragSourceFolderBorderHovered === currentFolder.id ? (dragBorderBlink ? undefined : [8, 4]) : (dragHoveredFolderId === currentFolder.id || isHovered ? undefined : [8, 4])}
+                      opacity={dragSourceFolderBorderHovered === currentFolder.id ? (dragBorderBlink ? 0.36 : 0.9) : (dragHoveredFolderId === currentFolder.id || isHovered ? 0.9 : 0.4)}
+                      shadowColor={currentFolder.color}
+                      shadowBlur={dragSourceFolderBorderHovered === currentFolder.id ? (dragBorderBlink ? 20 : 0) : (dragHoveredFolderId === currentFolder.id || isHovered ? 20 : 0)}
+                      shadowOpacity={dragSourceFolderBorderHovered === currentFolder.id ? (dragBorderBlink ? 0.2 : 0) : (dragHoveredFolderId === currentFolder.id || isHovered ? 0.6 : 0)}
+                      onMouseEnter={() => setHoveredFolderBorder(currentFolder.id)}
+                      onMouseLeave={() => {
+                        if (!resizingFolderId) setHoveredFolderBorder(null);
+                      }}
+                      onClick={(e) => {
+                        e.cancelBubble = true;
+                        if (isSocialLayout(currentFolder)) setSelectedFolderId(currentFolder.id);
+                      }}
                     />
-                  )}
-                </Group>
-              );
-            })}
+
+                    {/* Resize Handle - Bottom-right corner (hidden for social layout) */}
+                    {!isSocialLayout(currentFolder) && (
+                      <Rect
+                        x={borderX + borderWidth - 20}
+                        y={borderY + borderHeight - 20}
+                        width={20}
+                        height={20}
+                        fill={isHovered || isResizing ? currentFolder.color : 'transparent'}
+                        opacity={isHovered || isResizing ? 0.6 : 0}
+                        cornerRadius={4}
+                        draggable
+                        dragBoundFunc={(pos) => pos}
+                        onMouseEnter={(e) => {
+                          const container = e.target.getStage()?.container();
+                          if (container) container.style.cursor = 'nwse-resize';
+                          setHoveredFolderBorder(currentFolder.id);
+                        }}
+                        onMouseLeave={(e) => {
+                          const container = e.target.getStage()?.container();
+                          if (container && !resizingFolderId) container.style.cursor = 'default';
+                          if (!resizingFolderId) setHoveredFolderBorder(null);
+                        }}
+                        onDragStart={() => {
+                          setResizingFolderId(currentFolder.id);
+                        }}
+                        onDragMove={(e) => {
+                          const handleSize = 20;
+                          const proposedWidth = Math.max(GRID_CONFIG.minFolderWidth, e.target.x() - borderX + handleSize);
+                          const proposedContentHeight = Math.max(100, e.target.y() - borderY + handleSize);
+                          const proposedHeight = 30 + proposedContentHeight;
+                          const now = Date.now();
+
+                          // Get folder images
+                          const folderImgs = images.filter(img => currentFolder.imageIds.includes(img.id));
+
+                          // Calculate minimum size to fit all images
+                          const minSize = calculateMinimumFolderSize(folderImgs.length, proposedWidth);
+
+                          // Enforce minimum size (user cannot resize smaller than needed)
+                          const newWidth = Math.max(proposedWidth, minSize.width);
+                          const newHeight = Math.max(proposedHeight, minSize.height);
+                          const newContentHeight = newHeight - 30;
+
+                          // Get current cell positions for images
+                          const oldCols = calculateColsFromWidth(currentFolder.width);
+                          const newCols = calculateColsFromWidth(newWidth);
+                          const dimensionsChanged = newWidth !== currentFolder.width || newHeight !== currentFolder.height;
+                          const needsRepack = newCols !== oldCols || newHeight < (currentFolder.height ?? Infinity);
+
+                          // Get current positions
+                          const currentPositions = folderImgs.length > 0
+                            ? getImageCellPositions(folderImgs, currentFolder.x, currentFolder.y, currentFolder.width)
+                            : [];
+
+                          // Calculate cell assignments - preserve positions unless collision
+                          let cellAssignments: CellAssignment[] = [];
+                          if (folderImgs.length > 0) {
+                            if (dimensionsChanged && needsRepack) {
+                              // Need to repack - some images may need to move
+                              cellAssignments = smartRepackImages(
+                                folderImgs,
+                                currentPositions,
+                                currentFolder.width,
+                                newWidth,
+                                newHeight
+                              );
+                            } else {
+                              // No repack needed - keep images in their current cells
+                              cellAssignments = currentPositions.map(pos => ({
+                                imageId: pos.imageId,
+                                col: pos.col,
+                                row: pos.row,
+                              }));
+                            }
+                          }
+
+                          // Update folder with new dimensions (keep same imageIds order)
+                          const updatedFolders = folders.map((f) =>
+                            f.id === currentFolder.id
+                              ? { ...f, width: newWidth, height: newHeight }
+                              : f
+                          );
+
+                          // Keep handle at bottom-right corner
+                          e.target.x(borderX + newWidth - handleSize);
+                          e.target.y(borderY + newContentHeight - handleSize);
+
+                          // Position images at their specific cells (preserving positions)
+                          let updatedImages = [...images];
+                          if (folderImgs.length > 0 && cellAssignments.length > 0) {
+                            const positionedImages = positionImagesInCells(
+                              folderImgs,
+                              cellAssignments,
+                              currentFolder.x,
+                              currentFolder.y,
+                              newWidth
+                            );
+
+                            updatedImages = images.map((img) => {
+                              const positioned = positionedImages.find(p => p.id === img.id);
+                              return positioned ? positioned : img;
+                            });
+                          }
+
+                          // Throttled overlap checking
+                          if (now - lastOverlapCheckRef.current >= overlapThrottleMs) {
+                            lastOverlapCheckRef.current = now;
+                            const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
+                              updatedFolders,
+                              updatedImages,
+                              currentFolder.id
+                            );
+                            setFolders(resolvedFolders);
+                            setImages(resolvedImages);
+                          } else {
+                            setFolders(updatedFolders);
+                            setImages(updatedImages);
+                          }
+                        }}
+                        onDragEnd={async (e) => {
+                          const container = e.target.getStage()?.container();
+                          if (container) container.style.cursor = 'default';
+                          setResizingFolderId(null);
+                          setHoveredFolderBorder(null);
+
+                          // Get current folder from state (may have been updated during drag)
+                          const resizedFolder = folders.find(f => f.id === currentFolder.id);
+                          if (!resizedFolder) return;
+
+                          // Get folder images and their current positions
+                          const folderImgs = images.filter(img => resizedFolder.imageIds.includes(img.id));
+                          const imageCount = folderImgs.length;
+
+                          if (imageCount === 0) {
+                            // No images - just finalize
+                            const { folders: finalFolders, images: finalImages } = resolveOverlapsAndReflow(
+                              folders,
+                              images,
+                              currentFolder.id
+                            );
+                            setFolders(finalFolders);
+                            setImages(finalImages);
+                            saveToHistory();
+                            return;
+                          }
+
+                          // Get current cell positions of images
+                          const currentPositions = getImageCellPositions(
+                            folderImgs,
+                            resizedFolder.x,
+                            resizedFolder.y,
+                            resizedFolder.width
+                          );
+
+                          // Calculate snapped dimensions based on USER'S resize (not image count)
+                          // This allows empty cells for dragging photos into
+                          const cols = calculateColsFromWidth(resizedFolder.width);
+
+                          // Calculate rows based on the height the user dragged to
+                          const currentContentHeight = (resizedFolder.height ?? 130) - 30; // Subtract label
+                          const availableForCells = currentContentHeight - (2 * GRID_CONFIG.folderPadding) + GRID_CONFIG.imageGap;
+                          const rowsFromHeight = Math.max(1, Math.floor(availableForCells / CELL_HEIGHT));
+
+                          // But ensure we have enough rows for all images (minimum needed)
+                          const maxRowWithImage = imageCount > 0 ? Math.max(0, ...currentPositions.map(p => p.row)) : 0;
+                          const minRowsNeeded = maxRowWithImage + 1;
+                          const rows = Math.max(rowsFromHeight, minRowsNeeded);
+
+                          // Calculate snapped width: exact fit for columns with proper padding
+                          const snappedWidth = (2 * GRID_CONFIG.folderPadding) + (cols * CELL_SIZE) - GRID_CONFIG.imageGap;
+
+                          // Calculate snapped height: based on rows the user wants (with minimum for images)
+                          const snappedContentHeight = (2 * GRID_CONFIG.folderPadding) + (rows * CELL_HEIGHT) - GRID_CONFIG.imageGap;
+                          const snappedHeight = 30 + Math.max(snappedContentHeight, 100);
+
+                          // Check if snapped dimensions would cut off any images
+                          const snappedCols = calculateColsFromWidth(snappedWidth);
+                          const snappedMaxRows = Math.max(1, Math.floor((snappedHeight - 30 - 2 * GRID_CONFIG.folderPadding + GRID_CONFIG.imageGap) / CELL_HEIGHT));
+
+                          // Determine cell assignments - preserve positions if possible
+                          let cellAssignments: CellAssignment[];
+                          const needsRepack = currentPositions.some(p => p.col >= snappedCols || p.row >= snappedMaxRows);
+
+                          if (needsRepack) {
+                            // Some images would be cut off - need to repack
+                            cellAssignments = smartRepackImages(
+                              folderImgs,
+                              currentPositions,
+                              resizedFolder.width,
+                              snappedWidth,
+                              snappedHeight
+                            );
+                          } else {
+                            // No images cut off - keep them in their current cells (PRESERVE POSITIONS)
+                            cellAssignments = currentPositions.map(pos => ({
+                              imageId: pos.imageId,
+                              col: pos.col,
+                              row: pos.row,
+                            }));
+                          }
+
+                          // Update folder with snapped dimensions
+                          const snappedFolders = folders.map(f =>
+                            f.id === resizedFolder.id
+                              ? { ...f, width: snappedWidth, height: snappedHeight }
+                              : f
+                          );
+
+                          // Position images at their cells (preserving positions when expanding)
+                          const positionedImages = positionImagesInCells(
+                            folderImgs,
+                            cellAssignments,
+                            resizedFolder.x,
+                            resizedFolder.y,
+                            snappedWidth
+                          );
+
+                          const snappedImages = images.map(img => {
+                            const positioned = positionedImages.find(p => p.id === img.id);
+                            return positioned ? positioned : img;
+                          });
+
+                          // Final overlap resolution to ensure clean state
+                          const { folders: finalFolders, images: finalImages } = resolveOverlapsAndReflow(
+                            snappedFolders,
+                            snappedImages,
+                            currentFolder.id
+                          );
+                          setFolders(finalFolders);
+                          setImages(finalImages);
+                          saveToHistory();
+
+                          // Persist folder positions/widths and image positions to Supabase
+                          if (user) {
+                            // Save all folder positions (some may have been pushed)
+                            for (const f of finalFolders) {
+                              supabase.from('photo_folders')
+                                .update({
+                                  x: Math.round(f.x),
+                                  y: Math.round(f.y),
+                                  width: Math.round(f.width),
+                                  ...(f.height != null && { height: Math.round(f.height) }),
+                                })
+                                .eq('id', f.id)
+                                .eq('user_id', user.id)
+                                .then(({ error }) => {
+                                  if (error) console.error('Failed to update folder:', error);
+                                });
+                            }
+
+                            // Save all images positions (canonical key)
+                            const allFolderImages = finalImages.filter((img: CanvasImage) => (img.storagePath || img.originalStoragePath) && img.folderId);
+                            for (const img of allFolderImages) {
+                              const canonicalPath = img.storagePath || img.originalStoragePath!;
+                              supabase.from('photo_edits')
+                                .update({ x: Math.round(img.x), y: Math.round(img.y) })
+                                .eq('storage_path', canonicalPath)
+                                .eq('user_id', user.id)
+                                .then(({ error }) => {
+                                  if (error) console.error('Failed to update image position:', error);
+                                });
+                            }
+                          }
+                        }}
+                      />
+                    )}
+
+                    {/* Ghost/placeholder for drag target */}
+                    {dragGhostPosition && dragGhostPosition.folderId === currentFolder.id && (
+                      <Rect
+                        x={dragGhostPosition.x}
+                        y={dragGhostPosition.y}
+                        width={dragGhostPosition.width}
+                        height={dragGhostPosition.height}
+                        fill="rgba(62, 207, 142, 0.2)"
+                        stroke="#3ECF8E"
+                        strokeWidth={2}
+                        dash={[5, 5]}
+                        cornerRadius={8}
+                        listening={false}
+                      />
+                    )}
+                  </Group>
+                );
+              })}
 
             {(visibleImageIds === null ? images : images.filter((img) => visibleImageIds.has(img.id))).map((img) => (
               <ImageNode
@@ -6048,7 +5985,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             /> */}
           </Layer>
         </Stage>
-        
+
       </div>
 
       {/* Right-click context menu on empty canvas: Create folder / Create social media layout */}
@@ -6543,7 +6480,7 @@ const createBrightnessFilter = (brightness: number) => {
     lut[i] = i * factor; // Uint8ClampedArray auto-clamps to 0-255
   }
 
-  return function(imageData: ImageData) {
+  return function (imageData: ImageData) {
     const data = imageData.data;
     const len = data.length;
     for (let i = 0; i < len; i += 4) {
@@ -6564,7 +6501,7 @@ const createExposureFilter = (exposure: number) => {
     lut[i] = i * factor; // Uint8ClampedArray auto-clamps to 0-255
   }
 
-  return function(imageData: ImageData) {
+  return function (imageData: ImageData) {
     const data = imageData.data;
     const len = data.length;
     for (let i = 0; i < len; i += 4) {
@@ -6605,7 +6542,7 @@ const createTonalFilter = (highlights: number, shadows: number, whites: number, 
     lut[i] = Math.max(0, Math.min(1, val)) * 255;
   }
 
-  return function(imageData: ImageData) {
+  return function (imageData: ImageData) {
     const data = imageData.data;
     const len = data.length;
     for (let i = 0; i < len; i += 4) {
@@ -6627,7 +6564,7 @@ const createTemperatureFilter = (temperature: number) => {
     blueLut[i] = i - tempFactor;
   }
 
-  return function(imageData: ImageData) {
+  return function (imageData: ImageData) {
     const data = imageData.data;
     const len = data.length;
     for (let i = 0; i < len; i += 4) {
@@ -6644,7 +6581,7 @@ const createVibranceFilter = (vibrance: number) => {
   const gCoef = 0.587;
   const bCoef = 0.114;
 
-  return function(imageData: ImageData) {
+  return function (imageData: ImageData) {
     const data = imageData.data;
     const len = data.length;
 
@@ -6683,7 +6620,7 @@ const createClarityFilter = (clarity: number) => {
     lut[i] = Math.max(0, Math.min(1, newVal)) * 255;
   }
 
-  return function(imageData: ImageData) {
+  return function (imageData: ImageData) {
     const data = imageData.data;
     const len = data.length;
     for (let i = 0; i < len; i += 4) {
@@ -6700,7 +6637,7 @@ const createDehazeFilter = (dehaze: number) => {
   const satBoost = 1 + dehaze * 0.3;
   const rCoef = 0.299, gCoef = 0.587, bCoef = 0.114;
 
-  return function(imageData: ImageData) {
+  return function (imageData: ImageData) {
     const data = imageData.data;
     const len = data.length;
 
@@ -6729,7 +6666,7 @@ const createVignetteFilter = (vignette: number) => {
   let lastWidth = 0;
   let lastHeight = 0;
 
-  return function(imageData: ImageData) {
+  return function (imageData: ImageData) {
     const data = imageData.data;
     const w = imageData.width;
     const h = imageData.height;
@@ -6779,7 +6716,7 @@ const createGrainFilter = (grain: number) => {
     noisePattern[i] = ((Math.random() - 0.5) * intensity) | 0;
   }
 
-  return function(imageData: ImageData) {
+  return function (imageData: ImageData) {
     const data = imageData.data;
     const len = data.length;
     let offset = (Math.random() * patternSize) | 0;
@@ -6860,7 +6797,7 @@ const createCurvesFilter = (curves: ChannelCurves) => {
   const blueLUT = buildLUT(curves.blue);
   const s = CURVES_STRENGTH;
 
-  return function(imageData: ImageData) {
+  return function (imageData: ImageData) {
     const data = imageData.data;
     for (let i = 0; i < data.length; i += 4) {
       const origR = data[i];
@@ -6879,7 +6816,7 @@ const createCurvesFilter = (curves: ChannelCurves) => {
 // Konva Contrast exact formula: adjust = ((contrast+100)/100)^2, then (val/255-0.5)*adjust+0.5. Node gets contrast in -100..100; we pass image.contrast*25.
 const createContrastFilterParam = (konvaContrastValue: number) => {
   const adjust = Math.pow((konvaContrastValue + 100) / 100, 2);
-  return function(imageData: ImageData) {
+  return function (imageData: ImageData) {
     const data = imageData.data;
     for (let i = 0; i < data.length; i += 4) {
       let r = data[i] / 255 - 0.5; r = (r * adjust + 0.5) * 255; data[i] = r < 0 ? 0 : r > 255 ? 255 : r;
@@ -6905,7 +6842,7 @@ const createHSVFilterParam = (saturationValue: number, hueValue: number) => {
   const br = 0.299 * v - 0.3 * vsu + 1.25 * vsw;
   const bg = 0.587 * v - 0.586 * vsu - 1.05 * vsw;
   const bb = 0.114 * v + 0.886 * vsu - 0.2 * vsw;
-  return function(imageData: ImageData) {
+  return function (imageData: ImageData) {
     const data = imageData.data;
     for (let i = 0; i < data.length; i += 4) {
       const r = data[i], g = data[i + 1], b = data[i + 2];
@@ -7052,7 +6989,7 @@ const createHSLColorFilter = (colorHSL: ColorHSL) => {
   const satStrength = 0.5;
   const lumStrength = 0.3;
 
-  return function(imageData: ImageData) {
+  return function (imageData: ImageData) {
     const data = imageData.data;
     const len = data.length;
 
@@ -7130,24 +7067,24 @@ const createHSLColorFilter = (colorHSL: ColorHSL) => {
         const p = 2 * newL - q;
 
         // Inline hue2rgb for performance
-        let t = newH + 1/3;
+        let t = newH + 1 / 3;
         if (t > 1) t -= 1;
-        if (t < 1/6) newR = p + (q - p) * 6 * t;
-        else if (t < 1/2) newR = q;
-        else if (t < 2/3) newR = p + (q - p) * (2/3 - t) * 6;
+        if (t < 1 / 6) newR = p + (q - p) * 6 * t;
+        else if (t < 1 / 2) newR = q;
+        else if (t < 2 / 3) newR = p + (q - p) * (2 / 3 - t) * 6;
         else newR = p;
 
         t = newH;
-        if (t < 1/6) newG = p + (q - p) * 6 * t;
-        else if (t < 1/2) newG = q;
-        else if (t < 2/3) newG = p + (q - p) * (2/3 - t) * 6;
+        if (t < 1 / 6) newG = p + (q - p) * 6 * t;
+        else if (t < 1 / 2) newG = q;
+        else if (t < 2 / 3) newG = p + (q - p) * (2 / 3 - t) * 6;
         else newG = p;
 
-        t = newH - 1/3;
+        t = newH - 1 / 3;
         if (t < 0) t += 1;
-        if (t < 1/6) newB = p + (q - p) * 6 * t;
-        else if (t < 1/2) newB = q;
-        else if (t < 2/3) newB = p + (q - p) * (2/3 - t) * 6;
+        if (t < 1 / 6) newB = p + (q - p) * 6 * t;
+        else if (t < 1 / 2) newB = q;
+        else if (t < 2 / 3) newB = p + (q - p) * (2 / 3 - t) * 6;
         else newB = p;
       }
 
@@ -7160,7 +7097,7 @@ const createHSLColorFilter = (colorHSL: ColorHSL) => {
 
 // Split Toning filter - adds color to shadows and highlights
 const createSplitToningFilter = (splitToning: SplitToning) => {
-  return function(imageData: ImageData) {
+  return function (imageData: ImageData) {
     const data = imageData.data;
 
     for (let i = 0; i < data.length; i += 4) {
@@ -7184,18 +7121,18 @@ const createSplitToningFilter = (splitToning: SplitToning) => {
         const hue2rgb = (p: number, q: number, t: number) => {
           if (t < 0) t += 1;
           if (t > 1) t -= 1;
-          if (t < 1/6) return p + (q - p) * 6 * t;
-          if (t < 1/2) return q;
-          if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+          if (t < 1 / 6) return p + (q - p) * 6 * t;
+          if (t < 1 / 2) return q;
+          if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
           return p;
         };
 
         const q = lum < 0.5 ? lum * (1 + saturation) : lum + saturation - lum * saturation;
         const p = 2 * lum - q;
 
-        const toneR = hue2rgb(p, q, h + 1/3);
+        const toneR = hue2rgb(p, q, h + 1 / 3);
         const toneG = hue2rgb(p, q, h);
-        const toneB = hue2rgb(p, q, h - 1/3);
+        const toneB = hue2rgb(p, q, h - 1 / 3);
 
         // Blend with original based on saturation strength
         const blend = isShadow ? (1 - lum) : lum; // Stronger effect in shadows or highlights
@@ -7211,7 +7148,7 @@ const createSplitToningFilter = (splitToning: SplitToning) => {
 
 // Shadow Tint filter - adds green/magenta tint to shadows
 const createShadowTintFilter = (tint: number) => {
-  return function(imageData: ImageData) {
+  return function (imageData: ImageData) {
     const data = imageData.data;
     const tintAmount = tint; // -100 to +100 (green to magenta)
 
@@ -7244,7 +7181,7 @@ const createShadowTintFilter = (tint: number) => {
 
 // Color Grading filter - applies color grading to shadows, midtones, and highlights
 const createColorGradingFilter = (colorGrading: ColorGrading) => {
-  return function(imageData: ImageData) {
+  return function (imageData: ImageData) {
     const data = imageData.data;
     const blending = colorGrading.blending / 100; // 0-100 -> 0-1
 
@@ -7276,18 +7213,18 @@ const createColorGradingFilter = (colorGrading: ColorGrading) => {
         const hue2rgb = (p: number, q: number, t: number) => {
           if (t < 0) t += 1;
           if (t > 1) t -= 1;
-          if (t < 1/6) return p + (q - p) * 6 * t;
-          if (t < 1/2) return q;
-          if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+          if (t < 1 / 6) return p + (q - p) * 6 * t;
+          if (t < 1 / 2) return q;
+          if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
           return p;
         };
 
         const q = finalLum < 0.5 ? finalLum * (1 + s) : finalLum + s - finalLum * s;
         const p = 2 * finalLum - q;
 
-        const toneR = hue2rgb(p, q, h + 1/3);
+        const toneR = hue2rgb(p, q, h + 1 / 3);
         const toneG = hue2rgb(p, q, h);
-        const toneB = hue2rgb(p, q, h - 1/3);
+        const toneB = hue2rgb(p, q, h - 1 / 3);
 
         data[i] = Math.max(0, Math.min(255, (r * (1 - s * blending) + toneR * s * blending) * 255));
         data[i + 1] = Math.max(0, Math.min(255, (g * (1 - s * blending) + toneG * s * blending) * 255));
@@ -7313,18 +7250,18 @@ const createColorGradingFilter = (colorGrading: ColorGrading) => {
         const hue2rgb = (p: number, q: number, t: number) => {
           if (t < 0) t += 1;
           if (t > 1) t -= 1;
-          if (t < 1/6) return p + (q - p) * 6 * t;
-          if (t < 1/2) return q;
-          if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+          if (t < 1 / 6) return p + (q - p) * 6 * t;
+          if (t < 1 / 2) return q;
+          if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
           return p;
         };
 
         const q = lum < 0.5 ? lum * (1 + s) : lum + s - lum * s;
         const p = 2 * lum - q;
 
-        const toneR = hue2rgb(p, q, h + 1/3);
+        const toneR = hue2rgb(p, q, h + 1 / 3);
         const toneG = hue2rgb(p, q, h);
-        const toneB = hue2rgb(p, q, h - 1/3);
+        const toneB = hue2rgb(p, q, h - 1 / 3);
 
         data[i] = Math.max(0, Math.min(255, (r * (1 - s) + toneR * s) * 255));
         data[i + 1] = Math.max(0, Math.min(255, (g * (1 - s) + toneG * s) * 255));
@@ -7336,7 +7273,7 @@ const createColorGradingFilter = (colorGrading: ColorGrading) => {
 
 // Color Calibration filter - adjusts the hue and saturation of RGB primaries
 const createColorCalibrationFilter = (colorCal: ColorCalibration) => {
-  return function(imageData: ImageData) {
+  return function (imageData: ImageData) {
     const data = imageData.data;
 
     for (let i = 0; i < data.length; i += 4) {
@@ -7368,13 +7305,13 @@ const createColorCalibrationFilter = (colorCal: ColorCalibration) => {
 
         // Apply hue shifts
         const hueShift = (redWeight * colorCal.redHue +
-                          greenWeight * colorCal.greenHue +
-                          blueWeight * colorCal.blueHue) / 100 * 30; // Scale to reasonable range
+          greenWeight * colorCal.greenHue +
+          blueWeight * colorCal.blueHue) / 100 * 30; // Scale to reasonable range
 
         // Apply saturation adjustments
         const satShift = (redWeight * colorCal.redSaturation +
-                          greenWeight * colorCal.greenSaturation +
-                          blueWeight * colorCal.blueSaturation) / 100;
+          greenWeight * colorCal.greenSaturation +
+          blueWeight * colorCal.blueSaturation) / 100;
 
         // Convert to HSL
         const l = (max + min) / 2;
@@ -7484,12 +7421,12 @@ const ImageNode = React.memo(function ImageNode({
     image.colorHSL !== undefined || image.splitToning !== undefined ||
     image.colorGrading !== undefined || image.colorCalibration !== undefined ||
     (image.shadowTint !== undefined && image.shadowTint !== 0)
-  , [image.exposure, image.contrast, image.highlights, image.shadows,
-     image.whites, image.blacks, image.temperature, image.vibrance,
-     image.saturation, image.clarity, image.dehaze, image.vignette,
-     image.grain, image.brightness, image.hue, image.blur, image.filters,
-     isCurvesModified, image.colorHSL, image.splitToning, image.colorGrading,
-     image.colorCalibration, image.shadowTint]);
+    , [image.exposure, image.contrast, image.highlights, image.shadows,
+    image.whites, image.blacks, image.temperature, image.vibrance,
+    image.saturation, image.clarity, image.dehaze, image.vignette,
+    image.grain, image.brightness, image.hue, image.blur, image.filters,
+      isCurvesModified, image.colorHSL, image.splitToning, image.colorGrading,
+    image.colorCalibration, image.shadowTint]);
 
   // Apply Konva filters
   useEffect(() => {
@@ -7616,12 +7553,12 @@ const ImageNode = React.memo(function ImageNode({
       }
     }, 16); // ~60fps max update rate
   }, [img, hasActiveFilters, isCurvesModified, image.exposure, image.contrast,
-      image.highlights, image.shadows, image.whites, image.blacks,
-      image.temperature, image.vibrance, image.saturation, image.clarity,
-      image.dehaze, image.vignette, image.grain, image.brightness, image.hue,
-      image.blur, image.filters, image.curves, image.colorHSL, image.splitToning,
-      image.shadowTint, image.colorGrading, image.colorCalibration,
-      image.width, image.height, image.scaleX, image.scaleY, bypassedTabs]);
+    image.highlights, image.shadows, image.whites, image.blacks,
+    image.temperature, image.vibrance, image.saturation, image.clarity,
+    image.dehaze, image.vignette, image.grain, image.brightness, image.hue,
+    image.blur, image.filters, image.curves, image.colorHSL, image.splitToning,
+    image.shadowTint, image.colorGrading, image.colorCalibration,
+    image.width, image.height, image.scaleX, image.scaleY, bypassedTabs]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
