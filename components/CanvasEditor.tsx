@@ -341,6 +341,13 @@ interface CanvasText {
   rotation: number;
 }
 
+// Social layout: 4:5 aspect ratio, N pages side-by-side
+const SOCIAL_LAYOUT_ASPECT = { w: 4, h: 5 };
+const SOCIAL_LAYOUT_PAGE_WIDTH = 400; // canvas units per page
+const SOCIAL_LAYOUT_MAX_PAGES = 10;
+const DEFAULT_SOCIAL_LAYOUT_BG = '#1a1a1a';
+const CENTER_ASSIST_THRESHOLD = 40;
+
 interface PhotoFolder {
   id: string;
   name: string;
@@ -350,6 +357,20 @@ interface PhotoFolder {
   height?: number; // Explicit height (label + content). When set, overrides content-based calculation.
   imageIds: string[]; // IDs of images in this folder
   color: string; // Accent color for the folder
+  // Social media layout (type === 'social_layout')
+  type?: 'folder' | 'social_layout';
+  pageCount?: number; // number of 4:5 pages (1–10)
+  backgroundColor?: string; // page background color
+}
+
+function isSocialLayout(folder: PhotoFolder): boolean {
+  return folder.type === 'social_layout';
+}
+
+function getSocialLayoutDimensions(_folder: PhotoFolder): { pageWidth: number; pageHeight: number; contentHeight: number } {
+  const pageWidth = SOCIAL_LAYOUT_PAGE_WIDTH;
+  const pageHeight = (pageWidth * SOCIAL_LAYOUT_ASPECT.h) / SOCIAL_LAYOUT_ASPECT.w;
+  return { pageWidth, pageHeight, contentHeight: pageHeight };
 }
 
 const FOLDER_COLORS = [
@@ -370,17 +391,58 @@ function hexToRgba(hex: string, a: number): string {
   return `rgba(${r},${g},${b},${a})`;
 }
 
-// Centralized grid configuration - used everywhere for consistency
+// Centralized grid configuration - one size everywhere (360×450), no scaling
 const GRID_CONFIG = {
-  imageMaxSize: 140,  // Max width/height for images in grid
-  imageGap: 12,       // Gap between images (same for horizontal and vertical)
-  folderPadding: 15,  // Padding inside folder border
-  defaultFolderWidth: 500, // Default folder width
-  minFolderWidth: 180, // Minimum folder width (at least 1 image + padding)
-  minFolderHeight: 130, // Minimum total height (30 label + 100 content)
-  folderGap: 40,      // Minimum gap between folders
+  imageMaxSize: 360,   // Same as layout: max width for images
+  imageMaxHeight: 450, // Same as layout: max height (4:5)
+  imageGap: 12,
+  folderPadding: 15,
+  // Default width so 4 columns fit (folderPadding*2 + 4*(imageMaxSize+imageGap) - imageGap)
+  defaultFolderWidth: 15 * 2 + 4 * (360 + 12) - 12,
+  minFolderWidth: 400,
+  minFolderHeight: 520,
+  folderGap: 40,
 };
 const CELL_SIZE = GRID_CONFIG.imageMaxSize + GRID_CONFIG.imageGap;
+const CELL_HEIGHT = GRID_CONFIG.imageMaxHeight + GRID_CONFIG.imageGap;
+
+// Import at layout size (90% of 4:5 page) so no scaling needed in social layout
+const LAYOUT_IMPORT_MAX_WIDTH = 360;
+const LAYOUT_IMPORT_MAX_HEIGHT = 450;
+
+/** Resize image from URL/dataURL to fit within maxW×maxH; returns new dataURL and dimensions. */
+async function resizeImageToFit(
+  imageSrc: string,
+  currentWidth: number,
+  currentHeight: number,
+  maxW: number,
+  maxH: number
+): Promise<{ dataUrl: string; width: number; height: number }> {
+  if (currentWidth <= maxW && currentHeight <= maxH) {
+    return { dataUrl: imageSrc, width: currentWidth, height: currentHeight };
+  }
+  const ratio = Math.min(maxW / currentWidth, maxH / currentHeight);
+  const newW = Math.round(currentWidth * ratio);
+  const newH = Math.round(currentHeight * ratio);
+
+  const img = new window.Image();
+  img.crossOrigin = 'anonymous';
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error('Failed to load image for resize'));
+    img.src = imageSrc;
+  });
+
+  const canvas = document.createElement('canvas');
+  canvas.width = newW;
+  canvas.height = newH;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, newW, newH);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+  return { dataUrl, width: newW, height: newH };
+}
 
 // Calculate columns based on folder width
 const calculateColsFromWidth = (folderWidth: number): number => {
@@ -410,63 +472,63 @@ const reflowImagesInFolder = (
   const contentStartX = folderX + folderPadding;
   const contentStartY = folderY + 30 + folderPadding; // 30px for label gap + padding
 
+  const { imageMaxHeight } = GRID_CONFIG;
   if (layoutMode === 'stack') {
-    // Vertical stacking mode - images in single column with vertical gaps
     return folderImages.map((img, index) => {
       const imgWidth = Math.min(img.width * img.scaleX, imageMaxSize);
-      const imgHeight = Math.min(img.height * img.scaleY, imageMaxSize);
-
-      // Center horizontally in folder
+      const imgHeight = Math.min(img.height * img.scaleY, imageMaxHeight);
       const availableWidth = folderWidth - (2 * folderPadding);
       const cellOffsetX = (availableWidth - imgWidth) / 2;
-
-      // Stack vertically with gaps
-      const yOffset = index * (imageMaxSize + imageGap);
-
-      return {
-        ...img,
-        x: contentStartX + cellOffsetX,
-        y: contentStartY + yOffset,
-      };
+      const yOffset = index * (imageMaxHeight + imageGap);
+      return { ...img, x: contentStartX + cellOffsetX, y: contentStartY + yOffset };
     });
   }
 
-  // Grid mode - original multi-column layout
   const cols = calculateColsFromWidth(folderWidth);
   return folderImages.map((img, index) => {
     const col = index % cols;
     const row = Math.floor(index / cols);
-
-    // Center images in their cells
     const imgWidth = Math.min(img.width * img.scaleX, imageMaxSize);
-    const imgHeight = Math.min(img.height * img.scaleY, imageMaxSize);
+    const imgHeight = Math.min(img.height * img.scaleY, imageMaxHeight);
     const cellOffsetX = (imageMaxSize - imgWidth) / 2;
-    const cellOffsetY = (imageMaxSize - imgHeight) / 2;
-
+    const cellOffsetY = (imageMaxHeight - imgHeight) / 2;
     return {
       ...img,
       x: contentStartX + col * CELL_SIZE + cellOffsetX,
-      y: contentStartY + row * CELL_SIZE + cellOffsetY,
+      y: contentStartY + row * CELL_HEIGHT + cellOffsetY,
     };
   });
 };
 
 // Calculate folder bounding box (including label)
 const getFolderBounds = (folder: PhotoFolder, imageCount: number) => {
+  if (isSocialLayout(folder)) {
+    const n = Math.max(1, Math.min(SOCIAL_LAYOUT_MAX_PAGES, folder.pageCount ?? 1));
+    const { pageHeight } = getSocialLayoutDimensions(folder);
+    const width = n * SOCIAL_LAYOUT_PAGE_WIDTH;
+    const height = 30 + pageHeight; // 30px label
+    return {
+      x: folder.x,
+      y: folder.y,
+      width,
+      height,
+      right: folder.x + width,
+      bottom: folder.y + height,
+    };
+  }
+
   const layoutMode = getFolderLayoutMode(folder.width);
   let contentHeight;
 
   if (layoutMode === 'stack') {
-    // Stack mode: height based on number of images vertically
-    contentHeight = imageCount * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
+    contentHeight = imageCount * CELL_HEIGHT + (GRID_CONFIG.folderPadding * 2);
   } else {
-    // Grid mode: existing calculation
     const cols = calculateColsFromWidth(folder.width);
     const rows = Math.ceil(imageCount / cols) || 1;
-    contentHeight = rows * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
+    contentHeight = rows * CELL_HEIGHT + (GRID_CONFIG.folderPadding * 2);
   }
 
-  const calculatedHeight = 30 + Math.max(contentHeight, 100); // 30px for label gap
+  const calculatedHeight = 30 + Math.max(contentHeight, 100);
   const height = folder.height ?? calculatedHeight;
 
   return {
@@ -481,6 +543,11 @@ const getFolderBounds = (folder: PhotoFolder, imageCount: number) => {
 
 // Get folder border/content height (below label) for rendering
 const getFolderBorderHeight = (folder: PhotoFolder, imageCount: number): number => {
+  if (isSocialLayout(folder)) {
+    const { pageHeight } = getSocialLayoutDimensions(folder);
+    return pageHeight;
+  }
+
   if (folder.height != null) {
     return Math.max(folder.height - 30, 100); // 30px for label
   }
@@ -489,13 +556,11 @@ const getFolderBorderHeight = (folder: PhotoFolder, imageCount: number): number 
   let contentHeight;
 
   if (layoutMode === 'stack') {
-    // Stack mode: height based on number of images vertically
-    contentHeight = imageCount * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
+    contentHeight = imageCount * CELL_HEIGHT + (GRID_CONFIG.folderPadding * 2);
   } else {
-    // Grid mode: existing calculation
     const cols = calculateColsFromWidth(folder.width);
     const rows = Math.ceil(imageCount / cols) || 1;
-    contentHeight = rows * CELL_SIZE + (GRID_CONFIG.folderPadding * 2);
+    contentHeight = rows * CELL_HEIGHT + (GRID_CONFIG.folderPadding * 2);
   }
 
   return Math.max(contentHeight, 100);
@@ -542,7 +607,7 @@ const getImageCellPositions = (
     const relativeX = img.x - contentStartX;
     const relativeY = img.y - contentStartY;
     const col = Math.max(0, Math.floor(relativeX / CELL_SIZE));
-    const row = Math.max(0, Math.floor(relativeY / CELL_SIZE));
+    const row = Math.max(0, Math.floor(relativeY / CELL_HEIGHT));
 
     return {
       imageId: img.id,
@@ -574,18 +639,16 @@ const calculateMinimumFolderSize = (
   const layoutMode = getFolderLayoutMode(proposedWidth);
 
   if (layoutMode === 'stack') {
-    // Stack mode: needs height for all images vertically
-    const contentHeight = imageCount * CELL_SIZE + (2 * GRID_CONFIG.folderPadding);
+    const contentHeight = imageCount * CELL_HEIGHT + (2 * GRID_CONFIG.folderPadding);
     return {
       width: GRID_CONFIG.minFolderWidth,
       height: 30 + Math.max(contentHeight, 100),
     };
   }
 
-  // Grid mode: calculate minimum based on proposed width
   const cols = calculateColsFromWidth(proposedWidth);
   const rows = Math.ceil(imageCount / cols) || 1;
-  const contentHeight = rows * CELL_SIZE + (2 * GRID_CONFIG.folderPadding);
+  const contentHeight = rows * CELL_HEIGHT + (2 * GRID_CONFIG.folderPadding);
 
   return {
     width: proposedWidth,
@@ -616,7 +679,7 @@ const smartRepackImages = (
   if (newHeight != null) {
     const contentHeight = newHeight - 30; // Subtract label height
     const availableContentHeight = contentHeight - (2 * GRID_CONFIG.folderPadding);
-    newMaxRows = Math.max(1, Math.floor(availableContentHeight / CELL_SIZE));
+    newMaxRows = Math.max(1, Math.floor(availableContentHeight / CELL_HEIGHT));
   }
 
   // Build a map of current cell assignments
@@ -726,30 +789,23 @@ const positionImagesInCells = (
     const assignment = assignmentMap.get(img.id);
     if (!assignment) return img; // No assignment, keep as is
 
+    const { imageMaxHeight } = GRID_CONFIG;
     const imgWidth = Math.min(img.width * img.scaleX, imageMaxSize);
-    const imgHeight = Math.min(img.height * img.scaleY, imageMaxSize);
+    const imgHeight = Math.min(img.height * img.scaleY, imageMaxHeight);
 
     if (layoutMode === 'stack') {
-      // Stack mode: single column, position based on row index
       const availableWidth = folderWidth - (2 * folderPadding);
       const cellOffsetX = (availableWidth - imgWidth) / 2;
-      const yOffset = assignment.row * CELL_SIZE;
-
-      return {
-        ...img,
-        x: contentStartX + cellOffsetX,
-        y: contentStartY + yOffset,
-      };
+      const yOffset = assignment.row * CELL_HEIGHT;
+      return { ...img, x: contentStartX + cellOffsetX, y: contentStartY + yOffset };
     }
 
-    // Grid mode: position at specific col/row
     const cellOffsetX = (imageMaxSize - imgWidth) / 2;
-    const cellOffsetY = (imageMaxSize - imgHeight) / 2;
-
+    const cellOffsetY = (imageMaxHeight - imgHeight) / 2;
     return {
       ...img,
       x: contentStartX + assignment.col * CELL_SIZE + cellOffsetX,
-      y: contentStartY + assignment.row * CELL_SIZE + cellOffsetY,
+      y: contentStartY + assignment.row * CELL_HEIGHT + cellOffsetY,
     };
   });
 };
@@ -890,6 +946,11 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const lastOverlapCheckRef = useRef<number>(0);
   const folderNameDragRef = useRef<boolean>(false);
   const lastSwappedImageRef = useRef<{ id: string; x: number; y: number } | null>(null);
+  const dragMoveRafRef = useRef<number | null>(null);
+  const dragMoveNodeRef = useRef<Konva.Image | null>(null);
+  // Refs for latest state so drag-end always uses current folders/images (avoids "another image moves" glitch)
+  const latestFoldersRef = useRef<PhotoFolder[]>([]);
+  const latestImagesRef = useRef<CanvasImage[]>([]);
   const overlapThrottleMs = 32; // ~30fps for smooth updates
   const [lastTouchDistance, setLastTouchDistance] = useState<number | null>(null);
   const [lastTouchCenter, setLastTouchCenter] = useState<{ x: number; y: number } | null>(null);
@@ -919,6 +980,13 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const [createEmptyFolderOpen, setCreateEmptyFolderOpen] = useState(false);
   const [createEmptyFolderName, setCreateEmptyFolderName] = useState('');
   const [createEmptyFolderNameError, setCreateEmptyFolderNameError] = useState('');
+  const [createSocialLayoutOpen, setCreateSocialLayoutOpen] = useState(false);
+  const [createSocialLayoutName, setCreateSocialLayoutName] = useState('');
+  const [createSocialLayoutPages, setCreateSocialLayoutPages] = useState(3);
+  const [createSocialLayoutNameError, setCreateSocialLayoutNameError] = useState('');
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  const [folderContextMenu, setFolderContextMenu] = useState<{ x: number; y: number; folderId: string } | null>(null);
+  const folderContextMenuRef = useRef<HTMLDivElement>(null);
   const [confirmDeleteFolderOpen, setConfirmDeleteFolderOpen] = useState(false);
   const [deleteFolderDontAskAgain, setDeleteFolderDontAskAgain] = useState(false);
   const [bypassedTabs, setBypassedTabs] = useState<Set<'curves' | 'light' | 'color' | 'effects'>>(new Set());
@@ -957,6 +1025,12 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   } | null>(null);
   const folderFileInputRef = useRef<HTMLInputElement>(null);
   const { user } = useAuth();
+
+  // Keep refs in sync so drag-end always uses latest state (one image move only)
+  useEffect(() => {
+    latestFoldersRef.current = folders;
+    latestImagesRef.current = images;
+  }, [folders, images]);
 
   // Get window dimensions
   useEffect(() => {
@@ -1090,10 +1164,48 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
       const { savedEdits, savedFolders, photosFiles, originalsFiles, photosError } = photoData;
 
+      const defaultFolderX = 100;
+      const defaultFolderY = 100;
+      const buildFoldersFromSaved = (imagesList: CanvasImage[]): PhotoFolder[] => {
+        const out: PhotoFolder[] = [];
+        if (!savedFolders?.length) return out;
+        for (const sf of savedFolders) {
+          const folderId = String(sf.id);
+          const folderImageIds = imagesList.filter((img) => img.folderId === folderId).map((img) => img.id);
+          const sfX = sf.x != null && Number.isFinite(Number(sf.x)) ? Number(sf.x) : defaultFolderX;
+          const sfY = sf.y != null && Number.isFinite(Number(sf.y)) ? Number(sf.y) : defaultFolderY;
+          const isLayout = sf.type === 'social_layout';
+          const pageCount = isLayout && sf.page_count != null ? Math.max(1, Math.min(SOCIAL_LAYOUT_MAX_PAGES, Number(sf.page_count))) : undefined;
+          const layoutWidth = isLayout && pageCount ? pageCount * SOCIAL_LAYOUT_PAGE_WIDTH : undefined;
+          const sfWidth = layoutWidth ?? (sf.width != null && Number.isFinite(Number(sf.width)) ? Number(sf.width) : GRID_CONFIG.defaultFolderWidth);
+          const sfHeight = sf.height != null && Number.isFinite(Number(sf.height)) ? Number(sf.height) : undefined;
+          out.push({
+            id: folderId,
+            name: String(sf.name ?? 'Untitled'),
+            x: sfX,
+            y: sfY,
+            width: sfWidth,
+            height: sfHeight,
+            color: String(sf.color ?? FOLDER_COLORS[0]),
+            imageIds: folderImageIds,
+            type: isLayout ? 'social_layout' : 'folder',
+            pageCount,
+            backgroundColor: isLayout && sf.background_color ? String(sf.background_color) : undefined,
+          });
+        }
+        return out;
+      };
+
       // Check if there are any files to load
       const photosList = (photosFiles ?? []).filter((f) => !f.name.startsWith('.'));
       const originalsList = (originalsFiles ?? []).filter((f) => !f.name.startsWith('.'));
       if (photosList.length === 0 && originalsList.length === 0) {
+        // No photos - still load folders (e.g. empty social layouts) so they appear on canvas
+        loadKeyRef.current = loadKey;
+        setImages([]);
+        setFolders(buildFoldersFromSaved([]));
+        setHistory([{ images: [], texts: [], folders: buildFoldersFromSaved([]) }]);
+        setHistoryIndex(0);
         onPhotosLoadStateChange?.(false);
         return;
       }
@@ -1292,33 +1404,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           }
         };
 
-        // Build folders from saved data + current images (for incremental updates)
-        const defaultFolderX = 100;
-        const defaultFolderY = 100;
-        const buildFoldersFromImages = (imagesList: CanvasImage[]): PhotoFolder[] => {
-          const out: PhotoFolder[] = [];
-          if (!savedFolders?.length) return out;
-          for (const sf of savedFolders) {
-            const folderId = String(sf.id);
-            const folderImageIds = imagesList.filter((img) => img.folderId === folderId).map((img) => img.id);
-            const sfX = sf.x != null && Number.isFinite(Number(sf.x)) ? Number(sf.x) : defaultFolderX;
-            const sfY = sf.y != null && Number.isFinite(Number(sf.y)) ? Number(sf.y) : defaultFolderY;
-            const sfWidth = sf.width != null && Number.isFinite(Number(sf.width)) ? Number(sf.width) : GRID_CONFIG.defaultFolderWidth;
-            const sfHeight = sf.height != null && Number.isFinite(Number(sf.height)) ? Number(sf.height) : undefined;
-            out.push({
-              id: folderId,
-              name: String(sf.name ?? 'Untitled'),
-              x: sfX,
-              y: sfY,
-              width: sfWidth,
-              height: sfHeight,
-              color: String(sf.color ?? FOLDER_COLORS[0]),
-              imageIds: folderImageIds,
-            });
-          }
-          return out;
-        };
-
         // Load one image at a time; display each as soon as it's ready to avoid glitchy parallel pop-in
         const loadedImages: CanvasImage[] = [];
         for (let i = 0; i < validFiles.length; i++) {
@@ -1326,7 +1411,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           if (image) {
             loadedImages.push(image);
             setImages([...loadedImages]);
-            setFolders(buildFoldersFromImages(loadedImages));
+            setFolders(buildFoldersFromSaved(loadedImages));
           }
         }
         const newImages = loadedImages;
@@ -1403,7 +1488,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           }
         }
 
-        const loadedFolders = buildFoldersFromImages(newImages);
+        const loadedFolders = buildFoldersFromSaved(newImages);
 
         loadKeyRef.current = loadKey;
         setImages(newImages);
@@ -1500,34 +1585,57 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     });
   }, [images, texts, folders, historyIndex]);
 
-  // Resolve folder overlaps and reflow all affected images
+  // Resolve folder overlaps and reflow all affected images.
+  // When addedImageId is set (single image just dropped into changedFolderId), only reflow existing images
+  // in that folder; keep the dropped image's position + folder delta so only one image moves.
   const resolveOverlapsAndReflow = useCallback((
     currentFolders: PhotoFolder[],
     currentImages: CanvasImage[],
-    changedFolderId?: string
+    changedFolderId?: string,
+    addedImageId?: string
   ): { folders: PhotoFolder[]; images: CanvasImage[] } => {
-    // First resolve overlaps
     const resolvedFolders = resolveFolderOverlaps(currentFolders, currentImages, changedFolderId);
-    
-    // Then reflow images in folders that moved
+
     let updatedImages = [...currentImages];
+    const dx = (nf: PhotoFolder, of: PhotoFolder) => nf.x - of.x;
+    const dy = (nf: PhotoFolder, of: PhotoFolder) => nf.y - of.y;
+
     for (let i = 0; i < resolvedFolders.length; i++) {
       const newFolder = resolvedFolders[i];
       const oldFolder = currentFolders.find(f => f.id === newFolder.id);
-      
-      // If folder position changed, reflow its images
-      if (oldFolder && (oldFolder.x !== newFolder.x || oldFolder.y !== newFolder.y)) {
-        const folderImgs = updatedImages.filter(img => newFolder.imageIds.includes(img.id));
-        if (folderImgs.length > 0) {
-          const reflowed = reflowImagesInFolder(folderImgs, newFolder.x, newFolder.y, newFolder.width);
-          updatedImages = updatedImages.map(img => {
-            const r = reflowed.find(ri => ri.id === img.id);
-            return r || img;
-          });
+      if (!oldFolder || (oldFolder.x === newFolder.x && oldFolder.y === newFolder.y)) continue;
+
+      const folderImgs = updatedImages.filter(img => newFolder.imageIds.includes(img.id));
+      if (folderImgs.length === 0) continue;
+
+      const isChangedFolderWithAdd = newFolder.id === changedFolderId && addedImageId;
+      const existingImgs = isChangedFolderWithAdd
+        ? folderImgs.filter(img => img.id !== addedImageId)
+        : folderImgs;
+
+      if (existingImgs.length > 0) {
+        const reflowed = isSocialLayout(newFolder)
+          ? existingImgs.map((img) => ({ ...img, x: img.x + dx(newFolder, oldFolder), y: img.y + dy(newFolder, oldFolder) }))
+          : reflowImagesInFolder(existingImgs, newFolder.x, newFolder.y, newFolder.width);
+        updatedImages = updatedImages.map(img => {
+          const r = reflowed.find(ri => ri.id === img.id);
+          return r || img;
+        });
+      }
+
+      // Dropped image: move with folder only (keep drop position + delta)
+      if (isChangedFolderWithAdd) {
+        const addedImg = currentImages.find(img => img.id === addedImageId);
+        if (addedImg) {
+          updatedImages = updatedImages.map(img =>
+            img.id === addedImageId
+              ? { ...img, x: addedImg.x + dx(newFolder, oldFolder), y: addedImg.y + dy(newFolder, oldFolder) }
+              : img
+          );
         }
       }
     }
-    
+
     return { folders: resolvedFolders, images: updatedImages };
   }, []);
 
@@ -1917,11 +2025,17 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             height = img.height;
           }
 
-          if (width > imageMaxSize || height > imageMaxSize) {
-            const ratio = Math.min(imageMaxSize / width, imageMaxSize / height);
-            width = width * ratio;
-            height = height * ratio;
-          }
+          // Resize to layout size (360×450) — one size everywhere, no scaling
+          const layoutSized = await resizeImageToFit(
+            imageSrc,
+            width,
+            height,
+            LAYOUT_IMPORT_MAX_WIDTH,
+            LAYOUT_IMPORT_MAX_HEIGHT
+          );
+          imageSrc = layoutSized.dataUrl;
+          width = layoutSized.width;
+          height = layoutSized.height;
 
           // Position within folder grid (below the folder label) - using folder width
           const cols = calculateColsFromWidth(GRID_CONFIG.defaultFolderWidth);
@@ -1934,9 +2048,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           const contentStartX = folderX + GRID_CONFIG.folderPadding;
           const contentStartY = folderY + 30 + GRID_CONFIG.folderPadding;
           const cellOffsetX = (GRID_CONFIG.imageMaxSize - width) / 2;
-          const cellOffsetY = (GRID_CONFIG.imageMaxSize - height) / 2;
+          const cellOffsetY = (GRID_CONFIG.imageMaxHeight - height) / 2;
           const x = contentStartX + col * CELL_SIZE + Math.max(0, cellOffsetX);
-          const y = contentStartY + row * CELL_SIZE + Math.max(0, cellOffsetY);
+          const y = contentStartY + row * CELL_HEIGHT + Math.max(0, cellOffsetY);
 
           console.log('Image position:', x, y, 'Size:', width, height);
 
@@ -2342,25 +2456,39 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             height = img.height;
           }
 
-          if (width > imageMaxSize || height > imageMaxSize) {
-            const ratio = Math.min(imageMaxSize / width, imageMaxSize / height);
-            width = width * ratio;
-            height = height * ratio;
-          }
+          // Resize to grid cell size (360×450) so added photos match existing folder images
+          const layoutSized = await resizeImageToFit(
+            imageSrc,
+            width,
+            height,
+            LAYOUT_IMPORT_MAX_WIDTH,
+            LAYOUT_IMPORT_MAX_HEIGHT
+          );
+          imageSrc = layoutSized.dataUrl;
+          width = layoutSized.width;
+          height = layoutSized.height;
 
-          // Dynamic columns based on folder width
-          const cols = calculateColsFromWidth(targetFolder.width);
-          const col = imageIndex % cols;
-          const row = Math.floor(imageIndex / cols);
-          
-          // Center images in their cells for consistent spacing
-          // Border starts at folderX, content starts at folderX + padding
-          const contentStartX = folderX + GRID_CONFIG.folderPadding;
-          const contentStartY = folderY + 30 + GRID_CONFIG.folderPadding;
-          const cellOffsetX = (GRID_CONFIG.imageMaxSize - width) / 2;
-          const cellOffsetY = (GRID_CONFIG.imageMaxSize - height) / 2;
-          const x = contentStartX + col * CELL_SIZE + Math.max(0, cellOffsetX);
-          const y = contentStartY + row * CELL_SIZE + Math.max(0, cellOffsetY);
+          let x: number;
+          let y: number;
+          if (isSocialLayout(targetFolder)) {
+            const contentTop = folderY + 30;
+            const { pageHeight } = getSocialLayoutDimensions(targetFolder);
+            const centerY = contentTop + pageHeight / 2;
+            const firstPageCenterX = folderX + SOCIAL_LAYOUT_PAGE_WIDTH / 2;
+            const offsetIndex = imageIndex - targetFolder.imageIds.length;
+            x = firstPageCenterX - width / 2;
+            y = centerY - height / 2 + offsetIndex * 24;
+          } else {
+            const cols = calculateColsFromWidth(targetFolder.width);
+            const col = imageIndex % cols;
+            const row = Math.floor(imageIndex / cols);
+            const contentStartX = folderX + GRID_CONFIG.folderPadding;
+            const contentStartY = folderY + 30 + GRID_CONFIG.folderPadding;
+            const cellOffsetX = (GRID_CONFIG.imageMaxSize - width) / 2;
+            const cellOffsetY = (GRID_CONFIG.imageMaxHeight - height) / 2;
+            x = contentStartX + col * CELL_SIZE + Math.max(0, cellOffsetX);
+            y = contentStartY + row * CELL_HEIGHT + Math.max(0, cellOffsetY);
+          }
 
           const imageId = `img-${Date.now()}-${Math.random()}`;
 
@@ -2412,27 +2540,23 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       }
 
       if (newImages.length > 0) {
-        // Calculate total image count in folder
         const totalImageCount = targetFolder.imageIds.length + newImages.length;
-
-        // Calculate minimum required size for all images
         const minSize = calculateMinimumFolderSize(totalImageCount, targetFolder.width);
-
-        // Determine if folder needs to grow
         const currentHeight = targetFolder.height ?? getFolderBorderHeight(targetFolder, targetFolder.imageIds.length);
-        const needsResize = minSize.width > targetFolder.width || minSize.height > currentHeight;
+        const needsResize = !isSocialLayout(targetFolder) &&
+          (minSize.width > targetFolder.width || minSize.height > currentHeight);
 
-        // Update folder with new image IDs and potentially new dimensions
         const updatedFolders = folders.map((f) => {
-          if (f.id === folderId) {
-            return {
-              ...f,
-              imageIds: [...f.imageIds, ...newImages.map(img => img.id)],
-              width: needsResize ? Math.max(f.width, minSize.width) : f.width,
-              height: needsResize ? Math.max(currentHeight, minSize.height) : f.height,
-            };
+          if (f.id !== folderId) return f;
+          if (isSocialLayout(f)) {
+            return { ...f, imageIds: [...f.imageIds, ...newImages.map(img => img.id)] };
           }
-          return f;
+          return {
+            ...f,
+            imageIds: [...f.imageIds, ...newImages.map(img => img.id)],
+            width: needsResize ? Math.max(f.width, minSize.width) : f.width,
+            height: needsResize ? Math.max(currentHeight, minSize.height) : f.height,
+          };
         });
 
         const allImages = [...images, ...newImages];
@@ -2442,12 +2566,14 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         if (needsResize) {
           const updatedFolder = updatedFolders.find(f => f.id === folderId)!;
           const allFolderImages = allImages.filter(img => updatedFolder.imageIds.includes(img.id));
-          const reflowedImages = reflowImagesInFolder(
-            allFolderImages,
-            updatedFolder.x,
-            updatedFolder.y,
-            updatedFolder.width
-          );
+          const reflowedImages = isSocialLayout(updatedFolder)
+            ? allFolderImages
+            : reflowImagesInFolder(
+                allFolderImages,
+                updatedFolder.x,
+                updatedFolder.y,
+                updatedFolder.width
+              );
           finalImages = allImages.map(img => {
             const reflowed = reflowedImages.find(r => r.id === img.id);
             return reflowed ? reflowed : img;
@@ -2761,6 +2887,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     const clickedOnEmpty = e.target === e.target.getStage();
     if (clickedOnEmpty) {
       setSelectedIds([]);
+      setSelectedFolderId(null);
       lastSelectedIdRef.current = null;
     }
   }, []);
@@ -2821,8 +2948,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           const folderImages = images
             .filter((img) => folderClicked.imageIds.includes(img.id))
             .sort((a, b) => {
-              const rowA = Math.round(a.y / CELL_SIZE);
-              const rowB = Math.round(b.y / CELL_SIZE);
+              const rowA = Math.round(a.y / CELL_HEIGHT);
+              const rowB = Math.round(b.y / CELL_HEIGHT);
               if (rowA !== rowB) return rowA - rowB;
               return a.x - b.x;
             });
@@ -3172,19 +3299,184 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     setCreateEmptyFolderNameError('');
   }, []);
 
-  // Close image/canvas context menu on click outside or escape
+  // Create social media layout from canvas context menu
+  const handleCreateSocialLayoutSave = useCallback(async () => {
+    const name = createSocialLayoutName.trim();
+    if (!name) {
+      setCreateSocialLayoutNameError('Enter a layout name');
+      return;
+    }
+    const isDuplicate = folders.some(
+      (f) => f.name.toLowerCase() === name.toLowerCase()
+    );
+    if (isDuplicate) {
+      setCreateSocialLayoutNameError('A folder or layout with this name already exists');
+      return;
+    }
+
+    const pages = Math.max(1, Math.min(SOCIAL_LAYOUT_MAX_PAGES, createSocialLayoutPages));
+    const centerX = (dimensions.width / 2 - stagePosition.x) / stageScale;
+    const centerY = (dimensions.height / 2 - stagePosition.y) / stageScale;
+    const folderId = `folder-${Date.now()}`;
+    const colorIndex = folders.length % FOLDER_COLORS.length;
+    const width = pages * SOCIAL_LAYOUT_PAGE_WIDTH;
+    const pageHeight = (SOCIAL_LAYOUT_PAGE_WIDTH * SOCIAL_LAYOUT_ASPECT.h) / SOCIAL_LAYOUT_ASPECT.w;
+    const height = 30 + pageHeight;
+
+    const newFolder: PhotoFolder = {
+      id: folderId,
+      name,
+      x: centerX,
+      y: centerY,
+      width,
+      height,
+      imageIds: [],
+      color: FOLDER_COLORS[colorIndex],
+      type: 'social_layout',
+      pageCount: pages,
+      backgroundColor: DEFAULT_SOCIAL_LAYOUT_BG,
+    };
+
+    const foldersWithNew = [...folders, newFolder];
+    const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
+      foldersWithNew,
+      images,
+      folderId
+    );
+
+    setFolders(resolvedFolders);
+    setImages(resolvedImages);
+    setCreateSocialLayoutOpen(false);
+    setCreateSocialLayoutName('');
+    setCreateSocialLayoutPages(3);
+    setCreateSocialLayoutNameError('');
+
+    if (user) {
+      const finalFolder = resolvedFolders.find((f) => f.id === folderId);
+      if (finalFolder) {
+        try {
+          await supabase.from('photo_folders').insert({
+            id: folderId,
+            user_id: user.id,
+            name,
+            x: Math.round(finalFolder.x),
+            y: Math.round(finalFolder.y),
+            width: Math.round(width),
+            height: Math.round(height),
+            color: FOLDER_COLORS[colorIndex],
+            type: 'social_layout',
+            page_count: pages,
+            background_color: DEFAULT_SOCIAL_LAYOUT_BG,
+          });
+          const movedFolders = resolvedFolders.filter((f) => {
+            if (f.id === folderId) return false;
+            const prev = foldersWithNew.find((of) => of.id === f.id);
+            return prev && (prev.x !== f.x || prev.y !== f.y);
+          });
+          for (const f of movedFolders) {
+            await supabase
+              .from('photo_folders')
+              .update({
+                x: Math.round(f.x),
+                y: Math.round(f.y),
+                ...(f.type === 'social_layout' && f.pageCount != null
+                  ? { width: Math.round(f.pageCount * SOCIAL_LAYOUT_PAGE_WIDTH), page_count: f.pageCount, background_color: f.backgroundColor ?? undefined }
+                  : {}),
+              })
+              .eq('id', f.id)
+              .eq('user_id', user.id);
+          }
+        } catch (err) {
+          console.error('Failed to create social layout', err);
+        }
+      }
+    }
+
+    saveToHistory();
+  }, [
+    createSocialLayoutName,
+    createSocialLayoutPages,
+    folders,
+    images,
+    dimensions,
+    stagePosition,
+    stageScale,
+    user,
+    resolveOverlapsAndReflow,
+    saveToHistory,
+  ]);
+
+  const handleCreateSocialLayoutCancel = useCallback(() => {
+    setCreateSocialLayoutOpen(false);
+    setCreateSocialLayoutName('');
+    setCreateSocialLayoutPages(3);
+    setCreateSocialLayoutNameError('');
+  }, []);
+
+  const handleLayoutAddPage = useCallback((folderId: string) => {
+    const folder = folders.find((f) => f.id === folderId);
+    if (!folder || !isSocialLayout(folder)) return;
+    const n = Math.min(SOCIAL_LAYOUT_MAX_PAGES, (folder.pageCount ?? 1) + 1);
+    if (n === (folder.pageCount ?? 1)) return;
+    const width = n * SOCIAL_LAYOUT_PAGE_WIDTH;
+    const updated = folders.map((f) =>
+      f.id === folderId ? { ...f, pageCount: n, width } : f
+    );
+    setFolders(updated);
+    setFolderContextMenu(null);
+    setSelectedFolderId(null);
+    saveToHistory();
+    if (user) {
+      supabase.from('photo_folders').update({ page_count: n, width: Math.round(width) }).eq('id', folderId).eq('user_id', user.id).then(({ error }) => { if (error) console.error('Failed to update layout pages:', error); });
+    }
+  }, [folders, user, saveToHistory]);
+
+  const handleLayoutRemovePage = useCallback((folderId: string) => {
+    const folder = folders.find((f) => f.id === folderId);
+    if (!folder || !isSocialLayout(folder)) return;
+    const n = Math.max(1, (folder.pageCount ?? 1) - 1);
+    if (n === (folder.pageCount ?? 1)) return;
+    const width = n * SOCIAL_LAYOUT_PAGE_WIDTH;
+    const updated = folders.map((f) =>
+      f.id === folderId ? { ...f, pageCount: n, width } : f
+    );
+    setFolders(updated);
+    setFolderContextMenu(null);
+    setSelectedFolderId(null);
+    saveToHistory();
+    if (user) {
+      supabase.from('photo_folders').update({ page_count: n, width: Math.round(width) }).eq('id', folderId).eq('user_id', user.id).then(({ error }) => { if (error) console.error('Failed to update layout pages:', error); });
+    }
+  }, [folders, user, saveToHistory]);
+
+  const handleLayoutBackgroundColor = useCallback((folderId: string, color: string) => {
+    const updated = folders.map((f) =>
+      f.id === folderId ? { ...f, backgroundColor: color } : f
+    );
+    setFolders(updated);
+    setFolderContextMenu(null);
+    saveToHistory();
+    if (user) {
+      supabase.from('photo_folders').update({ background_color: color }).eq('id', folderId).eq('user_id', user.id).then(({ error }) => { if (error) console.error('Failed to update layout background:', error); });
+    }
+  }, [folders, user, saveToHistory]);
+
+  // Close image/canvas/folder context menu on click outside or escape
   useEffect(() => {
-    if (!imageContextMenu && !canvasContextMenu) return;
+    if (!imageContextMenu && !canvasContextMenu && !folderContextMenu) return;
     const close = (e?: MouseEvent) => {
       if (e?.target && imageContextMenuRef.current?.contains(e.target as Node)) return;
       if (e?.target && canvasContextMenuRef.current?.contains(e.target as Node)) return;
+      if (e?.target && folderContextMenuRef.current?.contains(e.target as Node)) return;
       setImageContextMenu(null);
       setCanvasContextMenu(null);
+      setFolderContextMenu(null);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setImageContextMenu(null);
         setCanvasContextMenu(null);
+        setFolderContextMenu(null);
       }
     };
     window.addEventListener('click', close, true);
@@ -3195,22 +3487,27 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       window.removeEventListener('contextmenu', close, true);
       window.removeEventListener('keydown', onKey);
     };
-  }, [imageContextMenu, canvasContextMenu]);
+  }, [imageContextMenu, canvasContextMenu, folderContextMenu]);
 
   // Handle object drag end with smart snapping (only if near another photo)
   // Handle real-time grid snapping and shuffling during drag
   const handleImageDragMove = useCallback(
     (e: Konva.KonvaEventObject<DragEvent>) => {
-      const node = e.target;
-      const currentX = node.x();
-      const currentY = node.y();
-      const currentImg = images.find((i) => i.id === node.id());
-      if (!currentImg) return;
+      dragMoveNodeRef.current = e.target as Konva.Image;
+      if (dragMoveRafRef.current != null) return;
+      dragMoveRafRef.current = requestAnimationFrame(() => {
+        dragMoveRafRef.current = null;
+        const node = dragMoveNodeRef.current;
+        if (!node) return;
+        const currentX = node.x();
+        const currentY = node.y();
+        const currentImg = images.find((i) => i.id === node.id());
+        if (!currentImg) return;
 
-      const currentCenterX = currentX + currentImg.width / 2;
-      const currentCenterY = currentY + currentImg.height / 2;
+        const currentCenterX = currentX + currentImg.width / 2;
+        const currentCenterY = currentY + currentImg.height / 2;
 
-      // Blink source folder border only when image center is over the border line
+        // Blink source folder border only when image center is over the border line
       const BORDER_BLINK_THRESHOLD = 28;
       if (currentImg.folderId) {
         const sourceFolder = folders.find((f) => f.id === currentImg.folderId);
@@ -3245,8 +3542,13 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         }
       }
 
-      // If image is in a folder, calculate grid position and shuffle in real-time
+      // If image is in a folder, calculate grid position and shuffle in real-time (grid only; social layout = free placement, images can stack)
       if (targetFolderId && targetFolder) {
+        if (isSocialLayout(targetFolder)) {
+          setDragHoveredFolderId(targetFolderId);
+          return; // Social layout: no snap, no swap — free placement, images can stack
+        }
+        setDragHoveredFolderId(targetFolderId);
         const cols = calculateColsFromWidth(targetFolder.width);
         const { folderPadding, imageMaxSize } = GRID_CONFIG;
         const contentStartX = targetFolder.x + folderPadding;
@@ -3256,12 +3558,11 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         const relativeX = currentX - contentStartX;
         const relativeY = currentY - contentStartY;
         const targetCol = Math.max(0, Math.floor(relativeX / CELL_SIZE));
-        const targetRow = Math.max(0, Math.floor(relativeY / CELL_SIZE));
+        const targetRow = Math.max(0, Math.floor(relativeY / CELL_HEIGHT));
         const clampedCol = Math.min(targetCol, cols - 1);
-        
-        // Calculate the center of the target cell
+        const { imageMaxHeight } = GRID_CONFIG;
         const targetCellCenterX = contentStartX + clampedCol * CELL_SIZE + imageMaxSize / 2;
-        const targetCellCenterY = contentStartY + targetRow * CELL_SIZE + imageMaxSize / 2;
+        const targetCellCenterY = contentStartY + targetRow * CELL_HEIGHT + imageMaxHeight / 2;
         
         // Snap threshold - only snap when within 40px of cell center
         const snapThreshold = 40;
@@ -3302,7 +3603,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         const currentImgRelativeX = currentImg.x - contentStartX;
         const currentImgRelativeY = currentImg.y - contentStartY;
         const currentImgCol = Math.floor(currentImgRelativeX / CELL_SIZE);
-        const currentImgRow = Math.floor(currentImgRelativeY / CELL_SIZE);
+        const currentImgRow = Math.floor(currentImgRelativeY / CELL_HEIGHT);
         const currentImgCell = currentImgRow * cols + currentImgCol;
         
         // Check if target cell is occupied
@@ -3364,12 +3665,11 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         
         // Calculate final position for dragged image
         const imgWidth = Math.min(currentImg.width * currentImg.scaleX, imageMaxSize);
-        const imgHeight = Math.min(currentImg.height * currentImg.scaleY, imageMaxSize);
+        const imgHeight = Math.min(currentImg.height * currentImg.scaleY, GRID_CONFIG.imageMaxHeight);
         const cellOffsetX = (imageMaxSize - imgWidth) / 2;
-        const cellOffsetY = (imageMaxSize - imgHeight) / 2;
-
+        const cellOffsetY = (GRID_CONFIG.imageMaxHeight - imgHeight) / 2;
         const finalX = contentStartX + finalCol * CELL_SIZE + cellOffsetX;
-        const finalY = contentStartY + finalRow * CELL_SIZE + cellOffsetY;
+        const finalY = contentStartY + finalRow * CELL_HEIGHT + cellOffsetY;
 
         // Don't show ghost at all when snapping in folder — no green dashed border
         setDragGhostPosition(null);
@@ -3392,23 +3692,30 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           lastSwappedImageRef.current = { id: swapImgId, x: swapX, y: swapY };
         }
 
-        // Update dragged image position using setAttrs
-        node.setAttrs({ x: finalX, y: finalY });
+        // Update dragged image position
+        node.x(finalX);
+        node.y(finalY);
       }
 
       // Update folder hover state for visual feedback
       setDragHoveredFolderId(targetFolderId || null);
+      });
     },
     [images, folders]
   );
 
   const handleObjectDragEnd = useCallback(
     (e: Konva.KonvaEventObject<DragEvent>, type: 'image' | 'text') => {
+      if (dragMoveRafRef.current != null) {
+        cancelAnimationFrame(dragMoveRafRef.current);
+        dragMoveRafRef.current = null;
+      }
+      dragMoveNodeRef.current = null;
+
       const node = e.target;
       const currentX = node.x();
       const currentY = node.y();
 
-      // Clear ghost placeholder when drag ends
       setDragGhostPosition(null);
 
       let newX = currentX;
@@ -3416,7 +3723,10 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
       // Only snap if it's an image
       if (type === 'image') {
-        const currentImg = images.find((img) => img.id === node.id());
+        // Use latest state so we never move the wrong image or use stale folder membership
+        const latestFolders = latestFoldersRef.current;
+        const latestImages = latestImagesRef.current;
+        const currentImg = latestImages.find((img) => img.id === node.id());
         if (currentImg) {
           // Get the current position (already updated by handleImageDragMove if in folder)
           newX = currentX;
@@ -3426,60 +3736,59 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           const currentCenterX = currentX + currentImg.width / 2;
           const currentCenterY = currentY + currentImg.height / 2;
 
-          // Check which folder the image was dropped into (if any)
+          // Check which folder the image was dropped into (if any).
+          // When multiple folders contain the point (e.g. layout and a smaller folder inside it), pick the smallest one so the intended target wins.
           let targetFolderId: string | undefined = undefined;
           let targetFolder: PhotoFolder | undefined = undefined;
+          let smallestArea = Infinity;
 
-          // Check all folders to see if image center is inside any of them
-          for (const folder of folders) {
-            // Use folder's actual height (or calculated height) for bounds
+          for (const folder of latestFolders) {
             const folderHeight = folder.height ?? getFolderBorderHeight(folder, folder.imageIds.length);
             const boundLeft = folder.x;
             const boundRight = folder.x + folder.width;
-            const boundTop = folder.y + 30; // Below label
+            const boundTop = folder.y + 30;
             const boundBottom = folder.y + 30 + folderHeight;
 
             if (currentCenterX >= boundLeft && currentCenterX <= boundRight &&
                 currentCenterY >= boundTop && currentCenterY <= boundBottom) {
-              targetFolderId = folder.id;
-              targetFolder = folder;
-              break;
+              const area = (boundRight - boundLeft) * (boundBottom - boundTop);
+              if (area < smallestArea) {
+                smallestArea = area;
+                targetFolderId = folder.id;
+                targetFolder = folder;
+              }
             }
           }
 
-          // If image is IN a folder, snap to nearest grid cell
+          // If image is IN a folder, snap to grid (social layout: no snap — keep position)
           if (targetFolderId && targetFolder) {
-            const { folderPadding, imageMaxSize } = GRID_CONFIG;
-            const cols = calculateColsFromWidth(targetFolder.width);
-            const contentStartX = targetFolder.x + folderPadding;
-            const contentStartY = targetFolder.y + 30 + folderPadding;
+            if (isSocialLayout(targetFolder)) {
+              // Social layout: no snap — newX/newY already = currentX/currentY
+            } else {
+              const { folderPadding, imageMaxSize, imageMaxHeight } = GRID_CONFIG;
+              const cols = calculateColsFromWidth(targetFolder.width);
+              const contentStartX = targetFolder.x + folderPadding;
+              const contentStartY = targetFolder.y + 30 + folderPadding;
+              const folderHeight = targetFolder.height ?? getFolderBorderHeight(targetFolder, targetFolder.imageIds.length);
+              const contentHeight = folderHeight - (2 * folderPadding);
+              const maxRows = Math.max(1, Math.floor(contentHeight / CELL_HEIGHT));
+              const relativeX = currentX - contentStartX;
+              const relativeY = currentY - contentStartY;
+              const targetCol = Math.max(0, Math.min(cols - 1, Math.round(relativeX / CELL_SIZE)));
+              const targetRow = Math.max(0, Math.min(maxRows - 1, Math.round(relativeY / CELL_HEIGHT)));
+              const imgWidth = Math.min(currentImg.width * currentImg.scaleX, imageMaxSize);
+              const imgHeight = Math.min(currentImg.height * currentImg.scaleY, imageMaxHeight);
+              const cellOffsetX = (imageMaxSize - imgWidth) / 2;
+              const cellOffsetY = (imageMaxHeight - imgHeight) / 2;
+              newX = contentStartX + targetCol * CELL_SIZE + cellOffsetX;
+              newY = contentStartY + targetRow * CELL_HEIGHT + cellOffsetY;
 
-            // Calculate max rows based on folder's actual height
-            const folderHeight = targetFolder.height ?? getFolderBorderHeight(targetFolder, targetFolder.imageIds.length);
-            const contentHeight = folderHeight - (2 * folderPadding);
-            const maxRows = Math.max(1, Math.floor(contentHeight / CELL_SIZE));
-
-            // Calculate which cell the image should snap to based on current position
-            const relativeX = currentX - contentStartX;
-            const relativeY = currentY - contentStartY;
-            const targetCol = Math.max(0, Math.min(cols - 1, Math.round(relativeX / CELL_SIZE)));
-            const targetRow = Math.max(0, Math.min(maxRows - 1, Math.round(relativeY / CELL_SIZE)));
-
-            // Calculate snapped position
-            const imgWidth = Math.min(currentImg.width * currentImg.scaleX, imageMaxSize);
-            const imgHeight = Math.min(currentImg.height * currentImg.scaleY, imageMaxSize);
-            const cellOffsetX = (imageMaxSize - imgWidth) / 2;
-            const cellOffsetY = (imageMaxSize - imgHeight) / 2;
-
-            newX = contentStartX + targetCol * CELL_SIZE + cellOffsetX;
-            newY = contentStartY + targetRow * CELL_SIZE + cellOffsetY;
-
-            // Update node position to snapped position
-            node.position({ x: newX, y: newY });
+              node.position({ x: newX, y: newY });
+            }
           }
           // If image is outside folders, use snapping logic
           else if (!targetFolderId) {
-            const nearest = findNearestPhoto(currentCenterX, currentCenterY, images, node.id(), 100);
+            const nearest = findNearestPhoto(currentCenterX, currentCenterY, latestImages, node.id(), 100);
             if (nearest) {
               newX = nearest.x - currentImg.width / 2;
               newY = nearest.y - currentImg.height / 2;
@@ -3495,7 +3804,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             // If dropped outside all folders AND image was in a folder, create a new "Untitled" folder
             if (!targetFolderId && oldFolderId) {
               // Generate unique "Untitled" name
-              const existingUntitledNames = folders
+              const existingUntitledNames = latestFolders
                 .filter(f => f.name.toLowerCase().startsWith('untitled'))
                 .map(f => f.name.toLowerCase());
               
@@ -3508,27 +3817,22 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 untitledName = `Untitled-${counter}`;
               }
 
-              // Create new folder at the image's position
               const newFolderId = `folder-${Date.now()}`;
-              const colorIndex = folders.length % FOLDER_COLORS.length;
-              
-              // New folder position - use drop position for folder label
+              const colorIndex = latestFolders.length % FOLDER_COLORS.length;
               const newFolderX = newX;
-              const newFolderY = newY - 50; // Position label above where image was dropped
+              const newFolderY = newY - 50;
               const newFolderWidth = GRID_CONFIG.defaultFolderWidth;
-              
-              // Calculate proper centered position for image inside the new folder
               const contentStartX = newFolderX + GRID_CONFIG.folderPadding;
               const contentStartY = newFolderY + 30 + GRID_CONFIG.folderPadding;
-              const imgWidth = currentImg.width * currentImg.scaleX;
-              const imgHeight = currentImg.height * currentImg.scaleY;
-              const cellOffsetX = Math.max(0, (GRID_CONFIG.imageMaxSize - imgWidth) / 2);
-              const cellOffsetY = Math.max(0, (GRID_CONFIG.imageMaxSize - imgHeight) / 2);
+              const imgW = currentImg.width * (currentImg.scaleX ?? 1);
+              const imgH = currentImg.height * (currentImg.scaleY ?? 1);
+              const { imageMaxSize, imageMaxHeight } = GRID_CONFIG;
+              const cellOffsetX = Math.max(0, (imageMaxSize - imgW) / 2);
+              const cellOffsetY = Math.max(0, (imageMaxHeight - imgH) / 2);
               const centeredX = contentStartX + cellOffsetX;
               const centeredY = contentStartY + cellOffsetY;
               
-              // Build updated state: remove from old folder, add new folder, update image
-              const updatedFolders = folders
+              const updatedFolders = latestFolders
                 .map((f) =>
                   f.id === oldFolderId
                     ? { ...f, imageIds: f.imageIds.filter((id) => id !== currentImg.id) }
@@ -3543,9 +3847,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                   imageIds: [currentImg.id],
                   color: FOLDER_COLORS[colorIndex],
                 });
-              const updatedImages = images.map((img) =>
+              const updatedImages = latestImages.map((img) =>
                 img.id === currentImg.id
-                  ? { ...img, x: centeredX, y: centeredY, folderId: newFolderId }
+                  ? { ...img, x: centeredX, y: centeredY, folderId: newFolderId, width: imgW, height: imgH, scaleX: 1, scaleY: 1 }
                   : img
               );
 
@@ -3587,7 +3891,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 // Update any existing folders that were pushed
                 for (const f of resolvedFolders) {
                   if (f.id === newFolderId) continue;
-                  const prev = folders.find((of) => of.id === f.id);
+                  const prev = latestFolders.find((of) => of.id === f.id);
                   if (prev && (prev.x !== f.x || prev.y !== f.y)) {
                     supabase.from('photo_folders')
                       .update({ x: Math.round(f.x), y: Math.round(f.y) })
@@ -3602,7 +3906,15 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 const currentCanonical = currentImg.storagePath || currentImg.originalStoragePath;
                 if (currentCanonical && finalImg) {
                   supabase.from('photo_edits')
-                    .update({ folder_id: newFolderId, x: Math.round(finalImg.x), y: Math.round(finalImg.y) })
+                    .update({
+                      folder_id: newFolderId,
+                      x: Math.round(finalImg.x),
+                      y: Math.round(finalImg.y),
+                      width: Math.round(finalImg.width),
+                      height: Math.round(finalImg.height),
+                      scale_x: finalImg.scaleX ?? 1,
+                      scale_y: finalImg.scaleY ?? 1,
+                    })
                     .eq('storage_path', currentCanonical)
                     .eq('user_id', user.id)
                     .then(({ error }) => {
@@ -3616,32 +3928,64 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             
             // Moving between existing folders or into a folder — use snapped drop position (newX, newY from above)
             if (targetFolderId) {
-              const gridX = newX;
-              const gridY = newY;
+              let gridX = newX;
+              let gridY = newY;
+              let finalWidth = currentImg.width;
+              let finalHeight = currentImg.height;
+              let finalScaleX = currentImg.scaleX ?? 1;
+              let finalScaleY = currentImg.scaleY ?? 1;
 
-              // Update folders
-              const updatedFolders = folders.map((f) => {
+              // No scaling: use current dimensions. Layout: free placement (no snap); grid: snap to cell.
+              if (targetFolder && isSocialLayout(targetFolder) && targetFolderId !== oldFolderId) {
+                finalWidth = currentImg.width * (currentImg.scaleX ?? 1);
+                finalHeight = currentImg.height * (currentImg.scaleY ?? 1);
+                finalScaleX = 1;
+                finalScaleY = 1;
+                gridX = currentCenterX - finalWidth / 2;
+                gridY = currentCenterY - finalHeight / 2;
+              } else if (targetFolder && !isSocialLayout(targetFolder) && targetFolderId !== oldFolderId) {
+                const { folderPadding, imageMaxSize, imageMaxHeight } = GRID_CONFIG;
+                const contentStartX = targetFolder.x + folderPadding;
+                const contentStartY = targetFolder.y + 30 + folderPadding;
+                const cols = calculateColsFromWidth(targetFolder.width);
+                const folderHeight = targetFolder.height ?? getFolderBorderHeight(targetFolder, targetFolder.imageIds.length);
+                const maxRows = Math.max(1, Math.floor((folderHeight - 30 - 2 * folderPadding + GRID_CONFIG.imageGap) / CELL_HEIGHT));
+                const relativeX = currentCenterX - contentStartX;
+                const relativeY = currentCenterY - contentStartY;
+                const targetCol = Math.max(0, Math.min(cols - 1, Math.floor(relativeX / CELL_SIZE)));
+                const targetRow = Math.max(0, Math.min(maxRows - 1, Math.floor(relativeY / CELL_HEIGHT)));
+                const cellOffsetX = (imageMaxSize - finalWidth) / 2;
+                const cellOffsetY = (imageMaxHeight - finalHeight) / 2;
+                gridX = contentStartX + targetCol * CELL_SIZE + cellOffsetX;
+                gridY = contentStartY + targetRow * CELL_HEIGHT + cellOffsetY;
+              }
+
+              // Update folders: only move the single dragged image (remove from source, add to target). Use latest state.
+              const updatedFolders = latestFolders.map((f) => {
                 if (f.id === oldFolderId) {
                   return { ...f, imageIds: f.imageIds.filter((id) => id !== currentImg.id) };
                 }
                 if (f.id === targetFolderId) {
-                  return { ...f, imageIds: [...f.imageIds, currentImg.id] };
+                  // Only add the dragged image; avoid duplicates or accidentally pulling in other images
+                  const hasAlready = f.imageIds.includes(currentImg.id);
+                  return { ...f, imageIds: hasAlready ? f.imageIds : [...f.imageIds, currentImg.id] };
                 }
                 return f;
               });
 
-              // Update images
-              const updatedImages = images.map((img) =>
+              // Update images: only the dragged image changes position and folderId
+              const updatedImages = latestImages.map((img) =>
                 img.id === currentImg.id
-                  ? { ...img, x: gridX, y: gridY, folderId: targetFolderId }
+                  ? { ...img, x: gridX, y: gridY, folderId: targetFolderId, width: finalWidth, height: finalHeight, scaleX: finalScaleX, scaleY: finalScaleY }
                   : img
               );
 
-              // Resolve any folder overlaps (target folder may have grown)
+              // Resolve any folder overlaps (target folder may have grown). Pass dragged image id so only it moves.
               const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
                 updatedFolders,
                 updatedImages,
-                targetFolderId
+                targetFolderId,
+                currentImg.id
               );
               
               setFolders(resolvedFolders);
@@ -3657,7 +4001,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               if (user) {
                 // Save moved folders
                 for (const f of resolvedFolders) {
-                  const oldF = folders.find(of => of.id === f.id);
+                  const oldF = latestFolders.find(of => of.id === f.id);
                   if (oldF && (oldF.x !== f.x || oldF.y !== f.y)) {
                     supabase.from('photo_folders')
                       .update({ x: Math.round(f.x), y: Math.round(f.y) })
@@ -3669,11 +4013,19 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                   }
                 }
                 
-                // Save the dragged image (canonical key)
+                // Save the dragged image (canonical key), including dimensions when scaled on drop into layout
                 const currentCanonical = currentImg.storagePath || currentImg.originalStoragePath;
                 if (currentCanonical && finalImg) {
                   supabase.from('photo_edits')
-                    .update({ folder_id: targetFolderId, x: Math.round(finalImg.x), y: Math.round(finalImg.y) })
+                    .update({
+                      folder_id: targetFolderId,
+                      x: Math.round(finalImg.x),
+                      y: Math.round(finalImg.y),
+                      width: Math.round(finalImg.width),
+                      height: Math.round(finalImg.height),
+                      scale_x: finalImg.scaleX ?? 1,
+                      scale_y: finalImg.scaleY ?? 1,
+                    })
                     .eq('storage_path', currentCanonical)
                     .eq('user_id', user.id)
                     .then(({ error }) => {
@@ -3739,7 +4091,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               // Save swapped image if there was a swap - use the position from ref (calculated during drag)
               if (lastSwappedImageRef.current) {
                 const swappedRef = lastSwappedImageRef.current;
-                const swappedImg = images.find(img => img.id === swappedRef.id);
+                const swappedImg = latestImages.find(img => img.id === swappedRef.id);
                 const swappedCanonical = swappedImg?.storagePath || swappedImg?.originalStoragePath;
                 if (swappedImg && swappedCanonical) {
                   const swappedX = swappedRef.x;
@@ -4865,6 +5217,68 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         </div>
       )}
 
+      {/* Create social media layout from canvas right-click */}
+      {createSocialLayoutOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96">
+            <h2 className="text-lg font-semibold text-white mb-1">Create social media layout</h2>
+            <p className="text-sm text-[#888] mb-4">
+              Add a 4:5 layout. You can drag photos in and place them anywhere; add or remove pages later.
+            </p>
+            <label className="block text-xs uppercase tracking-wide text-[#666] mb-2">Layout name</label>
+            <input
+              type="text"
+              value={createSocialLayoutName}
+              onChange={(e) => {
+                setCreateSocialLayoutName(e.target.value);
+                setCreateSocialLayoutNameError('');
+              }}
+              placeholder="e.g., Instagram carousel"
+              className={`w-full px-4 py-3 text-white bg-[#252525] border rounded-xl focus:outline-none transition-colors mb-1 ${
+                createSocialLayoutNameError ? 'border-red-500 focus:border-red-500' : 'border-[#333] focus:border-[#3ECF8E] focus:ring-1 focus:ring-[#3ECF8E]/20'
+              }`}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleCreateSocialLayoutSave();
+                if (e.key === 'Escape') handleCreateSocialLayoutCancel();
+              }}
+            />
+            {createSocialLayoutNameError && (
+              <p className="text-xs text-red-400 mb-3">{createSocialLayoutNameError}</p>
+            )}
+            <label className="block text-xs uppercase tracking-wide text-[#666] mt-4 mb-2">Number of pages (1–10)</label>
+            <select
+              value={createSocialLayoutPages}
+              onChange={(e) => setCreateSocialLayoutPages(Number(e.target.value))}
+              className="w-full px-4 py-3 text-white bg-[#252525] border border-[#333] rounded-xl focus:outline-none focus:border-[#3ECF8E] focus:ring-1 focus:ring-[#3ECF8E]/20"
+            >
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                <option key={n} value={n} className="bg-[#252525] text-white">
+                  {n} page{n !== 1 ? 's' : ''}
+                </option>
+              ))}
+            </select>
+            <div className="flex gap-3 mt-4">
+              <button
+                type="button"
+                onClick={handleCreateSocialLayoutCancel}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-[#999] bg-[#252525] hover:bg-[#333] rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateSocialLayoutSave}
+                disabled={!createSocialLayoutName.trim()}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-[#0d0d0d] bg-[#3ECF8E] hover:bg-[#35b87d] disabled:bg-[#333] disabled:text-[#666] disabled:cursor-not-allowed rounded-xl transition-colors cursor-pointer"
+              >
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Create folder from selection: name modal, then create and push others out of the way */}
       {createFolderFromSelectionIds && createFolderFromSelectionIds.length > 0 && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
@@ -5022,7 +5436,15 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               const isResizing = resizingFolderId === currentFolder.id;
 
               return (
-                <Group key={folder.id}>
+                <Group
+                  key={folder.id}
+                  onContextMenu={(e) => {
+                    e.evt.preventDefault();
+                    e.cancelBubble = true;
+                    setCanvasContextMenu(null);
+                    setFolderContextMenu({ x: e.evt.clientX, y: e.evt.clientY, folderId: currentFolder.id });
+                  }}
+                >
                   {/* Folder Label (name + plus) - one Group so they scale and move together */}
                   <Group
                     x={currentFolder.x}
@@ -5052,7 +5474,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                       const folderImgs = images.filter(img => currentFolder.imageIds.includes(img.id));
                       let updatedImages = [...images];
                       if (folderImgs.length > 0) {
-                        const reflowedImages = reflowImagesInFolder(folderImgs, newX, newY, currentFolder.width);
+                        const reflowedImages = isSocialLayout(currentFolder)
+                          ? folderImgs.map((img) => ({ ...img, x: img.x + (newX - currentFolder.x), y: img.y + (newY - currentFolder.y) }))
+                          : reflowImagesInFolder(folderImgs, newX, newY, currentFolder.width);
                         updatedImages = images.map((img) => {
                           const reflowed = reflowedImages.find(r => r.id === img.id);
                           return reflowed ? reflowed : img;
@@ -5151,16 +5575,50 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                     />
                   </Group>
 
-                  {/* Folder fill - solid background (not transparent) */}
-                  <Rect
-                    x={borderX}
-                    y={borderY}
-                    width={borderWidth}
-                    height={Math.max(borderHeight, 80)}
-                    fill="#0d0d0d"
-                    cornerRadius={12}
-                    listening={false}
-                  />
+                  {/* Folder fill - solid background (not transparent); social layout: N pages with backgroundColor */}
+                  {isSocialLayout(currentFolder) ? (() => {
+                    const n = Math.max(1, Math.min(SOCIAL_LAYOUT_MAX_PAGES, currentFolder.pageCount ?? 1));
+                    const pageW = SOCIAL_LAYOUT_PAGE_WIDTH;
+                    const bg = currentFolder.backgroundColor ?? DEFAULT_SOCIAL_LAYOUT_BG;
+                    const h = Math.max(borderHeight, 80);
+                    return (
+                      <>
+                        {Array.from({ length: n }, (_, i) => (
+                          <Rect
+                            key={i}
+                            x={borderX + i * pageW}
+                            y={borderY}
+                            width={pageW}
+                            height={h}
+                            fill={bg}
+                            cornerRadius={0}
+                            listening={false}
+                          />
+                        ))}
+                        {n > 1 && Array.from({ length: n - 1 }, (_, i) => (
+                          <Rect
+                            key={`div-${i}`}
+                            x={borderX + (i + 1) * pageW - 1}
+                            y={borderY}
+                            width={2}
+                            height={h}
+                            fill="rgba(255,255,255,0.06)"
+                            listening={false}
+                          />
+                        ))}
+                      </>
+                    );
+                  })() : (
+                    <Rect
+                      x={borderX}
+                      y={borderY}
+                      width={borderWidth}
+                      height={Math.max(borderHeight, 80)}
+                      fill="#0d0d0d"
+                      cornerRadius={12}
+                      listening={false}
+                    />
+                  )}
                   {/* Folder Border - blinks when image center is over this folder's border (dragging out); solid on hover or when dragging over to drop */}
                   <Rect
                     x={borderX}
@@ -5179,9 +5637,14 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                     onMouseLeave={() => {
                       if (!resizingFolderId) setHoveredFolderBorder(null);
                     }}
+                    onClick={(e) => {
+                      e.cancelBubble = true;
+                      if (isSocialLayout(currentFolder)) setSelectedFolderId(currentFolder.id);
+                    }}
                   />
                   
-                  {/* Resize Handle - Bottom-right corner */}
+                  {/* Resize Handle - Bottom-right corner (hidden for social layout) */}
+                  {!isSocialLayout(currentFolder) && (
                   <Rect
                     x={borderX + borderWidth - 20}
                     y={borderY + borderHeight - 20}
@@ -5341,7 +5804,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                       // Calculate rows based on the height the user dragged to
                       const currentContentHeight = (resizedFolder.height ?? 130) - 30; // Subtract label
                       const availableForCells = currentContentHeight - (2 * GRID_CONFIG.folderPadding) + GRID_CONFIG.imageGap;
-                      const rowsFromHeight = Math.max(1, Math.floor(availableForCells / CELL_SIZE));
+                      const rowsFromHeight = Math.max(1, Math.floor(availableForCells / CELL_HEIGHT));
 
                       // But ensure we have enough rows for all images (minimum needed)
                       const maxRowWithImage = imageCount > 0 ? Math.max(0, ...currentPositions.map(p => p.row)) : 0;
@@ -5352,12 +5815,12 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                       const snappedWidth = (2 * GRID_CONFIG.folderPadding) + (cols * CELL_SIZE) - GRID_CONFIG.imageGap;
 
                       // Calculate snapped height: based on rows the user wants (with minimum for images)
-                      const snappedContentHeight = (2 * GRID_CONFIG.folderPadding) + (rows * CELL_SIZE) - GRID_CONFIG.imageGap;
+                      const snappedContentHeight = (2 * GRID_CONFIG.folderPadding) + (rows * CELL_HEIGHT) - GRID_CONFIG.imageGap;
                       const snappedHeight = 30 + Math.max(snappedContentHeight, 100);
 
                       // Check if snapped dimensions would cut off any images
                       const snappedCols = calculateColsFromWidth(snappedWidth);
-                      const snappedMaxRows = Math.max(1, Math.floor((snappedHeight - 30 - 2 * GRID_CONFIG.folderPadding + GRID_CONFIG.imageGap) / CELL_SIZE));
+                      const snappedMaxRows = Math.max(1, Math.floor((snappedHeight - 30 - 2 * GRID_CONFIG.folderPadding + GRID_CONFIG.imageGap) / CELL_HEIGHT));
 
                       // Determine cell assignments - preserve positions if possible
                       let cellAssignments: CellAssignment[];
@@ -5445,6 +5908,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                       }
                     }}
                   />
+                  )}
 
                   {/* Ghost/placeholder for drag target */}
                   {dragGhostPosition && dragGhostPosition.folderId === currentFolder.id && (
@@ -5537,11 +6001,11 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         
       </div>
 
-      {/* Right-click context menu on empty canvas: Create folder */}
+      {/* Right-click context menu on empty canvas: Create folder / Create social media layout */}
       {canvasContextMenu && (
         <div
           ref={canvasContextMenuRef}
-          className="fixed z-50 min-w-[160px] py-1 bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50"
+          className="fixed z-50 min-w-[200px] py-1 bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50"
           style={{ left: canvasContextMenu.x, top: canvasContextMenu.y }}
         >
           <button
@@ -5559,8 +6023,138 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             </svg>
             Create folder
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              setCanvasContextMenu(null);
+              setCreateSocialLayoutOpen(true);
+              setCreateSocialLayoutName('Social layout 1');
+              setCreateSocialLayoutPages(3);
+              setCreateSocialLayoutNameError('');
+            }}
+            className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors flex items-center gap-2 border-t border-[#2a2a2a]"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            Create social media layout
+          </button>
         </div>
       )}
+
+      {/* Layout toolbar when a social layout is selected (click on layout) */}
+      {selectedFolderId && (() => {
+        const selectedFolder = folders.find((f) => f.id === selectedFolderId);
+        if (!selectedFolder || !isSocialLayout(selectedFolder)) return null;
+        const pageCount = Math.max(1, Math.min(SOCIAL_LAYOUT_MAX_PAGES, selectedFolder.pageCount ?? 1));
+        const bg = selectedFolder.backgroundColor ?? DEFAULT_SOCIAL_LAYOUT_BG;
+        const canAdd = pageCount < SOCIAL_LAYOUT_MAX_PAGES;
+        const canRemove = pageCount > 1;
+        return (
+          <div className="fixed z-40 left-1/2 -translate-x-1/2 top-20 flex items-center gap-3 px-4 py-2.5 bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50">
+            <span className="text-sm text-[#888] whitespace-nowrap">Layout: {selectedFolder.name}</span>
+            <div className="w-px h-6 bg-[#333]" />
+            <label className="flex items-center gap-2 text-sm text-white">
+              <span className="text-[#666]">Bg</span>
+              <input
+                type="color"
+                value={bg}
+                onChange={(e) => handleLayoutBackgroundColor(selectedFolder.id, e.target.value)}
+                className="w-8 h-8 rounded cursor-pointer border border-[#333] bg-transparent"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => handleLayoutAddPage(selectedFolder.id)}
+              disabled={!canAdd}
+              className="px-3 py-1.5 text-sm font-medium text-white bg-[#252525] hover:bg-[#333] disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
+            >
+              + Page
+            </button>
+            <button
+              type="button"
+              onClick={() => handleLayoutRemovePage(selectedFolder.id)}
+              disabled={!canRemove}
+              className="px-3 py-1.5 text-sm font-medium text-white bg-[#252525] hover:bg-[#333] disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
+            >
+              − Page
+            </button>
+          </div>
+        );
+      })()}
+
+      {/* Right-click context menu for folder (social layout: background color, add/remove page) */}
+      {folderContextMenu && (() => {
+        const folder = folders.find((f) => f.id === folderContextMenu.folderId);
+        if (!folder) return null;
+        const isLayout = isSocialLayout(folder);
+        const pageCount = Math.max(1, Math.min(SOCIAL_LAYOUT_MAX_PAGES, folder.pageCount ?? 1));
+        const canAdd = pageCount < SOCIAL_LAYOUT_MAX_PAGES;
+        const canRemove = pageCount > 1;
+        return (
+          <div
+            ref={folderContextMenuRef}
+            className="fixed z-50 min-w-[180px] py-1 bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50"
+            style={{ left: folderContextMenu.x, top: folderContextMenu.y }}
+          >
+            {isLayout && (
+              <>
+                <div className="px-4 py-2 text-xs text-[#666] uppercase tracking-wide">Layout</div>
+                <label className="flex items-center gap-2 w-full px-4 py-2.5 text-sm text-white hover:bg-[#252525] cursor-pointer">
+                  <span>Background color</span>
+                  <input
+                    type="color"
+                    value={folder.backgroundColor ?? DEFAULT_SOCIAL_LAYOUT_BG}
+                    onChange={(e) => handleLayoutBackgroundColor(folder.id, e.target.value)}
+                    className="w-6 h-6 rounded cursor-pointer border border-[#333] bg-transparent"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => handleLayoutAddPage(folder.id)}
+                  disabled={!canAdd}
+                  className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  Add page
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleLayoutRemovePage(folder.id)}
+                  disabled={!canRemove}
+                  className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  Remove page
+                </button>
+                <div className="my-1 border-t border-[#2a2a2a]" />
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setFolderContextMenu(null);
+                setEditingFolder(folder);
+                setEditingFolderName(folder.name);
+                setFolderNameError('');
+              }}
+              className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors"
+            >
+              Rename
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFolderContextMenu(null);
+                setConfirmDeleteFolderOpen(true);
+                setEditingFolder(folder);
+              }}
+              className="w-full px-4 py-2.5 text-left text-sm text-red-400 hover:bg-red-400/10 transition-colors border-t border-[#2a2a2a]"
+            >
+              Delete folder
+            </button>
+          </div>
+        );
+      })()}
 
       {/* Right-click context menu for images: single = copy/paste/preset; multi = paste to selection, create folder */}
       {imageContextMenu && (

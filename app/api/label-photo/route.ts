@@ -7,7 +7,7 @@ const supabase = createClient(
 );
 
 const GEMINI_API_KEY = process.env.GOOGLE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_MODEL = 'gemini-2.5-flash-lite';
 
 export async function POST(request: NextRequest) {
   try {
