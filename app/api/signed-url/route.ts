@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
 
     const { data, error } = await supabase.storage
       .from(bucket)
-      .createSignedUrl(path, 300); // 5 min expiry
+      .createSignedUrl(path, 3600); // 1 hour expiry (reduces API calls, longer cache)
 
     if (error) {
       console.error('Signed URL error:', error);

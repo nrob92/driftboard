@@ -6,8 +6,8 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-const GEMINI_API_KEY = process.env.GOOGLE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = 'gemini-2.5-flash-lite';
+// const GEMINI_API_KEY = process.env.GOOGLE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+// const GEMINI_MODEL = 'gemini-2.5-flash-lite';
 
 export async function POST(request: NextRequest) {
   try {
@@ -21,13 +21,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!GEMINI_API_KEY) {
-      console.warn('label-photo: GOOGLE_GEMINI_API_KEY or GEMINI_API_KEY not set');
-      return NextResponse.json(
-        { error: 'Labeling not configured' },
-        { status: 503 }
-      );
-    }
+    // if (!GEMINI_API_KEY) {
+    //   console.warn('label-photo: GOOGLE_GEMINI_API_KEY or GEMINI_API_KEY not set');
+    //   return NextResponse.json(
+    //     { error: 'Labeling not configured' },
+    //     { status: 503 }
+    //   );
+    // }
 
     // Prefer photos bucket (preview); path usually is userId/filename
     const bucket = storagePath.toLowerCase().endsWith('.dng') ? 'originals' : 'photos';
@@ -51,58 +51,62 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const arrayBuffer = await imageResponse.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString('base64');
-    const contentType = imageResponse.headers.get('content-type') || 'image/jpeg';
-    const mimeType = contentType.split(';')[0].trim() || 'image/jpeg';
+    // Gemini labeling commented out - will add back later
+    // const arrayBuffer = await imageResponse.arrayBuffer();
+    // const base64 = Buffer.from(arrayBuffer).toString('base64');
+    // const contentType = imageResponse.headers.get('content-type') || 'image/jpeg';
+    // const mimeType = contentType.split(';')[0].trim() || 'image/jpeg';
 
-    const prompt = `Look at this image and list short, lowercase tags that describe its content (e.g. tree, sky, person, beach, dog, landscape). Return only a comma-separated list of tags, no other text.`;
+    // const prompt = `Look at this image and list short, lowercase tags that describe its content (e.g. tree, sky, person, beach, dog, landscape). Return only a comma-separated list of tags, no other text.`;
 
-    const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                { text: prompt },
-                {
-                  inlineData: {
-                    mimeType,
-                    data: base64,
-                  },
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 256,
-          },
-        }),
-      }
-    );
+    // const geminiRes = await fetch(
+    //   `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+    //   {
+    //     method: 'POST',
+    //     headers: { 'Content-Type': 'application/json' },
+    //     body: JSON.stringify({
+    //       contents: [
+    //         {
+    //           role: 'user',
+    //           parts: [
+    //             { text: prompt },
+    //             {
+    //               inlineData: {
+    //                 mimeType,
+    //                 data: base64,
+    //               },
+    //             },
+    //           ],
+    //         },
+    //       ],
+    //       generationConfig: {
+    //         temperature: 0.2,
+    //         maxOutputTokens: 256,
+    //       },
+    //     }),
+    //   }
+    // );
 
-    if (!geminiRes.ok) {
-      const errText = await geminiRes.text();
-      console.error('Gemini API error:', geminiRes.status, errText);
-      return NextResponse.json(
-        { error: 'Labeling failed' },
-        { status: 502 }
-      );
-    }
+    // if (!geminiRes.ok) {
+    //   const errText = await geminiRes.text();
+    //   console.error('Gemini API error:', geminiRes.status, errText);
+    //   return NextResponse.json(
+    //     { error: 'Labeling failed' },
+    //     { status: 502 }
+    //   );
+    // }
 
-    const geminiJson = await geminiRes.json();
-    const textPart = geminiJson?.candidates?.[0]?.content?.parts?.[0]?.text;
-    const text = (textPart || '').trim();
+    // const geminiJson = await geminiRes.json();
+    // const textPart = geminiJson?.candidates?.[0]?.content?.parts?.[0]?.text;
+    // const text = (textPart || '').trim();
 
-    const labels = text
-      .split(',')
-      .map((s: string) => s.trim().toLowerCase())
-      .filter((s: string) => s.length > 0);
+    // const labels = text
+    //   .split(',')
+    //   .map((s: string) => s.trim().toLowerCase())
+    //   .filter((s: string) => s.length > 0);
+
+    // Return empty labels for now
+    const labels: string[] = [];
 
     const { error: updateError } = await supabase
       .from('photo_edits')

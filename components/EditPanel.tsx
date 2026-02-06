@@ -1,138 +1,15 @@
 'use client';
 
-import { useCallback, useState, useRef, useMemo } from 'react';
+import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CurvesEditor } from './CurvesEditor';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
-
-interface CurvePoint {
-  x: number;
-  y: number;
-}
-
-interface ChannelCurves {
-  rgb: CurvePoint[];
-  red: CurvePoint[];
-  green: CurvePoint[];
-  blue: CurvePoint[];
-}
-
-interface HSLAdjustments {
-  hue: number;
-  saturation: number;
-  luminance: number;
-}
-
-interface ColorHSL {
-  red: HSLAdjustments;
-  orange: HSLAdjustments;
-  yellow: HSLAdjustments;
-  green: HSLAdjustments;
-  aqua: HSLAdjustments;
-  blue: HSLAdjustments;
-  purple: HSLAdjustments;
-  magenta: HSLAdjustments;
-}
-
-interface SplitToning {
-  shadowHue: number;
-  shadowSaturation: number;
-  highlightHue: number;
-  highlightSaturation: number;
-  balance: number;
-}
-
-interface ColorGrading {
-  shadowLum: number;     // -100 to +100
-  midtoneLum: number;    // -100 to +100
-  highlightLum: number;  // -100 to +100
-  midtoneHue: number;    // 0-360
-  midtoneSat: number;    // 0-100
-  globalHue: number;     // 0-360
-  globalSat: number;     // 0-100
-  globalLum: number;     // -100 to +100
-  blending: number;      // 0-100
-}
-
-interface ColorCalibration {
-  redHue: number;        // -100 to +100
-  redSaturation: number; // -100 to +100
-  greenHue: number;      // -100 to +100
-  greenSaturation: number; // -100 to +100
-  blueHue: number;       // -100 to +100
-  blueSaturation: number; // -100 to +100
-}
-
-const DEFAULT_CURVES: ChannelCurves = {
-  rgb: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
-  red: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
-  green: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
-  blue: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
-};
-
-type CanvasImage = {
-  id: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  src: string;
-  rotation: number;
-  scaleX: number;
-  scaleY: number;
-  // Light
-  exposure: number;
-  contrast: number;
-  highlights: number;
-  shadows: number;
-  whites: number;
-  blacks: number;
-  texture?: number;
-  // Color
-  temperature: number;
-  vibrance: number;
-  saturation: number;
-  shadowTint?: number;
-  colorHSL?: ColorHSL;
-  splitToning?: SplitToning;
-  colorGrading?: ColorGrading;
-  colorCalibration?: ColorCalibration;
-  // Effects
-  clarity: number;
-  dehaze: number;
-  vignette: number;
-  grain: number;
-  grainSize?: number;
-  grainRoughness?: number;
-  // Curves
-  curves: ChannelCurves;
-  // Legacy
-  brightness: number;
-  hue: number;
-  blur: number;
-  filters: string[];
-};
-
-type CanvasText = {
-  id: string;
-  x: number;
-  y: number;
-  text: string;
-  fontSize: number;
-  fill: string;
-  rotation: number;
-};
-
-type ActivePanel = 'curves' | 'light' | 'color' | 'effects' | 'presets' | null;
-
-interface Preset {
-  id: string;
-  name: string;
-  settings: Partial<CanvasImage>;
-}
-
-type BypassTab = 'curves' | 'light' | 'color' | 'effects';
+import {
+  type CurvePoint, type ChannelCurves, type ColorHSL,
+  type CanvasImage, type CanvasText, type ActivePanel, type BypassTab, type Preset,
+  DEFAULT_CURVES,
+} from '@/lib/types';
 
 interface EditPanelProps {
   object: CanvasImage | CanvasText;
@@ -149,9 +26,19 @@ interface EditPanelProps {
   onToggleBypass?: (tab: BypassTab) => void;
   /** When true, delete button shows loading spinner (e.g. while deleting photo). */
   isDeleting?: boolean;
+  /** Called when user starts/stops dragging any slider (for low-res preview during adjustment). */
+  onSliderDraggingChange?: (dragging: boolean) => void;
+  /** Called when slider value has been unchanged for a short time while still dragging (show full quality). */
+  onSliderSettled?: () => void;
+  /** Called when user moves slider again after having settled (back to low-res preview). */
+  onSliderUnsettled?: () => void;
 }
 
-// Slider component with throttled updates for performance
+// Slider component with debounced onChange (updates after user pauses dragging)
+const SLIDER_DEBOUNCE_MS = 28;
+/** After this long with no movement while still dragging, show full-quality preview. */
+const SLIDER_SETTLED_MS = 180;
+
 function Slider({
   label,
   value,
@@ -159,7 +46,11 @@ function Slider({
   max,
   step,
   defaultValue,
-  onChange
+  onChange,
+  onDragStart,
+  onDragEnd,
+  onSliderSettled,
+  onSliderUnsettled,
 }: {
   label: string;
   value: number;
@@ -168,47 +59,69 @@ function Slider({
   step: number;
   defaultValue: number;
   onChange: (v: number) => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
+  onSliderSettled?: () => void;
+  onSliderUnsettled?: () => void;
 }) {
-  // Local state for immediate visual feedback
   const [localValue, setLocalValue] = useState(value);
-  const rafRef = useRef<number | undefined>(undefined);
-  const lastUpdateRef = useRef(0);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const settledRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Throttled update - max 30fps during drag for better performance
   const handleChange = useCallback((newValue: number) => {
     setLocalValue(newValue);
 
-    const now = performance.now();
-    if (rafRef.current) {
-      cancelAnimationFrame(rafRef.current);
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+    if (settledRef.current) {
+      clearTimeout(settledRef.current);
+      settledRef.current = undefined;
     }
 
-    // Throttle to ~30fps (33ms) during drag
-    if (now - lastUpdateRef.current >= 33) {
-      lastUpdateRef.current = now;
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = undefined;
       onChange(newValue);
-    } else {
-      rafRef.current = requestAnimationFrame(() => {
-        lastUpdateRef.current = performance.now();
-        onChange(newValue);
-      });
-    }
-  }, [onChange]);
+      // After value settles for a short time while still dragging, show full quality
+      settledRef.current = setTimeout(() => {
+        settledRef.current = undefined;
+        onSliderSettled?.();
+      }, SLIDER_SETTLED_MS);
+    }, SLIDER_DEBOUNCE_MS);
+  }, [onChange, onSliderSettled]);
 
   const handleMouseDown = useCallback(() => {
     setIsDragging(true);
     setLocalValue(value);
-  }, [value]);
+    if (settledRef.current) {
+      clearTimeout(settledRef.current);
+      settledRef.current = undefined;
+    }
+    onSliderUnsettled?.();
+    onDragStart?.();
+  }, [value, onDragStart, onSliderUnsettled]);
 
   const handleMouseUp = useCallback(() => {
     setIsDragging(false);
-    // Ensure final value is committed
-    if (rafRef.current) {
-      cancelAnimationFrame(rafRef.current);
+    if (settledRef.current) {
+      clearTimeout(settledRef.current);
+      settledRef.current = undefined;
+    }
+    onDragEnd?.();
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = undefined;
     }
     onChange(localValue);
-  }, [onChange, localValue]);
+  }, [onChange, localValue, onDragEnd]);
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (settledRef.current) clearTimeout(settledRef.current);
+    };
+  }, []);
 
   return (
     <div className="flex items-center justify-between gap-3">
@@ -240,7 +153,7 @@ function Slider({
 }
 
 export function EditPanel(props: EditPanelProps) {
-  const { object, onUpdate, onDelete, onResetToOriginal, onExport, bypassedTabs, onToggleBypass, isDeleting } = props;
+  const { object, onUpdate, onDelete, onResetToOriginal, onExport, bypassedTabs, onToggleBypass, isDeleting, onSliderDraggingChange, onSliderSettled, onSliderUnsettled } = props;
   const isImage = 'src' in object;
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
@@ -248,6 +161,21 @@ export function EditPanel(props: EditPanelProps) {
   const [renameValue, setRenameValue] = useState('');
   const [isHSLExpanded, setIsHSLExpanded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const sliderDragCountRef = useRef(0);
+
+  const handleSliderDragStart = useCallback(() => {
+    sliderDragCountRef.current += 1;
+    if (sliderDragCountRef.current === 1) {
+      onSliderDraggingChange?.(true);
+    }
+  }, [onSliderDraggingChange]);
+
+  const handleSliderDragEnd = useCallback(() => {
+    sliderDragCountRef.current = Math.max(0, sliderDragCountRef.current - 1);
+    if (sliderDragCountRef.current === 0) {
+      onSliderDraggingChange?.(false);
+    }
+  }, [onSliderDraggingChange]);
   const { user } = useAuth();
 
   // Query client for cache invalidation
@@ -771,12 +699,12 @@ export function EditPanel(props: EditPanelProps) {
               </div>
             </div>
             <div className="space-y-3">
-              <Slider label="Exposure" value={img.exposure} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ exposure: v })} />
-              <Slider label="Contrast" value={img.contrast} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ contrast: v })} />
-              <Slider label="Highlights" value={img.highlights} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ highlights: v })} />
-              <Slider label="Shadows" value={img.shadows} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ shadows: v })} />
-              <Slider label="Whites" value={img.whites} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ whites: v })} />
-              <Slider label="Blacks" value={img.blacks} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ blacks: v })} />
+              <Slider label="Exposure" value={img.exposure} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ exposure: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+              <Slider label="Contrast" value={img.contrast} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ contrast: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+              <Slider label="Highlights" value={img.highlights} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ highlights: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+              <Slider label="Shadows" value={img.shadows} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ shadows: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+              <Slider label="Whites" value={img.whites} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ whites: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+              <Slider label="Blacks" value={img.blacks} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ blacks: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
             </div>
           </div>
         </div>
@@ -830,6 +758,10 @@ export function EditPanel(props: EditPanelProps) {
                     step={0.01}
                     value={img.temperature}
                     onChange={(e) => onUpdate({ temperature: parseFloat(e.target.value) })}
+                    onMouseDown={handleSliderDragStart}
+                    onMouseUp={handleSliderDragEnd}
+                    onTouchStart={handleSliderDragStart}
+                    onTouchEnd={handleSliderDragEnd}
                     onDoubleClick={() => onUpdate({ temperature: 0 })}
                     className="flex-1 h-1 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:cursor-pointer"
                     style={{ background: 'linear-gradient(to right, #74c0fc, #ff9f43)' }}
@@ -837,8 +769,8 @@ export function EditPanel(props: EditPanelProps) {
                   <span className="text-[10px] text-[#ff9f43]">Warm</span>
                 </div>
               </div>
-              <Slider label="Vibrance" value={img.vibrance} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ vibrance: v })} />
-              <Slider label="Saturation" value={img.saturation} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ saturation: v })} />
+              <Slider label="Vibrance" value={img.vibrance} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ vibrance: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+              <Slider label="Saturation" value={img.saturation} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ saturation: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
 
               {/* HSL Color Adjustments */}
               <div className="border-t border-[#2a2a2a] pt-3 mt-4">
@@ -870,6 +802,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, red: { ...img.colorHSL?.red, hue: v, saturation: img.colorHSL?.red?.saturation ?? 0, luminance: img.colorHSL?.red?.luminance ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                   <Slider
                     label="Saturation"
@@ -879,6 +812,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, red: { ...img.colorHSL?.red, saturation: v, hue: img.colorHSL?.red?.hue ?? 0, luminance: img.colorHSL?.red?.luminance ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                   <Slider
                     label="Luminance"
@@ -888,6 +822,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, red: { ...img.colorHSL?.red, luminance: v, hue: img.colorHSL?.red?.hue ?? 0, saturation: img.colorHSL?.red?.saturation ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                 </div>
 
@@ -902,6 +837,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, orange: { ...img.colorHSL?.orange, hue: v, saturation: img.colorHSL?.orange?.saturation ?? 0, luminance: img.colorHSL?.orange?.luminance ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                   <Slider
                     label="Saturation"
@@ -911,6 +847,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, orange: { ...img.colorHSL?.orange, saturation: v, hue: img.colorHSL?.orange?.hue ?? 0, luminance: img.colorHSL?.orange?.luminance ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                   <Slider
                     label="Luminance"
@@ -920,6 +857,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, orange: { ...img.colorHSL?.orange, luminance: v, hue: img.colorHSL?.orange?.hue ?? 0, saturation: img.colorHSL?.orange?.saturation ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                 </div>
 
@@ -934,6 +872,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, yellow: { ...img.colorHSL?.yellow, hue: v, saturation: img.colorHSL?.yellow?.saturation ?? 0, luminance: img.colorHSL?.yellow?.luminance ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                   <Slider
                     label="Saturation"
@@ -943,6 +882,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, yellow: { ...img.colorHSL?.yellow, saturation: v, hue: img.colorHSL?.yellow?.hue ?? 0, luminance: img.colorHSL?.yellow?.luminance ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                   <Slider
                     label="Luminance"
@@ -952,6 +892,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, yellow: { ...img.colorHSL?.yellow, luminance: v, hue: img.colorHSL?.yellow?.hue ?? 0, saturation: img.colorHSL?.yellow?.saturation ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                 </div>
 
@@ -966,6 +907,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, green: { ...img.colorHSL?.green, hue: v, saturation: img.colorHSL?.green?.saturation ?? 0, luminance: img.colorHSL?.green?.luminance ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                   <Slider
                     label="Saturation"
@@ -975,6 +917,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, green: { ...img.colorHSL?.green, saturation: v, hue: img.colorHSL?.green?.hue ?? 0, luminance: img.colorHSL?.green?.luminance ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                   <Slider
                     label="Luminance"
@@ -984,6 +927,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, green: { ...img.colorHSL?.green, luminance: v, hue: img.colorHSL?.green?.hue ?? 0, saturation: img.colorHSL?.green?.saturation ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                 </div>
 
@@ -998,6 +942,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, aqua: { ...img.colorHSL?.aqua, hue: v, saturation: img.colorHSL?.aqua?.saturation ?? 0, luminance: img.colorHSL?.aqua?.luminance ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                   <Slider
                     label="Saturation"
@@ -1007,6 +952,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, aqua: { ...img.colorHSL?.aqua, saturation: v, hue: img.colorHSL?.aqua?.hue ?? 0, luminance: img.colorHSL?.aqua?.luminance ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                   <Slider
                     label="Luminance"
@@ -1016,6 +962,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, aqua: { ...img.colorHSL?.aqua, luminance: v, hue: img.colorHSL?.aqua?.hue ?? 0, saturation: img.colorHSL?.aqua?.saturation ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                 </div>
 
@@ -1030,6 +977,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, blue: { ...img.colorHSL?.blue, hue: v, saturation: img.colorHSL?.blue?.saturation ?? 0, luminance: img.colorHSL?.blue?.luminance ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                   <Slider
                     label="Saturation"
@@ -1039,6 +987,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, blue: { ...img.colorHSL?.blue, saturation: v, hue: img.colorHSL?.blue?.hue ?? 0, luminance: img.colorHSL?.blue?.luminance ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                   <Slider
                     label="Luminance"
@@ -1048,6 +997,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, blue: { ...img.colorHSL?.blue, luminance: v, hue: img.colorHSL?.blue?.hue ?? 0, saturation: img.colorHSL?.blue?.saturation ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                 </div>
 
@@ -1062,6 +1012,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, purple: { ...img.colorHSL?.purple, hue: v, saturation: img.colorHSL?.purple?.saturation ?? 0, luminance: img.colorHSL?.purple?.luminance ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                   <Slider
                     label="Saturation"
@@ -1071,6 +1022,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, purple: { ...img.colorHSL?.purple, saturation: v, hue: img.colorHSL?.purple?.hue ?? 0, luminance: img.colorHSL?.purple?.luminance ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                   <Slider
                     label="Luminance"
@@ -1080,6 +1032,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, purple: { ...img.colorHSL?.purple, luminance: v, hue: img.colorHSL?.purple?.hue ?? 0, saturation: img.colorHSL?.purple?.saturation ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                 </div>
 
@@ -1094,6 +1047,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, magenta: { ...img.colorHSL?.magenta, hue: v, saturation: img.colorHSL?.magenta?.saturation ?? 0, luminance: img.colorHSL?.magenta?.luminance ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                   <Slider
                     label="Saturation"
@@ -1103,6 +1057,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, magenta: { ...img.colorHSL?.magenta, saturation: v, hue: img.colorHSL?.magenta?.hue ?? 0, luminance: img.colorHSL?.magenta?.luminance ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                   <Slider
                     label="Luminance"
@@ -1112,6 +1067,7 @@ export function EditPanel(props: EditPanelProps) {
                     step={1}
                     defaultValue={0}
                     onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, magenta: { ...img.colorHSL?.magenta, luminance: v, hue: img.colorHSL?.magenta?.hue ?? 0, saturation: img.colorHSL?.magenta?.saturation ?? 0 } } as ColorHSL })}
+                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
                   />
                 </div>
                   </>
@@ -1146,10 +1102,10 @@ export function EditPanel(props: EditPanelProps) {
               </div>
             </div>
             <div className="space-y-3">
-              <Slider label="Clarity" value={img.clarity} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ clarity: v })} />
-              <Slider label="Dehaze" value={img.dehaze} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ dehaze: v })} />
-              <Slider label="Vignette" value={img.vignette} min={0} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ vignette: v })} />
-              <Slider label="Grain" value={img.grain} min={0} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ grain: v })} />
+              <Slider label="Clarity" value={img.clarity} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ clarity: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+              <Slider label="Dehaze" value={img.dehaze} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ dehaze: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+              <Slider label="Vignette" value={img.vignette} min={0} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ vignette: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+              <Slider label="Grain" value={img.grain} min={0} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ grain: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
             </div>
           </div>
         </div>

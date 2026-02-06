@@ -3,17 +3,9 @@
  * Mirrors the main app's Light / Curves / Color / Effects order.
  */
 
-export interface CurvePoint {
-  x: number;
-  y: number;
-}
+import { type CurvePoint, type ChannelCurves } from '@/lib/types';
 
-export interface ChannelCurves {
-  rgb: CurvePoint[];
-  red: CurvePoint[];
-  green: CurvePoint[];
-  blue: CurvePoint[];
-}
+export type { CurvePoint, ChannelCurves };
 
 export interface SandboxImageFilters {
   exposure?: number;

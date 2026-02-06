@@ -5,87 +5,13 @@
  * These operate on raw pixel buffers (RGB, 3 channels per pixel)
  */
 
-// Type definitions (matching client-side)
-interface CurvePoint {
-  x: number;
-  y: number;
-}
+import {
+  type CurvePoint, type ChannelCurves, type ColorHSL,
+  type SplitToning, type ColorGrading, type ColorCalibration,
+  type EditValues,
+} from '@/lib/types';
 
-interface ChannelCurves {
-  rgb: CurvePoint[];
-  red: CurvePoint[];
-  green: CurvePoint[];
-  blue: CurvePoint[];
-}
-
-interface HSLAdjustment {
-  hue?: number;
-  saturation?: number;
-  luminance?: number;
-}
-
-interface ColorHSL {
-  red?: HSLAdjustment;
-  orange?: HSLAdjustment;
-  yellow?: HSLAdjustment;
-  green?: HSLAdjustment;
-  aqua?: HSLAdjustment;
-  blue?: HSLAdjustment;
-  purple?: HSLAdjustment;
-  magenta?: HSLAdjustment;
-}
-
-interface SplitToning {
-  shadowHue: number;
-  shadowSaturation: number;
-  highlightHue: number;
-  highlightSaturation: number;
-  balance: number;
-}
-
-interface ColorGrading {
-  shadowLum: number;
-  midtoneLum: number;
-  highlightLum: number;
-  midtoneHue: number;
-  midtoneSat: number;
-  globalHue: number;
-  globalSat: number;
-  globalLum: number;
-  blending: number;
-}
-
-interface ColorCalibration {
-  redHue: number;
-  redSaturation: number;
-  greenHue: number;
-  greenSaturation: number;
-  blueHue: number;
-  blueSaturation: number;
-}
-
-export interface EditValues {
-  exposure?: number;
-  contrast?: number;
-  highlights?: number;
-  shadows?: number;
-  whites?: number;
-  blacks?: number;
-  brightness?: number;
-  temperature?: number;
-  vibrance?: number;
-  saturation?: number;
-  clarity?: number;
-  dehaze?: number;
-  vignette?: number;
-  grain?: number;
-  curves?: ChannelCurves;
-  colorHSL?: ColorHSL;
-  splitToning?: SplitToning;
-  shadowTint?: number;
-  colorGrading?: ColorGrading;
-  colorCalibration?: ColorCalibration;
-}
+export type { EditValues };
 
 // Helper: Clamp value to 0-255
 const clamp = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v);
