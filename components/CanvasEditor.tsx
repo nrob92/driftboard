@@ -1224,15 +1224,23 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     setImageContextMenu(null);
   }, [imageContextMenu, images]);
 
-  const handlePasteEdit = useCallback(() => {
+  const handlePasteEdit = useCallback(async () => {
     if (!imageContextMenu || !copiedEdit) return;
-    const ids = new Set(imageContextMenu.selectedIds);
-    setImages((prev) =>
-      prev.map((img) => (ids.has(img.id) ? { ...img, ...copiedEdit } : img))
-    );
-    saveToHistory();
+    const idsArr = imageContextMenu.selectedIds;
+    const ids = new Set(idsArr);
+    const total = ids.size;
     setImageContextMenu(null);
-    if (ids.size > 1) {
+    for (let i = 0; i < total; i++) {
+      useUIStore.getState().setApplyPresetProgress({ current: i + 1, total });
+      const doneIds = new Set(idsArr.slice(0, i + 1));
+      setImages((prev) =>
+        prev.map((img) => (doneIds.has(img.id) ? { ...img, ...copiedEdit } : img))
+      );
+      await new Promise((r) => setTimeout(r, 16));
+    }
+    setTimeout(() => useUIStore.getState().setApplyPresetProgress(null), 400);
+    saveToHistory();
+    if (total > 1) {
       setSelectedIds([]);
       lastSelectedIdRef.current = null;
     }
@@ -1275,6 +1283,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const handleApplyPresetToSelection = useCallback(async (preset: Preset) => {
     const ids = applyPresetToSelectionIds;
     if (!ids || ids.length === 0) return;
+    useUIStore.getState().setApplyPresetProgress({ current: 1, total: ids.length });
     setApplyPresetToSelectionIds(null);
     const resetSettings: Partial<CanvasImage> = {
       exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, texture: 0,
@@ -1285,18 +1294,17 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       ...preset.settings,
     };
     const total = ids.length;
-    const idSet = new Set(ids);
     for (let i = 0; i < total; i++) {
-      setApplyPresetProgress({ current: i + 1, total });
+      useUIStore.getState().setApplyPresetProgress({ current: i + 1, total });
       const doneIds = new Set(ids.slice(0, i + 1));
       setImages((prev) =>
         prev.map((img) => (doneIds.has(img.id) ? { ...img, ...resetSettings } : img))
       );
       await new Promise((r) => setTimeout(r, 16));
     }
-    setApplyPresetProgress(null);
+    setTimeout(() => useUIStore.getState().setApplyPresetProgress(null), 400);
     saveToHistory();
-  }, [applyPresetToSelectionIds, setApplyPresetToSelectionIds, setApplyPresetProgress, saveToHistory]);
+  }, [applyPresetToSelectionIds, setApplyPresetToSelectionIds, saveToHistory]);
 
   // Open modal to name folder when creating from multi-select
   const handleCreateFolderFromSelection = useCallback(() => {
@@ -2985,9 +2993,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         </div>
       )}
 
-      {/* Apply preset progress */}
+      {/* Apply preset progress - fixed + z-[60] so it shows above Apply preset modal (z-50) */}
       {applyPresetProgress && (
-        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 bg-[#171717] border border-[#2a2a2a] rounded-xl px-4 py-3 shadow-2xl shadow-black/50">
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-3 bg-[#171717] border border-[#2a2a2a] rounded-xl px-4 py-3 shadow-2xl shadow-black/50">
           <div className="w-5 h-5 border-2 border-[#3ECF8E] border-t-transparent rounded-full animate-spin" />
           <span className="text-white text-sm font-medium">
             Applying preset {applyPresetProgress.current} of {applyPresetProgress.total}
@@ -3575,7 +3583,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                       setFolderContextMenu({ x: e.evt.clientX, y: e.evt.clientY, folderId: currentFolder.id });
                     }}
                   >
-                    {/* Folder Label (name + plus) - one Group so they scale and move together */}
+                    {/* Folder Label (name + plus) - rendered last so it draws on top during drag */}
                     <Group
                       x={currentFolder.x}
                       y={currentFolder.y - labelYOffset}
@@ -3589,16 +3597,19 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                         const container = e.target.getStage()?.container();
                         if (container && !isDragging) container.style.cursor = 'default';
                       }}
-                      onDragStart={() => {
+                      onDragStart={(e) => {
                         folderNameDragRef.current = true;
+                        e.target.moveToTop(); // Keep label on top during drag so it doesn't hide behind folder
                       }}
                       onDragMove={(e) => {
                         const newX = e.target.x();
                         const newY = e.target.y();
+                        // Group is at folder.y - labelYOffset; store folder anchor so label stays above content
+                        const anchorY = newY + labelYOffset;
                         const now = Date.now();
 
                         const updatedFolders = folders.map((f) =>
-                          f.id === currentFolder.id ? { ...f, x: newX, y: newY } : f
+                          f.id === currentFolder.id ? { ...f, x: newX, y: anchorY } : f
                         );
 
                         const folderImgs = images.filter(img => currentFolder.imageIds.includes(img.id));
@@ -3607,7 +3618,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                           const reflowedImages = folderImgs.map((img) => ({
                             ...img,
                             x: img.x + (newX - currentFolder.x),
-                            y: img.y + (newY - currentFolder.y),
+                            y: img.y + (anchorY - currentFolder.y),
                           }));
                           updatedImages = images.map((img) => {
                             const reflowed = reflowedImages.find(r => r.id === img.id);
@@ -4382,13 +4393,25 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 Border…
               </button>
               {user && (
-                <button
-                  type="button"
-                  onClick={handleCreatePresetClick}
-                  className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors border-t border-[#2a2a2a]"
-                >
-                  Create preset…
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setApplyPresetToSelectionIds([imageContextMenu.imageId]);
+                      setImageContextMenu(null);
+                    }}
+                    className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors border-t border-[#2a2a2a]"
+                  >
+                    Apply preset…
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCreatePresetClick}
+                    className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors"
+                  >
+                    Create preset…
+                  </button>
+                </>
               )}
             </>
           )}
