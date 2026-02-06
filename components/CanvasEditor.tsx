@@ -711,27 +711,19 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           await new Promise((r) => setTimeout(r, CHUNK_DELAY_MS));
           await loadBatch(start, start + CHUNK_SIZE);
         }
-        const newImages = loadedImages;
-
         // Apply any remaining edit fields to images we might have missed (e.g. originalStoragePath from storage_path key)
-        if (savedEdits && savedEdits.length > 0) {
-          for (const img of newImages) {
-            const edit = savedEdits.find(
-              (e: PhotoEdits) =>
-                e.storage_path === img.storagePath ||
-                e.storage_path === (img.originalStoragePath ?? '') ||
-                (e.original_storage_path != null && e.original_storage_path === img.storagePath)
-            );
-            if (edit) {
-              // Only use backend position when both x and y exist and are valid numbers
+        // Use immutable updates — objects may be frozen when coming from store/React
+        const newImages = savedEdits && savedEdits.length > 0
+          ? loadedImages.map((img) => {
+              const edit = savedEdits.find(
+                (e: PhotoEdits) =>
+                  e.storage_path === img.storagePath ||
+                  e.storage_path === (img.originalStoragePath ?? '') ||
+                  (e.original_storage_path != null && e.original_storage_path === img.storagePath)
+              );
+              if (!edit) return img;
               const hasValidPosition = edit.x != null && edit.y != null
                 && Number.isFinite(Number(edit.x)) && Number.isFinite(Number(edit.y));
-              if (hasValidPosition) {
-                img.x = Number(edit.x);
-                img.y = Number(edit.y);
-              }
-              if (edit.original_storage_path != null) img.originalStoragePath = edit.original_storage_path;
-              // Clamp dimensions to max size (in case old data has larger values)
               let savedWidth = edit.width ?? img.width;
               let savedHeight = edit.height ?? img.height;
               const maxSize = GRID_CONFIG.imageMaxSize;
@@ -740,50 +732,50 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 savedWidth = savedWidth * ratio;
                 savedHeight = savedHeight * ratio;
               }
-              img.width = savedWidth;
-              img.height = savedHeight;
-              img.folderId = edit.folder_id != null ? String(edit.folder_id) : undefined;
-              img.rotation = edit.rotation ?? 0;
-              img.scaleX = edit.scale_x ?? 1;
-              img.scaleY = edit.scale_y ?? 1;
-              if (edit.taken_at != null) img.takenAt = edit.taken_at;
-              if (edit.camera_make != null) img.cameraMake = edit.camera_make;
-              if (edit.camera_model != null) img.cameraModel = edit.camera_model;
-              if (edit.labels != null && Array.isArray(edit.labels)) img.labels = edit.labels;
-              // Light
-              img.exposure = edit.exposure ?? 0;
-              img.contrast = edit.contrast ?? 0;
-              img.highlights = edit.highlights ?? 0;
-              img.shadows = edit.shadows ?? 0;
-              img.whites = edit.whites ?? 0;
-              img.blacks = edit.blacks ?? 0;
-              img.texture = edit.texture ?? 0;
-              // Color
-              img.temperature = edit.temperature ?? 0;
-              img.vibrance = edit.vibrance ?? 0;
-              img.saturation = edit.saturation ?? 0;
-              img.shadowTint = edit.shadow_tint ?? 0;
-              img.colorHSL = edit.color_hsl ?? undefined;
-              img.splitToning = edit.split_toning ?? undefined;
-              img.colorGrading = edit.color_grading ?? undefined;
-              img.colorCalibration = edit.color_calibration ?? undefined;
-              // Effects
-              img.clarity = edit.clarity ?? 0;
-              img.dehaze = edit.dehaze ?? 0;
-              img.vignette = edit.vignette ?? 0;
-              img.grain = edit.grain ?? 0;
-              img.grainSize = edit.grain_size ?? 0;
-              img.grainRoughness = edit.grain_roughness ?? 0;
-              // Curves
-              img.curves = edit.curves ?? { ...DEFAULT_CURVES };
-              // Legacy
-              img.brightness = edit.brightness ?? 0;
-              img.hue = edit.hue ?? 0;
-              img.blur = edit.blur ?? 0;
-              img.filters = edit.filters ?? [];
-            }
-          }
-        }
+              return {
+                ...img,
+                x: hasValidPosition ? Number(edit.x) : img.x,
+                y: hasValidPosition ? Number(edit.y) : img.y,
+                ...(edit.original_storage_path != null && { originalStoragePath: edit.original_storage_path }),
+                width: savedWidth,
+                height: savedHeight,
+                folderId: edit.folder_id != null ? String(edit.folder_id) : undefined,
+                rotation: edit.rotation ?? 0,
+                scaleX: edit.scale_x ?? 1,
+                scaleY: edit.scale_y ?? 1,
+                ...(edit.taken_at != null && { takenAt: edit.taken_at }),
+                ...(edit.camera_make != null && { cameraMake: edit.camera_make }),
+                ...(edit.camera_model != null && { cameraModel: edit.camera_model }),
+                ...(edit.labels != null && Array.isArray(edit.labels) && { labels: edit.labels }),
+                exposure: edit.exposure ?? 0,
+                contrast: edit.contrast ?? 0,
+                highlights: edit.highlights ?? 0,
+                shadows: edit.shadows ?? 0,
+                whites: edit.whites ?? 0,
+                blacks: edit.blacks ?? 0,
+                texture: edit.texture ?? 0,
+                temperature: edit.temperature ?? 0,
+                vibrance: edit.vibrance ?? 0,
+                saturation: edit.saturation ?? 0,
+                shadowTint: edit.shadow_tint ?? 0,
+                colorHSL: edit.color_hsl ?? undefined,
+                splitToning: edit.split_toning ?? undefined,
+                colorGrading: edit.color_grading ?? undefined,
+                colorCalibration: edit.color_calibration ?? undefined,
+                clarity: edit.clarity ?? 0,
+                dehaze: edit.dehaze ?? 0,
+                vignette: edit.vignette ?? 0,
+                grain: edit.grain ?? 0,
+                grainSize: edit.grain_size ?? 0,
+                grainRoughness: edit.grain_roughness ?? 0,
+                curves: edit.curves ?? { ...DEFAULT_CURVES },
+                brightness: edit.brightness ?? 0,
+                hue: edit.hue ?? 0,
+                blur: edit.blur ?? 0,
+                filters: edit.filters ?? [],
+              };
+            })
+          : loadedImages;
 
         const loadedFolders = buildFoldersFromSaved(newImages);
 
@@ -1702,7 +1694,20 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   // Handle real-time grid snapping and shuffling during drag
   const handleImageDragMove = useCallback(
     (e: Konva.KonvaEventObject<DragEvent>) => {
-      dragMoveNodeRef.current = e.target as Konva.Image;
+      const node = e.target;
+      const currentX = node.x();
+      const currentY = node.y();
+
+      // Sync position to store on every drag move (like folder drag) — keeps React in sync and triggers batchDraw
+      setImages((prev) =>
+        prev.map((img) =>
+          img.id === node.id() ? { ...img, x: currentX, y: currentY } : img
+        )
+      );
+      // Force redraw immediately — Konva.autoDrawEnabled is false, so we must call batchDraw
+      stageRef.current?.getLayers().forEach((l) => l.batchDraw());
+
+      dragMoveNodeRef.current = node as Konva.Image;
       if (dragMoveRafRef.current != null) return;
       dragMoveRafRef.current = requestAnimationFrame(() => {
         dragMoveRafRef.current = null;
