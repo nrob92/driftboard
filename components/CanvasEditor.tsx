@@ -12,7 +12,7 @@ import { useAuth } from '@/lib/auth';
 import {
   type ChannelCurves, type ColorHSL,
   type SplitToning, type ColorGrading, type ColorCalibration,
-  type CanvasImage, type CanvasText, type PhotoFolder,
+  type CanvasImage, type CanvasText, type PhotoFolder, type Preset,
   DEFAULT_CURVES, EDIT_KEYS, cloneEditValue,
 } from '@/lib/types';
 import { useCanvasStore, selectImages, selectSelectedIds, selectFolders, selectStageScale, selectStagePosition, selectDimensions } from '@/lib/stores/canvasStore';
@@ -226,6 +226,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const confirmDeletePhotoIds = useUIStore((s) => s.confirmDeletePhotoIds);
   const deletePhotoDontAskAgain = useUIStore((s) => s.deletePhotoDontAskAgain);
   const deleteFolderProgress = useUIStore((s) => s.deleteFolderProgress);
+  const applyPresetToSelectionIds = useUIStore((s) => s.applyPresetToSelectionIds);
+  const applyPresetProgress = useUIStore((s) => s.applyPresetProgress);
   const zoomedImageId = useUIStore((s) => s.zoomedImageId);
   const isUploading = useUIStore((s) => s.isUploading);
   const showHeader = useUIStore((s) => s.showHeader);
@@ -260,6 +262,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const setConfirmDeletePhotoIds = uiActions.setConfirmDeletePhotoIds;
   const setDeletePhotoDontAskAgain = uiActions.setDeletePhotoDontAskAgain;
   const setDeleteFolderProgress = uiActions.setDeleteFolderProgress;
+  const setApplyPresetToSelectionIds = uiActions.setApplyPresetToSelectionIds;
+  const setApplyPresetProgress = uiActions.setApplyPresetProgress;
   const setZoomedImageId = uiActions.setZoomedImageId;
   const setIsUploading = uiActions.setIsUploading;
   const setShowHeader = uiActions.setShowHeader;
@@ -414,6 +418,21 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     },
     enabled: !!user,
     staleTime: 5 * 60 * 1000, // Cache 5 min to reduce refetches
+  });
+
+  const { data: presets = [] } = useQuery({
+    queryKey: ['presets', user?.id] as const,
+    queryFn: async () => {
+      if (!user) return [];
+      const { data, error } = await supabase.from('presets').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
+      if (error) {
+        console.error('Error loading presets:', error);
+        return [];
+      }
+      return (data ?? []).map((row) => ({ id: row.id, name: row.name, settings: row.settings as Partial<CanvasImage> })) as Preset[];
+    },
+    enabled: !!user,
+    staleTime: 5 * 60 * 1000,
   });
 
   // Track load key (user + filter) to prevent duplicate processing
@@ -1252,6 +1271,32 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     setCreatePresetFromImageId(null);
     setCreatePresetName('');
   }, []);
+
+  const handleApplyPresetToSelection = useCallback(async (preset: Preset) => {
+    const ids = applyPresetToSelectionIds;
+    if (!ids || ids.length === 0) return;
+    setApplyPresetToSelectionIds(null);
+    const resetSettings: Partial<CanvasImage> = {
+      exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, texture: 0,
+      temperature: 0, vibrance: 0, saturation: 0, hue: 0, shadowTint: 0,
+      colorHSL: undefined, splitToning: undefined, colorGrading: undefined, colorCalibration: undefined,
+      clarity: 0, dehaze: 0, vignette: 0, grain: 0, grainSize: 0, grainRoughness: 0,
+      curves: { ...DEFAULT_CURVES }, filters: [], brightness: 0, blur: 0,
+      ...preset.settings,
+    };
+    const total = ids.length;
+    const idSet = new Set(ids);
+    for (let i = 0; i < total; i++) {
+      setApplyPresetProgress({ current: i + 1, total });
+      const doneIds = new Set(ids.slice(0, i + 1));
+      setImages((prev) =>
+        prev.map((img) => (doneIds.has(img.id) ? { ...img, ...resetSettings } : img))
+      );
+      await new Promise((r) => setTimeout(r, 16));
+    }
+    setApplyPresetProgress(null);
+    saveToHistory();
+  }, [applyPresetToSelectionIds, setApplyPresetToSelectionIds, setApplyPresetProgress, saveToHistory]);
 
   // Open modal to name folder when creating from multi-select
   const handleCreateFolderFromSelection = useCallback(() => {
@@ -2650,6 +2695,87 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     }
   }, [folders, images, dimensions, stagePosition, stageScale, user, saveToHistory]);
 
+  // Recenter folders horizontally (stack in a row, centered — same as main Recenter button)
+  const handleRecenterHorizontally = useCallback(async () => {
+    if (folders.length === 0) return;
+    const { folderGap } = GRID_CONFIG;
+    let totalWidth = 0;
+    for (const folder of folders) totalWidth += folder.width;
+    totalWidth += (folders.length - 1) * folderGap;
+    const viewportCenterX = (dimensions.width / 2 - stagePosition.x) / stageScale;
+    const viewportCenterY = (dimensions.height / 2 - stagePosition.y) / stageScale;
+    let currentX = viewportCenterX - totalWidth / 2;
+    const sortedFolders = [...folders].sort((a, b) => a.x - b.x);
+    const recenteredFolders: PhotoFolder[] = [];
+    let recenteredImages = [...images];
+    for (const folder of sortedFolders) {
+      const newFolder = { ...folder, x: currentX, y: viewportCenterY - 100 };
+      recenteredFolders.push(newFolder);
+      const deltaX = newFolder.x - folder.x;
+      const deltaY = newFolder.y - folder.y;
+      const folderImgIds = new Set(folder.imageIds);
+      recenteredImages = recenteredImages.map((img) =>
+        folderImgIds.has(img.id) ? { ...img, x: img.x + deltaX, y: img.y + deltaY } : img
+      );
+      currentX += folder.width + folderGap;
+    }
+    setFolders(recenteredFolders);
+    setImages(recenteredImages);
+    saveToHistory();
+    if (user) {
+      for (const f of recenteredFolders) {
+        supabase.from('photo_folders').update({ x: Math.round(f.x), y: Math.round(f.y) }).eq('id', f.id).eq('user_id', user.id).then(({ error }) => { if (error) console.error(error); });
+      }
+      for (const img of recenteredImages.filter(i => (i.storagePath || i.originalStoragePath) && i.folderId)) {
+        supabase.from('photo_edits').update({ x: Math.round(img.x), y: Math.round(img.y) }).eq('storage_path', img.storagePath || img.originalStoragePath!).eq('user_id', user.id).then(({ error }) => { if (error) console.error(error); });
+      }
+    }
+  }, [folders, images, dimensions, stagePosition, stageScale, user, saveToHistory]);
+
+  // Recenter folders vertically (stack in a column, centered — same as main Recenter but vertical)
+  const handleRecenterVertically = useCallback(async () => {
+    if (folders.length === 0) return;
+    const { folderGap } = GRID_CONFIG;
+    const labelFontSize = Math.max(6, Math.min(96, 24 / (stageScale * stageScale)));
+    const labelYOffset = Math.max(0, labelFontSize - 28);
+    const LABEL_BAR = 30;
+    let totalHeight = 0;
+    for (const folder of folders) {
+      const h = folder.height ?? getFolderBorderHeight(folder, folder.imageIds.length);
+      totalHeight += LABEL_BAR + h + labelYOffset;
+    }
+    totalHeight += (folders.length - 1) * folderGap;
+    const viewportCenterX = (dimensions.width / 2 - stagePosition.x) / stageScale;
+    const viewportCenterY = (dimensions.height / 2 - stagePosition.y) / stageScale;
+    let currentY = viewportCenterY - totalHeight / 2;
+    const sortedFolders = [...folders].sort((a, b) => a.y - b.y);
+    const recenteredFolders: PhotoFolder[] = [];
+    let recenteredImages = [...images];
+    for (const folder of sortedFolders) {
+      const folderHeight = folder.height ?? getFolderBorderHeight(folder, folder.imageIds.length);
+      const newFolder = { ...folder, x: viewportCenterX - folder.width / 2, y: currentY };
+      recenteredFolders.push(newFolder);
+      const deltaX = newFolder.x - folder.x;
+      const deltaY = newFolder.y - folder.y;
+      const folderImgIds = new Set(folder.imageIds);
+      recenteredImages = recenteredImages.map((img) =>
+        folderImgIds.has(img.id) ? { ...img, x: img.x + deltaX, y: img.y + deltaY } : img
+      );
+      currentY += LABEL_BAR + folderHeight + folderGap + labelYOffset;
+    }
+    setFolders(recenteredFolders);
+    setImages(recenteredImages);
+    saveToHistory();
+    if (user) {
+      for (const f of recenteredFolders) {
+        supabase.from('photo_folders').update({ x: Math.round(f.x), y: Math.round(f.y) }).eq('id', f.id).eq('user_id', user.id).then(({ error }) => { if (error) console.error(error); });
+      }
+      for (const img of recenteredImages.filter(i => (i.storagePath || i.originalStoragePath) && i.folderId)) {
+        supabase.from('photo_edits').update({ x: Math.round(img.x), y: Math.round(img.y) }).eq('storage_path', img.storagePath || img.originalStoragePath!).eq('user_id', user.id).then(({ error }) => { if (error) console.error(error); });
+      }
+    }
+  }, [folders, images, dimensions, stagePosition, stageScale, user, saveToHistory]);
+
   // Add text at double-click position (left button only)
   const handleStageDoubleClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
     if (e.evt.button !== 0) return;
@@ -2817,7 +2943,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     <div className="relative h-full w-full bg-[#0d0d0d]">
       <TopBar
         onUpload={handleFileUpload}
-        onRecenter={handleRecenterFolders}
+        onRecenterHorizontally={handleRecenterHorizontally}
+        onRecenterVertically={handleRecenterVertically}
         onUndo={handleUndo}
         onRedo={handleRedo}
         canUndo={editHistory.length > 0}
@@ -2855,6 +2982,16 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             Exporting {exportProgress.current} of {exportProgress.total}
           </span>
           <span className="text-[#888] text-xs">You can keep editing</span>
+        </div>
+      )}
+
+      {/* Apply preset progress */}
+      {applyPresetProgress && (
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 bg-[#171717] border border-[#2a2a2a] rounded-xl px-4 py-3 shadow-2xl shadow-black/50">
+          <div className="w-5 h-5 border-2 border-[#3ECF8E] border-t-transparent rounded-full animate-spin" />
+          <span className="text-white text-sm font-medium">
+            Applying preset {applyPresetProgress.current} of {applyPresetProgress.total}
+          </span>
         </div>
       )}
 
@@ -3425,6 +3562,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
                 const isHovered = hoveredFolderBorder === currentFolder.id;
                 const isResizing = resizingFolderId === currentFolder.id;
+                const labelFontSize = Math.max(6, Math.min(96, 24 / (stageScale * stageScale)));
+                const labelYOffset = Math.max(0, labelFontSize - 28);
 
                 return (
                   <Group
@@ -3439,7 +3578,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                     {/* Folder Label (name + plus) - one Group so they scale and move together */}
                     <Group
                       x={currentFolder.x}
-                      y={currentFolder.y}
+                      y={currentFolder.y - labelYOffset}
                       draggable
                       listening={true}
                       onMouseEnter={(e) => {
@@ -3542,7 +3681,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                         x={0}
                         y={0}
                         text={currentFolder.name}
-                        fontSize={16}
+                        fontSize={labelFontSize}
                         fontStyle="600"
                         fill={currentFolder.color}
                         listening={true}
@@ -3553,7 +3692,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                         x={folderLabelWidths[currentFolder.id] ?? 0}
                         y={2}
                         text=" +"
-                        fontSize={16}
+                        fontSize={labelFontSize}
                         fontStyle="600"
                         fill={currentFolder.color}
                         listening={true}
@@ -4171,6 +4310,18 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               >
                 Paste edit to selection ({imageContextMenu.selectedIds.length} photos)
               </button>
+              {user && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setApplyPresetToSelectionIds(imageContextMenu.selectedIds);
+                    setImageContextMenu(null);
+                  }}
+                  className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors"
+                >
+                  Apply preset… ({imageContextMenu.selectedIds.length} photos)
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleExportSelection}
@@ -4373,6 +4524,39 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         </div>
       )}
 
+      {/* Apply preset to selection modal */}
+      {applyPresetToSelectionIds && applyPresetToSelectionIds.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setApplyPresetToSelectionIds(null)}>
+          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96 max-h-[80vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-white mb-2">Apply preset</h3>
+            <p className="text-sm text-[#888] mb-4">Choose a preset to apply to {applyPresetToSelectionIds.length} photo{applyPresetToSelectionIds.length !== 1 ? 's' : ''}</p>
+            <div className="space-y-2 overflow-y-auto flex-1 min-h-0">
+              {presets.length === 0 ? (
+                <p className="text-sm text-[#666] py-4">No presets yet</p>
+              ) : (
+                presets.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => handleApplyPresetToSelection(preset)}
+                    className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] rounded-xl transition-colors"
+                  >
+                    {preset.name}
+                  </button>
+                ))
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setApplyPresetToSelectionIds(null)}
+              className="mt-4 w-full px-4 py-2.5 text-sm text-[#888] hover:text-white border border-[#333] rounded-xl hover:bg-[#252525] transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       {selectedObject && (
         <EditPanel
           object={selectedObject}
@@ -4475,6 +4659,13 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           }}
           onSliderSettled={() => setSliderSettledWhileDragging(true)}
           onSliderUnsettled={() => setSliderSettledWhileDragging(false)}
+          onApplyPresetProgress={'src' in selectedObject ? (current, total) => {
+            if (current === 0 && total === 0) {
+              setApplyPresetProgress(null);
+            } else {
+              setApplyPresetProgress({ current, total });
+            }
+          } : undefined}
         />
       )}
 

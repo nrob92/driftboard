@@ -32,6 +32,8 @@ interface EditPanelProps {
   onSliderSettled?: () => void;
   /** Called when user moves slider again after having settled (back to low-res preview). */
   onSliderUnsettled?: () => void;
+  /** Called when applying preset (for loading state: "Applying preset 1 of 1"). */
+  onApplyPresetProgress?: (current: number, total: number) => void;
 }
 
 // Slider component with debounced onChange (updates after user pauses dragging)
@@ -153,7 +155,7 @@ function Slider({
 }
 
 export function EditPanel(props: EditPanelProps) {
-  const { object, onUpdate, onDelete, onResetToOriginal, onExport, bypassedTabs, onToggleBypass, isDeleting, onSliderDraggingChange, onSliderSettled, onSliderUnsettled } = props;
+  const { object, onUpdate, onDelete, onResetToOriginal, onExport, bypassedTabs, onToggleBypass, isDeleting, onSliderDraggingChange, onSliderSettled, onSliderUnsettled, onApplyPresetProgress } = props;
   const isImage = 'src' in object;
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
@@ -595,8 +597,12 @@ export function EditPanel(props: EditPanelProps) {
       // Apply preset on top of defaults
       ...preset.settings,
     };
+    onApplyPresetProgress?.(1, 1);
     onUpdate(resetSettings);
-  }, [onUpdate]);
+    if (onApplyPresetProgress) {
+      setTimeout(() => onApplyPresetProgress(0, 0), 400); // (0,0) = clear
+    }
+  }, [onUpdate, onApplyPresetProgress]);
 
   const deletePreset = useCallback(async (presetId: string) => {
     // Delete from database if user is logged in

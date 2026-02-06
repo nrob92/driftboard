@@ -45,7 +45,8 @@ function SearchFilterInput({
 
 interface TopBarProps {
   onUpload: (files: FileList | null) => void;
-  onRecenter: () => void;
+  onRecenterHorizontally?: () => void;
+  onRecenterVertically?: () => void;
   onUndo: () => void;
   onRedo: () => void;
   canUndo: boolean;
@@ -57,7 +58,8 @@ interface TopBarProps {
 
 export function TopBar({
   onUpload,
-  onRecenter,
+  onRecenterHorizontally,
+  onRecenterVertically,
   onUndo,
   onRedo,
   canUndo,
@@ -222,17 +224,39 @@ export function TopBar({
           onChange={handleFileSelect}
           className="hidden"
         />
-        <button
-          onClick={onRecenter}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-[#252525] hover:bg-[#333] rounded-lg transition-colors cursor-pointer"
-          title="Arrange folders in center"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v3m0 12v3" />
-          </svg>
-          Recenter
-        </button>
+        <div className="flex items-center bg-[#252525] rounded-lg overflow-hidden">
+          <span className="px-3 py-1.5 text-sm font-medium text-[#888] cursor-default select-none">
+            Recenter
+          </span>
+          {onRecenterHorizontally && (
+            <>
+              <div className="w-px h-5 bg-[#333]" />
+              <button
+                onClick={onRecenterHorizontally}
+                className="p-2 text-[#999] hover:text-white hover:bg-[#333] transition-colors cursor-pointer"
+                title="Recenter horizontally"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              </button>
+            </>
+          )}
+          {onRecenterVertically && (
+            <>
+              <div className="w-px h-5 bg-[#333]" />
+              <button
+                onClick={onRecenterVertically}
+                className="p-2 text-[#999] hover:text-white hover:bg-[#333] transition-colors cursor-pointer"
+                title="Recenter vertically"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 4v16M12 4v16M18 4v16" />
+                </svg>
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Right side */}

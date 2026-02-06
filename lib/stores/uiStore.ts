@@ -57,7 +57,9 @@ interface UIState extends
   borderDialogImageId: string | null;
   createPresetFromImageId: string | null;
   createPresetName: string;
+  applyPresetToSelectionIds: string[] | null;
   exportProgress: { current: number; total: number } | null;
+  applyPresetProgress: { current: number; total: number } | null;
   saveStatus: 'idle' | 'saving' | 'saved' | 'error';
   zoomedImageId: string | null;
   showHeader: boolean;
@@ -100,7 +102,9 @@ interface UIState extends
   setBorderDialogImageId: (v: string | null) => void;
   setCreatePresetFromImageId: (v: string | null) => void;
   setCreatePresetName: (v: string) => void;
+  setApplyPresetToSelectionIds: (v: string[] | null) => void;
   setExportProgress: (v: { current: number; total: number } | null) => void;
+  setApplyPresetProgress: (v: { current: number; total: number } | null) => void;
   setSaveStatus: (v: 'idle' | 'saving' | 'saved' | 'error') => void;
   setZoomedImageId: (v: string | null) => void;
   setShowHeader: (v: boolean) => void;
@@ -153,7 +157,9 @@ export const useUIStore = create<UIState>()(
     borderDialogImageId: null,
     createPresetFromImageId: null,
     createPresetName: '',
+    applyPresetToSelectionIds: null,
     exportProgress: null,
+    applyPresetProgress: null,
     saveStatus: 'idle',
     zoomedImageId: null,
     showHeader: false,
@@ -190,7 +196,9 @@ export const useUIStore = create<UIState>()(
     setBorderDialogImageId: (v) => set({ borderDialogImageId: v }),
     setCreatePresetFromImageId: (v) => set({ createPresetFromImageId: v }),
     setCreatePresetName: (v) => set({ createPresetName: v }),
+    setApplyPresetToSelectionIds: (v) => set({ applyPresetToSelectionIds: v }),
     setExportProgress: (v) => set({ exportProgress: v }),
+    setApplyPresetProgress: (v) => set({ applyPresetProgress: v }),
     setSaveStatus: (v) => set({ saveStatus: v }),
     setZoomedImageId: (v) => set({ zoomedImageId: v }),
     setShowHeader: (v) => set({ showHeader: v }),
