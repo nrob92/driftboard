@@ -71,6 +71,8 @@ interface UIState extends
     contentSearch?: string;
   };
   isUploading: boolean;
+  mobileEditFullscreen: boolean;
+  mobileMenuOpen: boolean;
 
   // Actions
   setShowFolderPrompt: (v: boolean) => void;
@@ -110,6 +112,8 @@ interface UIState extends
   setShowHeader: (v: boolean) => void;
   setPhotoFilter: (v: UIState['photoFilter'] | ((prev: UIState['photoFilter']) => UIState['photoFilter'])) => void;
   setIsUploading: (v: boolean) => void;
+  setMobileEditFullscreen: (v: boolean) => void;
+  setMobileMenuOpen: (v: boolean) => void;
   closeAllMenus: () => void;
 }
 
@@ -165,6 +169,8 @@ export const useUIStore = create<UIState>()(
     showHeader: false,
     photoFilter: {},
     isUploading: false,
+    mobileEditFullscreen: false,
+    mobileMenuOpen: false,
 
     // Actions
     setShowFolderPrompt: (v) => set({ showFolderPrompt: v }),
@@ -206,6 +212,8 @@ export const useUIStore = create<UIState>()(
       state.photoFilter = typeof v === 'function' ? v(state.photoFilter) : v;
     }),
     setIsUploading: (v) => set({ isUploading: v }),
+    setMobileEditFullscreen: (v) => set({ mobileEditFullscreen: v }),
+    setMobileMenuOpen: (v) => set({ mobileMenuOpen: v }),
     closeAllMenus: () => set({
       folderContextMenu: null,
       imageContextMenu: null,

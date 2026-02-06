@@ -34,6 +34,12 @@ interface EditPanelProps {
   onSliderUnsettled?: () => void;
   /** Called when applying preset (for loading state: "Applying preset 1 of 1"). */
   onApplyPresetProgress?: (current: number, total: number) => void;
+  /** Mobile mode: render fullscreen edit panel instead of bottom toolbar. */
+  isMobile?: boolean;
+  /** Called when user closes the mobile fullscreen edit panel. */
+  onCloseMobileEdit?: () => void;
+  /** Image preview URL for the mobile fullscreen edit mode. */
+  imagePreviewUrl?: string;
 }
 
 // Slider component with debounced onChange (updates after user pauses dragging)
@@ -144,7 +150,7 @@ function Slider({
             setLocalValue(defaultValue);
             onChange(defaultValue);
           }}
-          className="flex-1 h-1 bg-[#333] rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#3ECF8E] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:transition-transform [&::-webkit-slider-thumb]:hover:scale-125"
+          className="flex-1 h-2 md:h-1 bg-[#333] rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5 md:[&::-webkit-slider-thumb]:w-3 md:[&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#3ECF8E] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:transition-transform [&::-webkit-slider-thumb]:hover:scale-125 [&::-moz-range-thumb]:w-5 [&::-moz-range-thumb]:h-5 md:[&::-moz-range-thumb]:w-3 md:[&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-[#3ECF8E] [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer"
         />
         <span className="text-[10px] text-[#666] w-8 text-right tabular-nums">
           {localValue > 0 ? '+' : ''}{Math.round(localValue * 100)}
@@ -155,7 +161,7 @@ function Slider({
 }
 
 export function EditPanel(props: EditPanelProps) {
-  const { object, onUpdate, onDelete, onResetToOriginal, onExport, bypassedTabs, onToggleBypass, isDeleting, onSliderDraggingChange, onSliderSettled, onSliderUnsettled, onApplyPresetProgress } = props;
+  const { object, onUpdate, onDelete, onResetToOriginal, onExport, bypassedTabs, onToggleBypass, isDeleting, onSliderDraggingChange, onSliderSettled, onSliderUnsettled, onApplyPresetProgress, isMobile, onCloseMobileEdit, imagePreviewUrl } = props;
   const isImage = 'src' in object;
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
@@ -668,6 +674,303 @@ export function EditPanel(props: EditPanelProps) {
     setRenameValue('');
   }, []);
 
+  // ─── Mobile Fullscreen Edit Mode ───
+  if (isMobile && isImage) {
+    const ColorHSLDefault: ColorHSL = {
+      red: { hue: 0, saturation: 0, luminance: 0 },
+      orange: { hue: 0, saturation: 0, luminance: 0 },
+      yellow: { hue: 0, saturation: 0, luminance: 0 },
+      green: { hue: 0, saturation: 0, luminance: 0 },
+      aqua: { hue: 0, saturation: 0, luminance: 0 },
+      blue: { hue: 0, saturation: 0, luminance: 0 },
+      purple: { hue: 0, saturation: 0, luminance: 0 },
+      magenta: { hue: 0, saturation: 0, luminance: 0 },
+    };
+
+    const tabButton = (panel: ActivePanel, label: string, isModified: boolean, bypassKey?: BypassTab) => {
+      const isBypassed = bypassKey && bypassedTabs?.has(bypassKey);
+      return (
+        <button
+          key={label}
+          onClick={() => togglePanel(panel)}
+          className={`flex-shrink-0 px-4 py-2.5 min-h-[44px] rounded-lg text-xs font-medium uppercase tracking-wider transition-all whitespace-nowrap ${
+            isBypassed
+              ? 'bg-[#ff6b6b]/20 text-[#ff6b6b] opacity-50 line-through'
+              : activePanel === panel || isModified
+              ? 'bg-[#3ECF8E]/20 text-[#3ECF8E]'
+              : 'bg-[#252525] text-[#999]'
+          }`}
+        >
+          {label}
+        </button>
+      );
+    };
+
+    return (
+      <div className="fixed inset-0 z-40 bg-[#0d0d0d] flex flex-col" style={{ height: '100dvh' }}>
+        {/* Header */}
+        <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-[#2a2a2a] bg-[#171717]">
+          <h2 className="text-sm font-medium text-white">Edit Photo</h2>
+          <button
+            onClick={onCloseMobileEdit}
+            className="px-4 py-2 min-h-[44px] text-sm font-medium text-[#3ECF8E] rounded-lg transition-colors"
+          >
+            Done
+          </button>
+        </div>
+
+        {/* Image Preview */}
+        <div className="flex-shrink-0 h-[35vh] bg-black flex items-center justify-center p-2">
+          {imagePreviewUrl ? (
+            <img
+              src={imagePreviewUrl}
+              alt="Preview"
+              className="max-h-full max-w-full object-contain rounded"
+            />
+          ) : (
+            <div className="text-[#666] text-sm">No preview available</div>
+          )}
+        </div>
+
+        {/* Tab Bar */}
+        <div className="flex-shrink-0 flex overflow-x-auto gap-2 px-3 py-2.5 border-y border-[#2a2a2a] bg-[#171717] scrollbar-none">
+          {tabButton('curves', 'Curves', !!isCurvesModified, 'curves')}
+          {tabButton('light', 'Light', !!isLightModified, 'light')}
+          {tabButton('color', 'Color', !!isColorModified, 'color')}
+          {tabButton('effects', 'Effects', !!isEffectsModified, 'effects')}
+          {tabButton('presets', 'Presets', false)}
+        </div>
+
+        {/* Panel Content (scrollable) */}
+        <div className="flex-1 overflow-y-auto p-4 touch-pan-y">
+          {activePanel === null && (
+            <div className="flex items-center justify-center h-full text-[#666] text-sm">
+              Select a tab above to start editing
+            </div>
+          )}
+
+          {/* Curves */}
+          {activePanel === 'curves' && (
+            <div>
+              <CurvesEditor
+                curves={img.curves || DEFAULT_CURVES}
+                onChange={handleCurvesChange}
+                onClose={() => setActivePanel(null)}
+                isMobile
+              />
+            </div>
+          )}
+
+          {/* Light */}
+          {activePanel === 'light' && (
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-medium text-white">Light</h3>
+                <button
+                  onClick={() => onUpdate({ exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0 })}
+                  className="text-xs text-[#888] hover:text-white transition-colors"
+                >
+                  Reset
+                </button>
+              </div>
+              <div className="space-y-4">
+                <Slider label="Exposure" value={img.exposure} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ exposure: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                <Slider label="Contrast" value={img.contrast} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ contrast: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                <Slider label="Highlights" value={img.highlights} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ highlights: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                <Slider label="Shadows" value={img.shadows} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ shadows: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                <Slider label="Whites" value={img.whites} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ whites: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                <Slider label="Blacks" value={img.blacks} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ blacks: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+              </div>
+            </div>
+          )}
+
+          {/* Color */}
+          {activePanel === 'color' && (
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-medium text-white">Color</h3>
+                <button
+                  onClick={() => onUpdate({ temperature: 0, vibrance: 0, saturation: 0, colorHSL: ColorHSLDefault })}
+                  className="text-xs text-[#888] hover:text-white transition-colors"
+                >
+                  Reset
+                </button>
+              </div>
+              <div className="space-y-4">
+                {/* Temperature */}
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs text-[#888] w-20">Temp</span>
+                  <div className="flex items-center gap-2 flex-1">
+                    <span className="text-[10px] text-[#74c0fc]">Cool</span>
+                    <input
+                      type="range"
+                      min={-1}
+                      max={1}
+                      step={0.01}
+                      value={img.temperature}
+                      onChange={(e) => onUpdate({ temperature: parseFloat(e.target.value) })}
+                      onMouseDown={handleSliderDragStart}
+                      onMouseUp={handleSliderDragEnd}
+                      onTouchStart={handleSliderDragStart}
+                      onTouchEnd={handleSliderDragEnd}
+                      className="flex-1 h-2 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:cursor-pointer"
+                      style={{ background: 'linear-gradient(to right, #74c0fc, #ff9f43)' }}
+                    />
+                    <span className="text-[10px] text-[#ff9f43]">Warm</span>
+                  </div>
+                </div>
+                <Slider label="Vibrance" value={img.vibrance} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ vibrance: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                <Slider label="Saturation" value={img.saturation} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ saturation: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+
+                {/* HSL */}
+                <div className="border-t border-[#2a2a2a] pt-3 mt-4">
+                  <button
+                    onClick={() => setIsHSLExpanded(!isHSLExpanded)}
+                    className="w-full flex items-center justify-between mb-3 text-xs font-medium text-white"
+                  >
+                    <span>HSL / Color</span>
+                    <svg className={`w-4 h-4 transition-transform ${isHSLExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  {isHSLExpanded && (
+                    <>
+                      {(['red', 'orange', 'yellow', 'green', 'aqua', 'blue', 'purple', 'magenta'] as const).map((color) => {
+                        const colorLabels: Record<string, string> = { red: '#ff6b6b', orange: '#ff9f43', yellow: '#ffd93d', green: '#6bcf7f', aqua: '#4ecdc4', blue: '#4d96ff', purple: '#a78bfa', magenta: '#f472b6' };
+                        return (
+                          <div key={color} className="mb-4">
+                            <div className="text-[11px] font-medium mb-2" style={{ color: colorLabels[color] }}>{color.charAt(0).toUpperCase() + color.slice(1)}</div>
+                            <Slider label="Hue" value={img.colorHSL?.[color]?.hue ?? 0} min={-100} max={100} step={1} defaultValue={0}
+                              onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, [color]: { ...img.colorHSL?.[color], hue: v, saturation: img.colorHSL?.[color]?.saturation ?? 0, luminance: img.colorHSL?.[color]?.luminance ?? 0 } } as ColorHSL })}
+                              onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                            <Slider label="Saturation" value={img.colorHSL?.[color]?.saturation ?? 0} min={-100} max={100} step={1} defaultValue={0}
+                              onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, [color]: { ...img.colorHSL?.[color], saturation: v, hue: img.colorHSL?.[color]?.hue ?? 0, luminance: img.colorHSL?.[color]?.luminance ?? 0 } } as ColorHSL })}
+                              onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                            <Slider label="Luminance" value={img.colorHSL?.[color]?.luminance ?? 0} min={-100} max={100} step={1} defaultValue={0}
+                              onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, [color]: { ...img.colorHSL?.[color], luminance: v, hue: img.colorHSL?.[color]?.hue ?? 0, saturation: img.colorHSL?.[color]?.saturation ?? 0 } } as ColorHSL })}
+                              onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Effects */}
+          {activePanel === 'effects' && (
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-medium text-white">Effects</h3>
+                <button
+                  onClick={() => onUpdate({ clarity: 0, dehaze: 0, vignette: 0, grain: 0 })}
+                  className="text-xs text-[#888] hover:text-white transition-colors"
+                >
+                  Reset
+                </button>
+              </div>
+              <div className="space-y-4">
+                <Slider label="Clarity" value={img.clarity} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ clarity: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                <Slider label="Dehaze" value={img.dehaze} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ dehaze: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                <Slider label="Vignette" value={img.vignette} min={0} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ vignette: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                <Slider label="Grain" value={img.grain} min={0} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ grain: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+              </div>
+            </div>
+          )}
+
+          {/* Presets */}
+          {activePanel === 'presets' && (
+            <div>
+              <h3 className="text-sm font-medium text-white mb-4">Presets</h3>
+              <input ref={fileInputRef} type="file" accept=".xmp" multiple onChange={handleFileSelect} className="hidden" />
+              <div
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={`mb-3 border-2 border-dashed rounded-lg py-4 px-4 text-center cursor-pointer transition-colors ${
+                  isDraggingOver ? 'border-[#3ECF8E] bg-[#3ECF8E]/10' : 'border-[#333] bg-[#252525]'
+                }`}
+              >
+                <svg className="w-6 h-6 mx-auto mb-1 text-[#666]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+                <p className="text-xs text-[#888]">Import .xmp preset</p>
+              </div>
+              <div className="space-y-2">
+                {presets.length === 0 ? (
+                  <p className="text-xs text-[#666] text-center py-4">No presets yet</p>
+                ) : (
+                  presets.sort((a, b) => a.name.localeCompare(b.name)).map((preset) => (
+                    <div key={preset.id} className="flex items-center justify-between gap-2 p-3 min-h-[44px] bg-[#252525] rounded-lg">
+                      {renamingPresetId === preset.id ? (
+                        <input
+                          type="text"
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleRenameSubmit(); else if (e.key === 'Escape') handleRenameCancel(); }}
+                          onBlur={handleRenameSubmit}
+                          autoFocus
+                          className="flex-1 px-2 py-1 text-sm text-white bg-[#1a1a1a] border border-[#3ECF8E] rounded focus:outline-none"
+                        />
+                      ) : (
+                        <button onClick={() => applyPreset(preset)} className="flex-1 text-left text-sm text-white">
+                          {preset.name}
+                        </button>
+                      )}
+                      <button onClick={() => deletePreset(preset.id)} className="p-2 text-[#888] hover:text-[#f87171] transition-colors flex-shrink-0">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Bottom Action Bar */}
+        <div className="flex-shrink-0 flex items-center justify-around px-4 py-3 border-t border-[#2a2a2a] bg-[#171717]" style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
+          {onResetToOriginal && (
+            <button onClick={onResetToOriginal} className="flex flex-col items-center gap-1 p-2 min-h-[44px] min-w-[44px] text-[#999] rounded-lg transition-colors">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              <span className="text-[10px]">Reset</span>
+            </button>
+          )}
+          {onExport && (
+            <button onClick={onExport} className="flex flex-col items-center gap-1 p-2 min-h-[44px] min-w-[44px] text-[#6366f1] rounded-lg transition-colors">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              <span className="text-[10px]">Export</span>
+            </button>
+          )}
+          <button
+            onClick={onDelete}
+            disabled={isDeleting}
+            className="flex flex-col items-center gap-1 p-2 min-h-[44px] min-w-[44px] text-[#f87171] disabled:opacity-60 rounded-lg transition-colors"
+          >
+            {isDeleting ? (
+              <svg className="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>
+            ) : (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            )}
+            <span className="text-[10px]">Delete</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── Desktop Edit Panel (unchanged) ───
   return (
     <>
       {/* Curves Editor Popup */}

@@ -18,6 +18,7 @@ interface CurvesEditorProps {
   curves: ChannelCurves;
   onChange: (curves: ChannelCurves) => void;
   onClose: () => void;
+  isMobile?: boolean;
 }
 
 type Channel = 'rgb' | 'red' | 'green' | 'blue';
@@ -36,7 +37,8 @@ const channelBgColors: Record<Channel, string> = {
   blue: '#1a2a4a',
 };
 
-export function CurvesEditor({ curves, onChange, onClose }: CurvesEditorProps) {
+export function CurvesEditor({ curves, onChange, onClose, isMobile }: CurvesEditorProps) {
+  const canvasSize = isMobile ? 260 : 140;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [activeChannel, setActiveChannel] = useState<Channel>('rgb');
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
@@ -292,7 +294,7 @@ export function CurvesEditor({ curves, onChange, onClose }: CurvesEditorProps) {
             <button
               key={channel}
               onClick={() => setActiveChannel(channel)}
-              className={`px-1.5 py-0.5 text-[9px] font-medium rounded transition-all cursor-pointer ${
+              className={`${isMobile ? 'px-3 py-2 text-xs min-h-[44px]' : 'px-1.5 py-0.5 text-[9px]'} font-medium rounded transition-all cursor-pointer ${
                 activeChannel === channel
                   ? channel === 'rgb'
                     ? 'bg-white/20 text-white'
@@ -312,14 +314,25 @@ export function CurvesEditor({ curves, onChange, onClose }: CurvesEditorProps) {
         {/* Canvas */}
         <canvas
           ref={canvasRef}
-          width={140}
-          height={140}
-          className="rounded cursor-crosshair"
+          width={canvasSize}
+          height={canvasSize}
+          className="rounded cursor-crosshair touch-none"
+          style={{ width: canvasSize, height: canvasSize }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
           onDoubleClick={handleDoubleClick}
+          onTouchStart={(e) => {
+            const touch = e.touches[0];
+            if (touch) handleMouseDown({ clientX: touch.clientX, clientY: touch.clientY } as React.MouseEvent<HTMLCanvasElement>);
+          }}
+          onTouchMove={(e) => {
+            e.preventDefault();
+            const touch = e.touches[0];
+            if (touch) handleMouseMove({ clientX: touch.clientX, clientY: touch.clientY } as React.MouseEvent<HTMLCanvasElement>);
+          }}
+          onTouchEnd={() => handleMouseUp()}
         />
 
         {/* Footer labels */}

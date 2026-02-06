@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: PP Fraktion Mono;
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://www.altseen.com/assets/fonts/PPFraktionMono-Regular.otf) format("opentype");
+  font-display: swap;
+}
+
 :root {
   --background: #0d0d0d;
   --foreground: #fafafa;
@@ -9,19 +17,47 @@
   --surface-hover: #252525;
   --border: #2a2a2a;
   --text-muted: #888888;
+  --target-window-width: 375;
+  --scale-modifier: 0.2;
+  --columns: 4;
+  --columns-sm: 12;
+  --columns-md: 24;
+  --container-padding: 1.6rem;
+  --container-padding-sm: 2.4rem;
+  --container-padding-md: 3.2rem;
+  --negative-container-padding: calc(-1 * var(--container-padding));
+  --negative-container-padding-sm: calc(-1 * var(--container-padding-sm));
+  --negative-container-padding-md: calc(-1 * var(--container-padding-md));
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: "PP Fraktion Mono", monospace;
+  --font-mono: "PP Fraktion Mono", monospace;
+}
+
+*,
+*::before,
+*::after {
+  font-family: inherit;
+}
+
+html {
+  font-family: "PP Fraktion Mono", monospace;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: "PP Fraktion Mono", monospace;
+  -webkit-font-smoothing: antialiased;
+}
+
+input,
+textarea,
+select {
+  font-family: "PP Fraktion Mono", monospace;
 }
 
 button,
@@ -51,6 +87,14 @@ button,
 /* Selection */
 ::selection {
   background: rgba(62, 207, 142, 0.3);
+}
+
+/* iOS Safari 100vh fix — use h-dvh for full viewport height */
+.h-dvh { height: 100dvh; }
+
+/* Prevent pull-to-refresh and rubber-band on mobile canvas */
+@media (max-width: 767px) {
+  body { overscroll-behavior: none; }
 }
 
 /* Shortcut key / button on left of help rows */

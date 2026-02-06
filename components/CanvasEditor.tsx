@@ -20,6 +20,7 @@ import { useUIStore } from '@/lib/stores/uiStore';
 import { useEditStore } from '@/lib/stores/editStore';
 import { useInteractionStore } from '@/lib/stores/interactionStore';
 import { useViewportCulling } from '@/lib/hooks/useViewportCulling';
+import { useIsMobile } from '@/lib/hooks/useIsMobile';
 import { getCachedImage } from '@/lib/imageCache';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
 import { useExport } from '@/lib/hooks/useExport';
@@ -231,7 +232,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const zoomedImageId = useUIStore((s) => s.zoomedImageId);
   const isUploading = useUIStore((s) => s.isUploading);
   const showHeader = useUIStore((s) => s.showHeader);
+  const mobileEditFullscreen = useUIStore((s) => s.mobileEditFullscreen);
   const photoFilter = useUIStore((s) => s.photoFilter);
+  const isMobile = useIsMobile();
   const uiActions = useUIStore.getState();
   const setShowFolderPrompt = uiActions.setShowFolderPrompt;
   const setNewFolderName = uiActions.setNewFolderName;
@@ -286,6 +289,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const zoomAnimationRef = useRef<number | null>(null);
   const lastMouseDownButtonRef = useRef<number>(0);
   const prevMouseDownButtonRef = useRef<number>(0);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressTriggeredRef = useRef<boolean>(false);
+  const longPressTouchPosRef = useRef<{ x: number; y: number } | null>(null);
   const queryClient = useQueryClient();
   const { user } = useAuth();
 
@@ -1136,6 +1142,11 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   // Handle object selection: plain = single, Ctrl = toggle, Shift = range (photos only). Ignore right-click so range selection is kept for context menu.
   const handleObjectClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
     if (e.evt.button !== 0) return; // only left-click changes selection; right-click keeps current selection for paste/create folder
+    // After a long-press context menu, suppress the click that follows touchend
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false;
+      return;
+    }
     e.cancelBubble = true;
     const id = e.target.id();
     const ctrl = e.evt.ctrlKey || e.evt.metaKey;
@@ -1213,6 +1224,51 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     const menuSelectedIds = multi && multi.length > 1 ? multi : [imageId];
     setImageContextMenu({ x: e.evt.clientX, y: e.evt.clientY, imageId, selectedIds: menuSelectedIds });
   }, [selectedIds, images]);
+
+  // Long-press helpers for mobile context menus (500ms hold)
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }, []);
+
+  const handleImageTouchStart = useCallback((_e: Konva.KonvaEventObject<TouchEvent>, imageId: string) => {
+    const touch = _e.evt.touches[0];
+    if (!touch) return;
+    longPressTriggeredRef.current = false;
+    longPressTouchPosRef.current = { x: touch.clientX, y: touch.clientY };
+    cancelLongPress();
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTriggeredRef.current = true;
+      if (navigator.vibrate) navigator.vibrate(50);
+      // Build context menu exactly like handleImageContextMenu
+      const { selectedIds: sids, images: imgs } = useCanvasStore.getState();
+      const imageIdsOnly = (ids: string[]) => ids.filter((id) => imgs.some((img) => img.id === id));
+      const multi = sids.length > 1
+        ? imageIdsOnly(sids)
+        : (lastMultiSelectionRef.current && lastMultiSelectionRef.current.includes(imageId)
+          ? imageIdsOnly(lastMultiSelectionRef.current)
+          : null);
+      const menuSelectedIds = multi && multi.length > 1 ? multi : [imageId];
+      setImageContextMenu({ x: touch.clientX, y: touch.clientY, imageId, selectedIds: menuSelectedIds });
+    }, 500);
+  }, [cancelLongPress]);
+
+  const handleImageTouchMove = useCallback((_e: Konva.KonvaEventObject<TouchEvent>, _imageId: string) => {
+    const touch = _e.evt.touches[0];
+    if (!touch || !longPressTouchPosRef.current) return;
+    const dx = touch.clientX - longPressTouchPosRef.current.x;
+    const dy = touch.clientY - longPressTouchPosRef.current.y;
+    // Cancel if finger moves more than 10px (user is dragging, not long-pressing)
+    if (Math.sqrt(dx * dx + dy * dy) > 10) {
+      cancelLongPress();
+    }
+  }, [cancelLongPress]);
+
+  const handleImageTouchEnd = useCallback(() => {
+    cancelLongPress();
+  }, [cancelLongPress]);
 
   const handleCopyEdit = useCallback(() => {
     if (!imageContextMenu) return;
@@ -2744,8 +2800,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const handleRecenterVertically = useCallback(async () => {
     if (folders.length === 0) return;
     const { folderGap } = GRID_CONFIG;
-    const labelFontSize = Math.max(6, Math.min(96, 24 / (stageScale * stageScale)));
-    const labelYOffset = Math.max(0, labelFontSize - 28);
+    const labelFontSize = Math.max(6, Math.min(96, 24 / stageScale));
+    const labelYOffset = Math.max(0, labelFontSize - 28) + 10;
     const LABEL_BAR = 30;
     let totalHeight = 0;
     for (const folder of folders) {
@@ -2862,6 +2918,14 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const handleImageDoubleClick = useCallback((image: CanvasImage, e?: Konva.KonvaEventObject<MouseEvent>) => {
     if (e != null && e.evt.button !== 0) return;
     if (prevMouseDownButtonRef.current !== 0 || lastMouseDownButtonRef.current !== 0) return;
+
+    // Mobile: open fullscreen edit mode instead of zoom-to-fit
+    if (isMobile) {
+      setSelectedIds([image.id]);
+      useUIStore.getState().setMobileEditFullscreen(true);
+      useUIStore.getState().setMobileMenuOpen(false);
+      return;
+    }
     const imgW = image.width * image.scaleX;
     const imgH = image.height * image.scaleY;
     const centerX = image.x + imgW / 2;
@@ -2898,7 +2962,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       { scale: targetScale, x: targetX, y: targetY },
       () => setZoomedImageId(image.id)
     );
-  }, [zoomedImageId, stageScale, stagePosition, dimensions.width, dimensions.height, animateView]);
+  }, [zoomedImageId, stageScale, stagePosition, dimensions.width, dimensions.height, animateView, isMobile]);
 
   // Clicking stage background when zoomed: zoom back out (left button only)
   const handleStageMouseDownWithZoom = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
@@ -2925,6 +2989,11 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const selectedObject = selectedIds.length === 1
     ? [...images, ...texts].find((obj) => obj.id === selectedIds[0]) ?? null
     : null;
+
+  // Clean up long-press timer on unmount
+  useEffect(() => {
+    return () => { cancelLongPress(); };
+  }, [cancelLongPress]);
 
   // Disable Konva auto-draw and use manual batchDraw for controlled redraws (optimizes slider editing)
   useEffect(() => {
@@ -2957,7 +3026,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         onRedo={handleRedo}
         canUndo={editHistory.length > 0}
         canRedo={editRedoStack.length > 0}
-        visible={showHeader || folders.length === 0}
+        visible={isMobile || showHeader || folders.length === 0}
+        isMobile={isMobile}
         photoFilter={photoFilter}
         onPhotoFilterChange={setPhotoFilter}
       />
@@ -3491,8 +3561,31 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           y={stagePosition.y}
           pixelRatio={Math.max(window.devicePixelRatio || 2, 2)}
           onWheel={handleWheel}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
+          onTouchStart={isMobile ? (e) => {
+            // Long-press on empty canvas background → canvas context menu
+            const stage = e.target.getStage();
+            if (stage && e.target === stage && e.evt.touches.length === 1) {
+              const touch = e.evt.touches[0];
+              longPressTriggeredRef.current = false;
+              longPressTouchPosRef.current = { x: touch.clientX, y: touch.clientY };
+              cancelLongPress();
+              longPressTimerRef.current = setTimeout(() => {
+                longPressTriggeredRef.current = true;
+                if (navigator.vibrate) navigator.vibrate(50);
+                setImageContextMenu(null);
+                setCanvasContextMenu({ x: touch.clientX, y: touch.clientY });
+              }, 500);
+            }
+          } : undefined}
+          onTouchMove={(e) => {
+            // Cancel any pending long-press on touch move
+            cancelLongPress();
+            handleTouchMove(e);
+          }}
+          onTouchEnd={() => {
+            cancelLongPress();
+            handleTouchEnd();
+          }}
           onMouseDown={handleStageMouseDownWithZoom}
           onContextMenu={(e) => {
             e.evt.preventDefault();
@@ -3570,8 +3663,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
                 const isHovered = hoveredFolderBorder === currentFolder.id;
                 const isResizing = resizingFolderId === currentFolder.id;
-                const labelFontSize = Math.max(6, Math.min(96, 24 / (stageScale * stageScale)));
-                const labelYOffset = Math.max(0, labelFontSize - 28);
+                const labelFontSize = Math.max(6, Math.min(96, 24 / stageScale));
+                const labelYOffset = Math.max(0, labelFontSize - 28) + 10;
 
                 return (
                   <Group
@@ -3582,6 +3675,28 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                       setCanvasContextMenu(null);
                       setFolderContextMenu({ x: e.evt.clientX, y: e.evt.clientY, folderId: currentFolder.id });
                     }}
+                    onTouchStart={isMobile ? (e) => {
+                      const touch = e.evt.touches[0];
+                      if (!touch) return;
+                      longPressTriggeredRef.current = false;
+                      longPressTouchPosRef.current = { x: touch.clientX, y: touch.clientY };
+                      cancelLongPress();
+                      const folderId = currentFolder.id;
+                      longPressTimerRef.current = setTimeout(() => {
+                        longPressTriggeredRef.current = true;
+                        if (navigator.vibrate) navigator.vibrate(50);
+                        setCanvasContextMenu(null);
+                        setFolderContextMenu({ x: touch.clientX, y: touch.clientY, folderId });
+                      }, 500);
+                    } : undefined}
+                    onTouchMove={isMobile ? (e) => {
+                      const touch = e.evt.touches[0];
+                      if (!touch || !longPressTouchPosRef.current) return;
+                      const dx = touch.clientX - longPressTouchPosRef.current.x;
+                      const dy = touch.clientY - longPressTouchPosRef.current.y;
+                      if (Math.sqrt(dx * dx + dy * dy) > 10) cancelLongPress();
+                    } : undefined}
+                    onTouchEnd={isMobile ? () => cancelLongPress() : undefined}
                   >
                     {/* Folder Label (name + plus) - rendered last so it draws on top during drag */}
                     <Group
@@ -3691,9 +3806,11 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                         }}
                         x={0}
                         y={0}
-                        text={currentFolder.name}
+                        text={currentFolder.name.toUpperCase()}
+                        fontFamily="PP Fraktion Mono"
                         fontSize={labelFontSize}
                         fontStyle="600"
+                        letterSpacing={Math.max(1, labelFontSize * 0.12)}
                         fill={currentFolder.color}
                         listening={true}
                         onClick={() => handleFolderDoubleClick(currentFolder)}
@@ -3703,6 +3820,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                         x={folderLabelWidths[currentFolder.id] ?? 0}
                         y={2}
                         text=" +"
+                        fontFamily="PP Fraktion Mono"
                         fontSize={labelFontSize}
                         fontStyle="600"
                         fill={currentFolder.color}
@@ -4085,6 +4203,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 onClick={handleObjectClick}
                 onDblClick={(e) => handleImageDoubleClick(img, e)}
                 onContextMenu={handleImageContextMenu}
+                onTouchStart={isMobile ? handleImageTouchStart : undefined}
+                onTouchEnd={isMobile ? handleImageTouchEnd : undefined}
+                onTouchMove={isMobile ? handleImageTouchMove : undefined}
                 onDragEnd={(e) => {
                   setDragHoveredFolderId(null);
                   setDragSourceFolderBorderHovered(null);
@@ -4580,9 +4701,14 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         </div>
       )}
 
-      {selectedObject && (
+      {selectedObject && (!isMobile || mobileEditFullscreen) && (
         <EditPanel
           object={selectedObject}
+          isMobile={isMobile}
+          onCloseMobileEdit={() => {
+            useUIStore.getState().setMobileEditFullscreen(false);
+          }}
+          imagePreviewUrl={isMobile && 'src' in selectedObject ? (selectedObject as CanvasImage).src : undefined}
           onUpdate={(updates) => {
             if ('src' in selectedObject) {
               const imageId = selectedIds[0];
@@ -4734,6 +4860,7 @@ function TextNode({
       x={text.x}
       y={text.y}
       text={text.text}
+      fontFamily="PP Fraktion Mono"
       fontSize={text.fontSize}
       fill={text.fill}
       rotation={text.rotation}

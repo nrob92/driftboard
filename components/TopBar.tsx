@@ -2,6 +2,7 @@
 
 import { useRef, useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth';
+import { useUIStore } from '@/lib/stores/uiStore';
 
 export interface PhotoFilterState {
   dateFrom?: string;
@@ -38,7 +39,7 @@ function SearchFilterInput({
           onPhotoFilterChange({ ...photoFilter, contentSearch: value.trim() || undefined });
         }
       }}
-      className="w-56 h-8 px-3 py-1 text-sm bg-[#252525] border border-[#333] rounded-lg text-white placeholder:text-[#666] focus:outline-none focus:ring-1 focus:ring-[#3ECF8E] focus:border-[#3ECF8E]"
+      className="w-full md:w-56 h-10 md:h-8 px-3 py-1 text-sm bg-[#252525] border border-[#333] rounded-lg text-white placeholder:text-[#666] focus:outline-none focus:ring-1 focus:ring-[#3ECF8E] focus:border-[#3ECF8E]"
     />
   );
 }
@@ -52,6 +53,7 @@ interface TopBarProps {
   canUndo: boolean;
   canRedo: boolean;
   visible: boolean;
+  isMobile?: boolean;
   photoFilter?: PhotoFilterState;
   onPhotoFilterChange?: (filter: PhotoFilterState) => void;
 }
@@ -65,6 +67,7 @@ export function TopBar({
   canUndo,
   canRedo,
   visible,
+  isMobile,
   photoFilter = {},
   onPhotoFilterChange,
 }: TopBarProps) {
@@ -74,6 +77,8 @@ export function TopBar({
   const [helpOpen, setHelpOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const { user, signOut } = useAuth();
+  const mobileMenuOpen = useUIStore((s) => s.mobileMenuOpen);
+  const setMobileMenuOpen = useUIStore((s) => s.setMobileMenuOpen);
 
   useEffect(() => {
     if (!helpOpen) return;
@@ -101,6 +106,7 @@ export function TopBar({
   };
 
   const handleSignOut = async () => {
+    setMobileMenuOpen(false);
     try {
       await signOut();
     } catch (error) {
@@ -109,27 +115,44 @@ export function TopBar({
   };
 
   return (
-    <div 
-      className={`absolute top-0 left-0 right-0 z-10 flex h-14 items-center gap-3 bg-[#171717]/95 backdrop-blur-xl border-b border-[#2a2a2a] px-4 transition-transform duration-200 ${
+    <div
+      className={`absolute top-0 left-0 right-0 z-10 flex h-14 items-center gap-2 md:gap-3 bg-[#171717]/95 backdrop-blur-xl border-b border-[#2a2a2a] px-3 md:px-4 transition-transform duration-200 ${
         visible ? 'translate-y-0' : '-translate-y-full'
       }`}
     >
+      {/* Mobile hamburger */}
+      <button
+        type="button"
+        onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+        className="md:hidden p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-[#888] hover:text-white hover:bg-[#252525] rounded-lg transition-colors"
+      >
+        {mobileMenuOpen ? (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        ) : (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        )}
+      </button>
+
       {/* Logo */}
-      <div className="flex items-center gap-2 mr-4">
+      <div className="flex items-center gap-2 md:mr-4">
         <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#3ECF8E] to-[#2da36f] flex items-center justify-center">
           <svg className="w-4 h-4 text-[#0d0d0d]" fill="currentColor" viewBox="0 0 20 20">
             <path d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z" />
           </svg>
         </div>
-        <span className="text-base font-semibold text-white">Driftboard</span>
+        <span className="hidden md:inline text-base font-semibold text-white">Driftboard</span>
       </div>
 
-      {/* Divider */}
-      <div className="w-px h-6 bg-[#333]" />
+      {/* Desktop: Divider */}
+      <div className="hidden md:block w-px h-6 bg-[#333]" />
 
-      {/* Filter search */}
+      {/* Desktop: Filter search */}
       {onPhotoFilterChange && (
-        <>
+        <div className="hidden md:flex items-center gap-2">
           <div key={`search-${photoFilter.contentSearch ?? ''}`}>
             <SearchFilterInput
               initialValue={photoFilter.contentSearch ?? ''}
@@ -199,22 +222,22 @@ export function TopBar({
               </div>
             )}
           </div>
-        </>
+        </div>
       )}
 
-      {/* Divider */}
-      <div className="w-px h-6 bg-[#333]" />
+      {/* Desktop: Divider */}
+      <div className="hidden md:block w-px h-6 bg-[#333]" />
 
-      {/* Actions */}
+      {/* Upload + Recenter (Upload always visible, Recenter desktop only) */}
       <div className="flex items-center gap-2">
         <button
           onClick={() => fileInputRef.current?.click()}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-[#3ECF8E] hover:bg-[#35b87d] rounded-lg transition-colors cursor-pointer"
+          className="flex items-center gap-2 px-3 py-1.5 min-h-[44px] md:min-h-0 text-sm font-medium text-white bg-[#3ECF8E] hover:bg-[#35b87d] rounded-lg transition-colors cursor-pointer"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
           </svg>
-          Upload
+          <span className="hidden md:inline">Upload</span>
         </button>
         <input
           ref={fileInputRef}
@@ -224,7 +247,7 @@ export function TopBar({
           onChange={handleFileSelect}
           className="hidden"
         />
-        <div className="flex items-center bg-[#252525] rounded-lg overflow-hidden">
+        <div className="hidden md:flex items-center bg-[#252525] rounded-lg overflow-hidden">
           <span className="px-3 py-1.5 text-sm font-medium text-[#888] cursor-default select-none">
             Recenter
           </span>
@@ -261,8 +284,8 @@ export function TopBar({
 
       {/* Right side */}
       <div className="ml-auto flex items-center gap-2">
-        {/* Help / Shortcuts dropdown */}
-        <div className="relative" ref={helpRef}>
+        {/* Desktop: Help / Shortcuts dropdown */}
+        <div className="hidden md:block relative" ref={helpRef}>
           <button
             type="button"
             onClick={() => setHelpOpen((o) => !o)}
@@ -305,7 +328,7 @@ export function TopBar({
           <button
             onClick={onUndo}
             disabled={!canUndo}
-            className="p-2 text-[#999] hover:text-white disabled:text-[#555] disabled:cursor-not-allowed transition-colors rounded-l-lg hover:bg-[#333] cursor-pointer"
+            className="p-2 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 flex items-center justify-center text-[#999] hover:text-white disabled:text-[#555] disabled:cursor-not-allowed transition-colors rounded-l-lg hover:bg-[#333] cursor-pointer"
             title="Undo"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -316,7 +339,7 @@ export function TopBar({
           <button
             onClick={onRedo}
             disabled={!canRedo}
-            className="p-2 text-[#999] hover:text-white disabled:text-[#555] disabled:cursor-not-allowed transition-colors rounded-r-lg hover:bg-[#333] cursor-pointer"
+            className="p-2 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 flex items-center justify-center text-[#999] hover:text-white disabled:text-[#555] disabled:cursor-not-allowed transition-colors rounded-r-lg hover:bg-[#333] cursor-pointer"
             title="Redo"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -325,9 +348,8 @@ export function TopBar({
           </button>
         </div>
 
-
-        {/* User menu */}
-        <div className="flex items-center gap-2">
+        {/* Desktop: User menu */}
+        <div className="hidden md:flex items-center gap-2">
           {user?.user_metadata?.avatar_url ? (
             <img
               src={user.user_metadata.avatar_url}
@@ -347,6 +369,142 @@ export function TopBar({
           </button>
         </div>
       </div>
+
+      {/* Mobile hamburger menu dropdown */}
+      {mobileMenuOpen && (
+        <div className="md:hidden absolute top-full left-0 right-0 bg-[#171717]/98 backdrop-blur-xl border-b border-[#2a2a2a] z-50 p-4 space-y-4">
+          {/* Search */}
+          {onPhotoFilterChange && (
+            <div className="space-y-3">
+              <div key={`mobile-search-${photoFilter.contentSearch ?? ''}`}>
+                <SearchFilterInput
+                  initialValue={photoFilter.contentSearch ?? ''}
+                  photoFilter={photoFilter}
+                  onPhotoFilterChange={(f) => { onPhotoFilterChange(f); }}
+                />
+              </div>
+
+              {/* Date & Camera filters inline */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs text-[#888] mb-1">Date from</label>
+                  <input
+                    type="date"
+                    value={photoFilter.dateFrom ?? ''}
+                    onChange={(e) => onPhotoFilterChange({ ...photoFilter, dateFrom: e.target.value || undefined })}
+                    className="w-full h-10 px-2 text-sm bg-[#252525] border border-[#333] rounded text-white focus:outline-none focus:ring-1 focus:ring-[#3ECF8E]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-[#888] mb-1">Date to</label>
+                  <input
+                    type="date"
+                    value={photoFilter.dateTo ?? ''}
+                    onChange={(e) => onPhotoFilterChange({ ...photoFilter, dateTo: e.target.value || undefined })}
+                    className="w-full h-10 px-2 text-sm bg-[#252525] border border-[#333] rounded text-white focus:outline-none focus:ring-1 focus:ring-[#3ECF8E]"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs text-[#888] mb-1">Camera make</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Canon"
+                    value={photoFilter.cameraMake ?? ''}
+                    onChange={(e) => onPhotoFilterChange({ ...photoFilter, cameraMake: e.target.value || undefined })}
+                    className="w-full h-10 px-2 text-sm bg-[#252525] border border-[#333] rounded text-white placeholder:text-[#666] focus:outline-none focus:ring-1 focus:ring-[#3ECF8E]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-[#888] mb-1">Camera model</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. EOS R5"
+                    value={photoFilter.cameraModel ?? ''}
+                    onChange={(e) => onPhotoFilterChange({ ...photoFilter, cameraModel: e.target.value || undefined })}
+                    className="w-full h-10 px-2 text-sm bg-[#252525] border border-[#333] rounded text-white placeholder:text-[#666] focus:outline-none focus:ring-1 focus:ring-[#3ECF8E]"
+                  />
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onPhotoFilterChange({})}
+                className="w-full py-2 text-xs text-[#888] hover:text-white border border-[#333] rounded-lg hover:bg-[#252525]"
+              >
+                Clear filters
+              </button>
+            </div>
+          )}
+
+          <div className="w-full h-px bg-[#2a2a2a]" />
+
+          {/* Recenter */}
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-[#888]">Recenter</span>
+            {onRecenterHorizontally && (
+              <button
+                onClick={() => { onRecenterHorizontally(); setMobileMenuOpen(false); }}
+                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-[#999] hover:text-white hover:bg-[#333] rounded-lg transition-colors"
+                title="Recenter horizontally"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              </button>
+            )}
+            {onRecenterVertically && (
+              <button
+                onClick={() => { onRecenterVertically(); setMobileMenuOpen(false); }}
+                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-[#999] hover:text-white hover:bg-[#333] rounded-lg transition-colors"
+                title="Recenter vertically"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 4v16M12 4v16M18 4v16" />
+                </svg>
+              </button>
+            )}
+          </div>
+
+          <div className="w-full h-px bg-[#2a2a2a]" />
+
+          {/* Help - mobile tips */}
+          <div>
+            <h3 className="text-sm font-semibold text-white mb-2">Tips</h3>
+            <ul className="text-xs text-[#999] space-y-1.5">
+              <li>Tap photo to select</li>
+              <li>Double-tap photo to edit</li>
+              <li>Long-press for more options</li>
+              <li>Pinch to zoom</li>
+              <li>Drag to pan</li>
+            </ul>
+          </div>
+
+          <div className="w-full h-px bg-[#2a2a2a]" />
+
+          {/* User / Sign out */}
+          <div className="flex items-center gap-3">
+            {user?.user_metadata?.avatar_url ? (
+              <img
+                src={user.user_metadata.avatar_url}
+                alt="Profile"
+                className="w-8 h-8 rounded-full ring-2 ring-[#333]"
+              />
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#3ECF8E] to-[#2da36f] flex items-center justify-center text-[#0d0d0d] text-sm font-semibold">
+                {user?.email?.charAt(0).toUpperCase() || 'U'}
+              </div>
+            )}
+            <span className="text-sm text-[#ccc]">{user?.email}</span>
+            <button
+              onClick={handleSignOut}
+              className="ml-auto text-sm text-[#888] hover:text-white transition-colors py-2"
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

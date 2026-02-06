@@ -20,6 +20,9 @@ export interface ImageNodeProps {
   onContextMenu?: (e: Konva.KonvaEventObject<PointerEvent>, imageId: string) => void;
   onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) => void;
   onDragMove?: (e: Konva.KonvaEventObject<DragEvent>) => void;
+  onTouchStart?: (e: Konva.KonvaEventObject<TouchEvent>, imageId: string) => void;
+  onTouchEnd?: (e: Konva.KonvaEventObject<TouchEvent>, imageId: string) => void;
+  onTouchMove?: (e: Konva.KonvaEventObject<TouchEvent>, imageId: string) => void;
   onUpdate: (updates: Partial<CanvasImage>) => void;
   bypassedTabs?: Set<'curves' | 'light' | 'color' | 'effects'>;
   useLowResPreview?: boolean;
@@ -36,6 +39,9 @@ export const ImageNode = React.memo(function ImageNode({
   onContextMenu,
   onDragEnd,
   onDragMove,
+  onTouchStart,
+  onTouchEnd,
+  onTouchMove,
   onUpdate,
   bypassedTabs,
   useLowResPreview,
@@ -461,10 +467,18 @@ export const ImageNode = React.memo(function ImageNode({
         e.cancelBubble = true;
         onDblClick?.(e);
       }}
+      onDblTap={(e) => {
+        e.cancelBubble = true;
+        // TouchEvent has no button; pass synthetic event so handler doesn't skip mobile double-tap
+        onDblClick?.({ ...e, evt: { ...e.evt, button: 0 } } as unknown as Konva.KonvaEventObject<MouseEvent>);
+      }}
       onContextMenu={(e) => {
         e.evt.preventDefault();
         onContextMenu?.(e as Konva.KonvaEventObject<PointerEvent>, image.id);
       }}
+      onTouchStart={(e) => onTouchStart?.(e, image.id)}
+      onTouchEnd={(e) => onTouchEnd?.(e, image.id)}
+      onTouchMove={(e) => onTouchMove?.(e, image.id)}
       onMouseEnter={(e) => {
         const container = e.target.getStage()?.container();
         if (container) container.style.cursor = 'pointer';

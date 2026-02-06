@@ -145,7 +145,7 @@ export function CanvasOverlays({
       {/* Folder Name Prompt Modal */}
       {showFolderPrompt && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
-          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96">
+          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-full max-w-96 mx-4">
             <h2 className="text-lg font-semibold text-white mb-1">Add {pendingFileCount} photo{pendingFileCount > 1 ? 's' : ''}</h2>
             <p className="text-sm text-[#888] mb-4">Choose an existing folder or create a new one</p>
 
@@ -225,7 +225,7 @@ export function CanvasOverlays({
       {/* Folder Edit Modal */}
       {editingFolder && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
-          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96">
+          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-full max-w-96 mx-4">
             <h2 className="text-lg font-semibold text-white mb-4">Edit Folder</h2>
             <div className="mb-4">
               <label className="block text-sm text-[#888] mb-2">Folder Name</label>
@@ -266,7 +266,7 @@ export function CanvasOverlays({
       {/* Confirm delete photo(s) */}
       {confirmDeletePhotoIds && confirmDeletePhotoIds.length > 0 && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
-          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96">
+          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-full max-w-96 mx-4">
             <h2 className="text-lg font-semibold text-white mb-2">{confirmDeletePhotoIds.length === 1 ? 'Delete photo' : `Delete ${confirmDeletePhotoIds.length} photos`}</h2>
             <p className="text-sm text-[#888] mb-4">Are you sure? This will permanently delete {confirmDeletePhotoIds.length === 1 ? 'this photo' : `these ${confirmDeletePhotoIds.length} photos`}.</p>
             <label className="flex items-center gap-2 mb-4 cursor-pointer">
@@ -287,7 +287,7 @@ export function CanvasOverlays({
       {/* Confirm delete folder + photos */}
       {confirmDeleteFolderOpen && editingFolder && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
-          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96">
+          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-full max-w-96 mx-4">
             <h2 className="text-lg font-semibold text-white mb-2">Delete folder + photos</h2>
             <p className="text-sm text-[#888] mb-4">Are you sure? This will permanently delete the folder &quot;{editingFolder.name}&quot; and all {editingFolder.imageIds.length} photo{editingFolder.imageIds.length !== 1 ? 's' : ''} inside it.</p>
             <label className="flex items-center gap-2 mb-4 cursor-pointer">
@@ -308,7 +308,7 @@ export function CanvasOverlays({
       {/* Create empty folder */}
       {createEmptyFolderOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
-          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96">
+          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-full max-w-96 mx-4">
             <h2 className="text-lg font-semibold text-white mb-1">Create folder</h2>
             <p className="text-sm text-[#888] mb-4">Name your folder. Existing folders will be pushed aside if nearby.</p>
             <label className="block text-xs uppercase tracking-wide text-[#666] mb-2">Folder name</label>
@@ -329,7 +329,7 @@ export function CanvasOverlays({
       {/* Create social media layout */}
       {createSocialLayoutOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
-          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96">
+          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-full max-w-96 mx-4">
             <h2 className="text-lg font-semibold text-white mb-1">Create social media layout</h2>
             <p className="text-sm text-[#888] mb-4">Add a 4:5 layout. You can drag photos in and place them anywhere; add or remove pages later.</p>
             <label className="block text-xs uppercase tracking-wide text-[#666] mb-2">Layout name</label>
@@ -353,7 +353,7 @@ export function CanvasOverlays({
       {/* Create folder from selection */}
       {createFolderFromSelectionIds && createFolderFromSelectionIds.length > 0 && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
-          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96">
+          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-full max-w-96 mx-4">
             <h2 className="text-lg font-semibold text-white mb-1">Create folder</h2>
             <p className="text-sm text-[#888] mb-4">Name your folder ({createFolderFromSelectionIds.length} photo{createFolderFromSelectionIds.length !== 1 ? 's' : ''} selected). Existing folders will be pushed aside if needed.</p>
             <label className="block text-xs uppercase tracking-wide text-[#666] mb-2">Folder name</label>
@@ -375,12 +375,12 @@ export function CanvasOverlays({
       {canvasContextMenu && (
         <div ref={canvasContextMenuRef} className="fixed z-50 min-w-[200px] py-1 bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50" style={{ left: canvasContextMenu.x, top: canvasContextMenu.y }}>
           <button type="button" onClick={() => { ui.setCanvasContextMenu(null); ui.setCreateEmptyFolderOpen(true); ui.setCreateEmptyFolderName('New Folder'); ui.setCreateEmptyFolderNameError(''); }}
-            className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors flex items-center gap-2">
+            className="w-full px-4 py-3.5 md:py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors flex items-center gap-2">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" /></svg>
             Create folder
           </button>
           <button type="button" onClick={() => { ui.setCanvasContextMenu(null); ui.setCreateSocialLayoutOpen(true); ui.setCreateSocialLayoutName('Social layout 1'); ui.setCreateSocialLayoutPages(3); ui.setCreateSocialLayoutNameError(''); }}
-            className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors flex items-center gap-2 border-t border-[#2a2a2a]">
+            className="w-full px-4 py-3.5 md:py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors flex items-center gap-2 border-t border-[#2a2a2a]">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
             Create social media layout
           </button>
@@ -426,13 +426,13 @@ export function CanvasOverlays({
                   <span>Background color</span>
                   <input type="color" value={folder.backgroundColor ?? DEFAULT_SOCIAL_LAYOUT_BG} onChange={(e) => handleLayoutBackgroundColor(folder.id, e.target.value)} className="w-6 h-6 rounded cursor-pointer border border-[#333] bg-transparent" onClick={(e) => e.stopPropagation()} />
                 </label>
-                <button type="button" onClick={() => handleLayoutAddPage(folder.id)} disabled={!canAdd} className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">Add page</button>
-                <button type="button" onClick={() => handleLayoutRemovePage(folder.id)} disabled={!canRemove} className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">Remove page</button>
+                <button type="button" onClick={() => handleLayoutAddPage(folder.id)} disabled={!canAdd} className="w-full px-4 py-3.5 md:py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">Add page</button>
+                <button type="button" onClick={() => handleLayoutRemovePage(folder.id)} disabled={!canRemove} className="w-full px-4 py-3.5 md:py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">Remove page</button>
                 <div className="my-1 border-t border-[#2a2a2a]" />
               </>
             )}
-            <button type="button" onClick={() => { ui.setFolderContextMenu(null); ui.setEditingFolder(folder); ui.setEditingFolderName(folder.name); ui.setFolderNameError(''); }} className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors">Rename</button>
-            <button type="button" onClick={() => { ui.setFolderContextMenu(null); ui.setConfirmDeleteFolderOpen(true); ui.setEditingFolder(folder); }} className="w-full px-4 py-2.5 text-left text-sm text-red-400 hover:bg-red-400/10 transition-colors border-t border-[#2a2a2a]">Delete folder</button>
+            <button type="button" onClick={() => { ui.setFolderContextMenu(null); ui.setEditingFolder(folder); ui.setEditingFolderName(folder.name); ui.setFolderNameError(''); }} className="w-full px-4 py-3.5 md:py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors">Rename</button>
+            <button type="button" onClick={() => { ui.setFolderContextMenu(null); ui.setConfirmDeleteFolderOpen(true); ui.setEditingFolder(folder); }} className="w-full px-4 py-3.5 md:py-2.5 text-left text-sm text-red-400 hover:bg-red-400/10 transition-colors border-t border-[#2a2a2a]">Delete folder</button>
           </div>
         );
       })()}
@@ -442,21 +442,21 @@ export function CanvasOverlays({
         <div ref={imageContextMenuRef} className="fixed z-50 min-w-[180px] py-1 bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50" style={{ left: imageContextMenu.x, top: imageContextMenu.y }}>
           {imageContextMenu.selectedIds.length > 1 ? (
             <>
-              <button type="button" onClick={handlePasteEdit} disabled={!copiedEdit} className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">Paste edit to selection ({imageContextMenu.selectedIds.length} photos)</button>
-              <button type="button" onClick={handleExportSelection} className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors">Export selection ({imageContextMenu.selectedIds.length} photos)</button>
-              <button type="button" onClick={handleCreateFolderFromSelection} className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors">Create folder</button>
+              <button type="button" onClick={handlePasteEdit} disabled={!copiedEdit} className="w-full px-4 py-3.5 md:py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">Paste edit to selection ({imageContextMenu.selectedIds.length} photos)</button>
+              <button type="button" onClick={handleExportSelection} className="w-full px-4 py-3.5 md:py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors">Export selection ({imageContextMenu.selectedIds.length} photos)</button>
+              <button type="button" onClick={handleCreateFolderFromSelection} className="w-full px-4 py-3.5 md:py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors">Create folder</button>
               <button type="button" onClick={() => {
                 const ids = imageContextMenu.selectedIds; ui.setImageContextMenu(null);
                 if (typeof window !== 'undefined' && window.localStorage.getItem('driftboard-delete-photo-skip-confirm') === 'true') { handleDeletePhotos(ids); }
                 else { ui.setDeletePhotoDontAskAgain(false); ui.setConfirmDeletePhotoIds(ids); }
-              }} className="w-full px-4 py-2.5 text-left text-sm text-red-400 hover:bg-red-400/10 transition-colors border-t border-[#2a2a2a]">Delete selection ({imageContextMenu.selectedIds.length} photos)</button>
+              }} className="w-full px-4 py-3.5 md:py-2.5 text-left text-sm text-red-400 hover:bg-red-400/10 transition-colors border-t border-[#2a2a2a]">Delete selection ({imageContextMenu.selectedIds.length} photos)</button>
             </>
           ) : (
             <>
-              <button type="button" onClick={handleCopyEdit} className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors">Copy edit</button>
-              <button type="button" onClick={handlePasteEdit} disabled={!copiedEdit} className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">Paste edit</button>
+              <button type="button" onClick={handleCopyEdit} className="w-full px-4 py-3.5 md:py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors">Copy edit</button>
+              <button type="button" onClick={handlePasteEdit} disabled={!copiedEdit} className="w-full px-4 py-3.5 md:py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">Paste edit</button>
               <div className="my-1 border-t border-[#2a2a2a]" />
-              <button type="button" onClick={() => { ui.setBorderDialogImageId(imageContextMenu.imageId); ui.setImageContextMenu(null); }} className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors">Border…</button>
+              <button type="button" onClick={() => { ui.setBorderDialogImageId(imageContextMenu.imageId); ui.setImageContextMenu(null); }} className="w-full px-4 py-3.5 md:py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors">Border…</button>
               <button type="button" onClick={handleCreatePresetClick} className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors border-t border-[#2a2a2a]">Create preset…</button>
             </>
           )}
@@ -471,7 +471,7 @@ export function CanvasOverlays({
         const borderColor = img.borderColor ?? '#ffffff';
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-            <div ref={borderDialogRef} className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96">
+            <div ref={borderDialogRef} className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-full max-w-96 mx-4">
               <h3 className="text-lg font-semibold text-white mb-4">Border</h3>
               <div className="space-y-4">
                 <div>
@@ -503,7 +503,7 @@ export function CanvasOverlays({
       {/* Create preset modal */}
       {createPresetFromImageId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-96">
+          <div className="bg-[#171717] border border-[#2a2a2a] rounded-2xl shadow-2xl shadow-black/50 p-6 w-full max-w-96 mx-4">
             <h3 className="text-lg font-semibold text-white mb-2">Create preset</h3>
             <p className="text-sm text-[#888] mb-4">Save this image&apos;s edits as a preset you can apply to other photos.</p>
             <input type="text" value={createPresetName} onChange={(e) => ui.setCreatePresetName(e.target.value)}

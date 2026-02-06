@@ -194,9 +194,11 @@ export function FolderGroup({
           }}
           x={0}
           y={0}
-          text={currentFolder.name}
+          text={currentFolder.name.toUpperCase()}
+          fontFamily="PP Fraktion Mono"
           fontSize={16}
           fontStyle="600"
+          letterSpacing={2}
           fill={currentFolder.color}
           listening={true}
           onClick={() => {
@@ -210,6 +212,7 @@ export function FolderGroup({
           x={folderLabelWidth}
           y={2}
           text=" +"
+          fontFamily="PP Fraktion Mono"
           fontSize={16}
           fontStyle="600"
           fill={currentFolder.color}

@@ -1619,9 +1619,11 @@ export function LoginSandbox({ onSignInClick }: { onSignInClick?: () => void }) 
                       }}
                       x={0}
                       y={0}
-                      text={folder.name}
+                      text={folder.name.toUpperCase()}
+                      fontFamily="PP Fraktion Mono"
                       fontSize={16}
                       fontStyle="600"
+                      letterSpacing={2}
                       fill={folder.color}
                       listening={true}
                     />
