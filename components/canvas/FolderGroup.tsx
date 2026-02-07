@@ -16,8 +16,6 @@ import {
   type CellAssignment,
 } from '@/lib/folders/folderLayout';
 
-const OVERLAP_THROTTLE_MS = 32;
-
 interface FolderGroupProps {
   folder: PhotoFolder;
   folderLabelWidth: number;
@@ -47,7 +45,10 @@ export function FolderGroup({
   user,
 }: FolderGroupProps) {
   const folderNameDragRef = useRef(false);
-  const lastOverlapCheckRef = useRef(0);
+  const folderDragRafRef = useRef<number | null>(null);
+  const pendingFolderDragRef = useRef<{ updatedFolders: PhotoFolder[]; updatedImages: CanvasImage[] } | null>(null);
+  const resizeDragRafRef = useRef<number | null>(null);
+  const pendingResizeDragRef = useRef<{ updatedFolders: PhotoFolder[]; updatedImages: CanvasImage[] } | null>(null);
 
   // Read from stores
   const images = useCanvasStore((s) => s.images);
@@ -105,9 +106,9 @@ export function FolderGroup({
         onDragMove={(e) => {
           const newX = e.target.x();
           const newY = e.target.y();
-          const now = Date.now();
           const latestFolders = useCanvasStore.getState().folders;
           const latestImages = useCanvasStore.getState().images;
+          const cur = latestFolders.find((f) => f.id === currentFolder.id) || currentFolder;
 
           const updatedFolders = latestFolders.map((f) =>
             f.id === currentFolder.id ? { ...f, x: newX, y: newY } : f
@@ -116,10 +117,12 @@ export function FolderGroup({
           const folderImgs = latestImages.filter(img => currentFolder.imageIds.includes(img.id));
           let updatedImages = [...latestImages];
           if (folderImgs.length > 0) {
+            const dx = newX - cur.x;
+            const dy = newY - cur.y;
             const reflowedImages = folderImgs.map((img) => ({
               ...img,
-              x: img.x + (newX - currentFolder.x),
-              y: img.y + (newY - currentFolder.y),
+              x: img.x + dx,
+              y: img.y + dy,
             }));
             updatedImages = latestImages.map((img) => {
               const reflowed = reflowedImages.find(r => r.id === img.id);
@@ -127,21 +130,30 @@ export function FolderGroup({
             });
           }
 
-          if (now - lastOverlapCheckRef.current >= OVERLAP_THROTTLE_MS) {
-            lastOverlapCheckRef.current = now;
-            const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
-              updatedFolders,
-              updatedImages,
-              currentFolder.id
-            );
-            setFolders(resolvedFolders);
-            setImages(resolvedImages);
-          } else {
-            setFolders(updatedFolders);
-            setImages(updatedImages);
+          pendingFolderDragRef.current = { updatedFolders, updatedImages };
+          if (folderDragRafRef.current == null) {
+            folderDragRafRef.current = requestAnimationFrame(() => {
+              folderDragRafRef.current = null;
+              const pending = pendingFolderDragRef.current;
+              if (pending) {
+                setFolders(pending.updatedFolders);
+                setImages(pending.updatedImages);
+                pendingFolderDragRef.current = null;
+              }
+            });
           }
         }}
         onDragEnd={async () => {
+          if (folderDragRafRef.current != null) {
+            cancelAnimationFrame(folderDragRafRef.current);
+            folderDragRafRef.current = null;
+          }
+          const pending = pendingFolderDragRef.current;
+          if (pending) {
+            setFolders(pending.updatedFolders);
+            setImages(pending.updatedImages);
+            pendingFolderDragRef.current = null;
+          }
           setTimeout(() => {
             folderNameDragRef.current = false;
           }, 100);
@@ -331,7 +343,6 @@ export function FolderGroup({
             const proposedWidth = Math.max(GRID_CONFIG.minFolderWidth, e.target.x() - borderX + handleSize);
             const proposedContentHeight = Math.max(100, e.target.y() - borderY + handleSize);
             const proposedHeight = 30 + proposedContentHeight;
-            const now = Date.now();
 
             const folderImgs = latestImages.filter(img => latestFolder.imageIds.includes(img.id));
             const minSize = calculateMinimumFolderSize(folderImgs.length, proposedWidth);
@@ -392,18 +403,17 @@ export function FolderGroup({
               });
             }
 
-            if (now - lastOverlapCheckRef.current >= OVERLAP_THROTTLE_MS) {
-              lastOverlapCheckRef.current = now;
-              const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
-                updatedFolders,
-                updatedImages,
-                currentFolder.id
-              );
-              setFolders(resolvedFolders);
-              setImages(resolvedImages);
-            } else {
-              setFolders(updatedFolders);
-              setImages(updatedImages);
+            pendingResizeDragRef.current = { updatedFolders, updatedImages };
+            if (resizeDragRafRef.current == null) {
+              resizeDragRafRef.current = requestAnimationFrame(() => {
+                resizeDragRafRef.current = null;
+                const pending = pendingResizeDragRef.current;
+                if (pending) {
+                  setFolders(pending.updatedFolders);
+                  setImages(pending.updatedImages);
+                  pendingResizeDragRef.current = null;
+                }
+              });
             }
           }}
           onDragEnd={async (e) => {
@@ -411,6 +421,16 @@ export function FolderGroup({
             if (container) container.style.cursor = 'default';
             intActions.setResizingFolderId(null);
             intActions.setHoveredFolderBorder(null);
+            if (resizeDragRafRef.current != null) {
+              cancelAnimationFrame(resizeDragRafRef.current);
+              resizeDragRafRef.current = null;
+            }
+            const pendingResize = pendingResizeDragRef.current;
+            if (pendingResize) {
+              setFolders(pendingResize.updatedFolders);
+              setImages(pendingResize.updatedImages);
+              pendingResizeDragRef.current = null;
+            }
 
             const latestFolders = useCanvasStore.getState().folders;
             const latestImages = useCanvasStore.getState().images;

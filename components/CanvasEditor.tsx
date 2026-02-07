@@ -272,15 +272,17 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const setShowHeader = uiActions.setShowHeader;
   const setPhotoFilter = uiActions.setPhotoFilter;
 
-  const lastOverlapCheckRef = useRef<number>(0);
   const folderNameDragRef = useRef<boolean>(false);
+  const folderDragRafRef = useRef<number | null>(null);
+  const pendingFolderDragRef = useRef<{ updatedFolders: PhotoFolder[]; updatedImages: CanvasImage[] } | null>(null);
+  const resizeDragRafRef = useRef<number | null>(null);
+  const pendingResizeDragRef = useRef<{ updatedFolders: PhotoFolder[]; updatedImages: CanvasImage[] } | null>(null);
   const lastSwappedImageRef = useRef<{ id: string; x: number; y: number } | null>(null);
   const dragPrevCellRef = useRef<{ imageId: string; col: number; row: number; cellIndex: number } | null>(null);
   const dragMoveRafRef = useRef<number | null>(null);
   const dragMoveNodeRef = useRef<Konva.Image | null>(null);
   const latestFoldersRef = useRef<PhotoFolder[]>([]);
   const latestImagesRef = useRef<CanvasImage[]>([]);
-  const overlapThrottleMs = 32;
   const folderContextMenuRef = useRef<HTMLDivElement>(null);
   const imageContextMenuRef = useRef<HTMLDivElement>(null);
   const borderDialogRef = useRef<HTMLDivElement>(null);
@@ -1803,21 +1805,16 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   // Handle real-time grid snapping and shuffling during drag
   const handleImageDragMove = useCallback(
     (e: Konva.KonvaEventObject<DragEvent>) => {
-      const node = e.target;
-      const currentX = node.x();
-      const currentY = node.y();
-
-      node.x(currentX);
-      node.y(currentY);
-      // Force redraw immediately — Konva.autoDrawEnabled is false, so we must call batchDraw
-      stageRef.current?.getLayers().forEach((l) => l.batchDraw());
-
-      dragMoveNodeRef.current = node as Konva.Image;
+      const node = e.target as Konva.Image;
+      dragMoveNodeRef.current = node;
       if (dragMoveRafRef.current != null) return;
       dragMoveRafRef.current = requestAnimationFrame(() => {
         dragMoveRafRef.current = null;
         const node = dragMoveNodeRef.current;
         if (!node) return;
+        // Redraw once per frame (Konva.autoDrawEnabled is false)
+        stageRef.current?.getLayers().forEach((l) => l.batchDraw());
+
         const currentX = node.x();
         const currentY = node.y();
         const currentImg = images.find((i) => i.id === node.id());
@@ -3720,50 +3717,64 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                       onDragMove={(e) => {
                         const newX = e.target.x();
                         const newY = e.target.y();
-                        // Group is at folder.y - labelYOffset; store folder anchor so label stays above content
                         const anchorY = newY + labelYOffset;
-                        const now = Date.now();
+                        const latestFolders = useCanvasStore.getState().folders;
+                        const latestImages = useCanvasStore.getState().images;
+                        const cur = latestFolders.find((f) => f.id === currentFolder.id) || currentFolder;
 
-                        const updatedFolders = folders.map((f) =>
+                        const updatedFolders = latestFolders.map((f) =>
                           f.id === currentFolder.id ? { ...f, x: newX, y: anchorY } : f
                         );
 
-                        const folderImgs = images.filter(img => currentFolder.imageIds.includes(img.id));
-                        let updatedImages = [...images];
+                        const folderImgs = latestImages.filter(img => currentFolder.imageIds.includes(img.id));
+                        let updatedImages = [...latestImages];
                         if (folderImgs.length > 0) {
+                          const dx = newX - cur.x;
+                          const dy = anchorY - cur.y;
                           const reflowedImages = folderImgs.map((img) => ({
                             ...img,
-                            x: img.x + (newX - currentFolder.x),
-                            y: img.y + (anchorY - currentFolder.y),
+                            x: img.x + dx,
+                            y: img.y + dy,
                           }));
-                          updatedImages = images.map((img) => {
+                          updatedImages = latestImages.map((img) => {
                             const reflowed = reflowedImages.find(r => r.id === img.id);
                             return reflowed ? reflowed : img;
                           });
                         }
 
-                        if (now - lastOverlapCheckRef.current >= overlapThrottleMs) {
-                          lastOverlapCheckRef.current = now;
-                          const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
-                            updatedFolders,
-                            updatedImages,
-                            currentFolder.id
-                          );
-                          setFolders(resolvedFolders);
-                          setImages(resolvedImages);
-                        } else {
-                          setFolders(updatedFolders);
-                          setImages(updatedImages);
+                        pendingFolderDragRef.current = { updatedFolders, updatedImages };
+                        if (folderDragRafRef.current == null) {
+                          folderDragRafRef.current = requestAnimationFrame(() => {
+                            folderDragRafRef.current = null;
+                            const pending = pendingFolderDragRef.current;
+                            if (pending) {
+                              setFolders(pending.updatedFolders);
+                              setImages(pending.updatedImages);
+                              pendingFolderDragRef.current = null;
+                            }
+                          });
                         }
                       }}
                       onDragEnd={async () => {
+                        if (folderDragRafRef.current != null) {
+                          cancelAnimationFrame(folderDragRafRef.current);
+                          folderDragRafRef.current = null;
+                        }
+                        const pending = pendingFolderDragRef.current;
+                        if (pending) {
+                          setFolders(pending.updatedFolders);
+                          setImages(pending.updatedImages);
+                          pendingFolderDragRef.current = null;
+                        }
                         setTimeout(() => {
                           folderNameDragRef.current = false;
                         }, 100);
 
+                        const latestFolders = useCanvasStore.getState().folders;
+                        const latestImages = useCanvasStore.getState().images;
                         const { folders: finalFolders, images: finalImages } = resolveOverlapsAndReflow(
-                          folders,
-                          images,
+                          latestFolders,
+                          latestImages,
                           currentFolder.id
                         );
                         setFolders(finalFolders);
@@ -3935,7 +3946,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                           const proposedWidth = Math.max(GRID_CONFIG.minFolderWidth, e.target.x() - borderX + handleSize);
                           const proposedContentHeight = Math.max(100, e.target.y() - borderY + handleSize);
                           const proposedHeight = 30 + proposedContentHeight;
-                          const now = Date.now();
 
                           // Get folder images
                           const folderImgs = images.filter(img => currentFolder.imageIds.includes(img.id));
@@ -4009,19 +4019,17 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                             });
                           }
 
-                          // Throttled overlap checking
-                          if (now - lastOverlapCheckRef.current >= overlapThrottleMs) {
-                            lastOverlapCheckRef.current = now;
-                            const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
-                              updatedFolders,
-                              updatedImages,
-                              currentFolder.id
-                            );
-                            setFolders(resolvedFolders);
-                            setImages(resolvedImages);
-                          } else {
-                            setFolders(updatedFolders);
-                            setImages(updatedImages);
+                          pendingResizeDragRef.current = { updatedFolders, updatedImages };
+                          if (resizeDragRafRef.current == null) {
+                            resizeDragRafRef.current = requestAnimationFrame(() => {
+                              resizeDragRafRef.current = null;
+                              const pending = pendingResizeDragRef.current;
+                              if (pending) {
+                                setFolders(pending.updatedFolders);
+                                setImages(pending.updatedImages);
+                                pendingResizeDragRef.current = null;
+                              }
+                            });
                           }
                         }}
                         onDragEnd={async (e) => {
@@ -4029,20 +4037,31 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                           if (container) container.style.cursor = 'default';
                           setResizingFolderId(null);
                           setHoveredFolderBorder(null);
+                          if (resizeDragRafRef.current != null) {
+                            cancelAnimationFrame(resizeDragRafRef.current);
+                            resizeDragRafRef.current = null;
+                          }
+                          const pendingResize = pendingResizeDragRef.current;
+                          if (pendingResize) {
+                            setFolders(pendingResize.updatedFolders);
+                            setImages(pendingResize.updatedImages);
+                            pendingResizeDragRef.current = null;
+                          }
 
-                          // Get current folder from state (may have been updated during drag)
-                          const resizedFolder = folders.find(f => f.id === currentFolder.id);
+                          // Use latest state (from store after flush) for final snap and reflow
+                          const stateAfterFlush = useCanvasStore.getState();
+                          const resizedFolder = stateAfterFlush.folders.find(f => f.id === currentFolder.id);
                           if (!resizedFolder) return;
 
                           // Get folder images and their current positions
-                          const folderImgs = images.filter(img => resizedFolder.imageIds.includes(img.id));
+                          const folderImgs = stateAfterFlush.images.filter(img => resizedFolder.imageIds.includes(img.id));
                           const imageCount = folderImgs.length;
 
                           if (imageCount === 0) {
                             // No images - just finalize
                             const { folders: finalFolders, images: finalImages } = resolveOverlapsAndReflow(
-                              folders,
-                              images,
+                              stateAfterFlush.folders,
+                              stateAfterFlush.images,
                               currentFolder.id
                             );
                             setFolders(finalFolders);
@@ -4107,7 +4126,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                           }
 
                           // Update folder with snapped dimensions
-                          const snappedFolders = folders.map(f =>
+                          const snappedFolders = stateAfterFlush.folders.map(f =>
                             f.id === resizedFolder.id
                               ? { ...f, width: snappedWidth, height: snappedHeight }
                               : f
@@ -4122,7 +4141,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                             snappedWidth
                           );
 
-                          const snappedImages = images.map(img => {
+                          const snappedImages = stateAfterFlush.images.map(img => {
                             const positioned = positionedImages.find(p => p.id === img.id);
                             return positioned ? positioned : img;
                           });
