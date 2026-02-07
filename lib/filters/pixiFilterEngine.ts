@@ -683,15 +683,19 @@ export class PixiFilterEngine {
         antialias: false,
         resolution: 1,
         preference: 'webgl',
+        // Required so we can read back the WebGL canvas into our 2D output (drawImage)
+        preserveDrawingBuffer: true,
       });
 
       // Stop auto-rendering (we render manually)
       this.app.ticker.stop();
 
-      // Create output canvas for Konva
+      // Create output canvas for Konva — match actual renderer canvas size (1:1 copy)
       this.outputCanvas = document.createElement('canvas');
-      this.outputCanvas.width = width;
-      this.outputCanvas.height = height;
+      const cw = this.app.canvas.width;
+      const ch = this.app.canvas.height;
+      this.outputCanvas.width = cw;
+      this.outputCanvas.height = ch;
       this.outputCtx = this.outputCanvas.getContext('2d');
 
       // Create sprite (placeholder, will be updated with actual image)
@@ -701,8 +705,8 @@ export class PixiFilterEngine {
       // Create filter instances
       this.createFilters();
 
-      this.currentWidth = width;
-      this.currentHeight = height;
+      this.currentWidth = cw;
+      this.currentHeight = ch;
       this.initialized = true;
       return true;
     } catch (e) {
@@ -877,14 +881,17 @@ export class PixiFilterEngine {
     });
   }
 
-  /** Resize the renderer and output canvas */
+  /** Resize the renderer and output canvas. Sync output to actual renderer canvas size (1:1 copy). */
   private resize(width: number, height: number): void {
     if (!this.app || !this.outputCanvas) return;
     this.app.renderer.resize(width, height);
-    this.outputCanvas.width = width;
-    this.outputCanvas.height = height;
-    this.currentWidth = width;
-    this.currentHeight = height;
+    // Use actual canvas dimensions in case renderer applies resolution/devicePixelRatio
+    const cw = this.app.canvas.width;
+    const ch = this.app.canvas.height;
+    this.outputCanvas.width = cw;
+    this.outputCanvas.height = ch;
+    this.currentWidth = cw;
+    this.currentHeight = ch;
   }
 
   /** Set the source image on the sprite */
@@ -1017,9 +1024,12 @@ export class PixiFilterEngine {
 
     this.app.render();
 
-    // Copy PixiJS WebGL canvas → 2D output canvas (fast GPU-GPU copy)
-    this.outputCtx.clearRect(0, 0, displayWidth, displayHeight);
-    this.outputCtx.drawImage(this.app.canvas, 0, 0, displayWidth, displayHeight);
+    // Copy PixiJS WebGL canvas → 2D output canvas. Use exact dimensions for 1:1 copy (no scaling).
+    const sw = this.app.canvas.width;
+    const sh = this.app.canvas.height;
+    this.outputCtx.clearRect(0, 0, sw, sh);
+    this.outputCtx.imageSmoothingEnabled = false;
+    this.outputCtx.drawImage(this.app.canvas, 0, 0, sw, sh, 0, 0, this.outputCanvas.width, this.outputCanvas.height);
 
     return this.outputCanvas;
   }

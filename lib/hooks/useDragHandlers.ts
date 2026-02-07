@@ -519,6 +519,7 @@ export function useDragHandlers({
             let swapImgId: string | undefined;
             let swapX: number | undefined;
             let swapY: number | undefined;
+            let updatedImageIds: string[] | null = null;
 
             if (!isSocialLayout(targetFolder)) {
               const { folderPadding, imageMaxSize, imageMaxHeight } = GRID_CONFIG;
@@ -603,6 +604,24 @@ export function useDragHandlers({
               }
 
               dragPrevCellRef.current = { imageId: currentImg.id, col: finalCol, row: finalRow, cellIndex: finalRow * cols + finalCol };
+
+              // Sync imageIds order with new visual positions
+              const _ids = [...targetFolder.imageIds];
+              const draggedIdx = _ids.indexOf(currentImg.id);
+              if (draggedIdx !== -1) {
+                if (swapImgId) {
+                  const swapIdx = _ids.indexOf(swapImgId);
+                  if (swapIdx !== -1) {
+                    _ids[draggedIdx] = swapImgId;
+                    _ids[swapIdx] = currentImg.id;
+                  }
+                } else {
+                  const newCellIndex = finalRow * cols + finalCol;
+                  _ids.splice(draggedIdx, 1);
+                  _ids.splice(Math.min(newCellIndex, _ids.length), 0, currentImg.id);
+                }
+                updatedImageIds = _ids;
+              }
             } else {
               finalX = newX;
               finalY = newY;
@@ -619,6 +638,15 @@ export function useDragHandlers({
                 return img;
               })
             );
+
+            // Update folder imageIds to match new visual order
+            if (updatedImageIds) {
+              setFolders((prev) =>
+                prev.map((f) =>
+                  f.id === targetFolderId ? { ...f, imageIds: updatedImageIds! } : f
+                )
+              );
+            }
 
             if (user) {
               const currentCanonical = currentImg.storagePath || currentImg.originalStoragePath;

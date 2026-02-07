@@ -428,6 +428,22 @@ export const positionImagesInCells = (
   });
 };
 
+// ── Helpers ──────────────────────────────────────────────────────────────
+
+/** Get folder images sorted by imageIds order (O(1) Map lookup per image) */
+export const getFolderImagesSorted = (
+  allImages: CanvasImage[],
+  imageIds: string[]
+): CanvasImage[] => {
+  const imageMap = new Map(allImages.map(img => [img.id, img]));
+  const result: CanvasImage[] = [];
+  for (const id of imageIds) {
+    const img = imageMap.get(id);
+    if (img) result.push(img);
+  }
+  return result;
+};
+
 // ── Folder Overlap Resolution ────────────────────────────────────────────
 
 // Check if two rectangles overlap

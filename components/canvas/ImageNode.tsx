@@ -72,20 +72,15 @@ export const ImageNode = React.memo(function ImageNode({
     }
   }, [image.x, image.y]);
 
-  // Cache the Konva node when GPU provides a filtered canvas.
-  // Without cache, every Konva redraw (zoom, pan, drag) re-draws from the canvas source.
-  // With cache, Konva blits a pre-rendered raster — much faster for 20+ images.
+  // When we have a filtered canvas, do NOT cache — the canvas is already full resolution.
+  // Caching would downscale it to node size (or 2×) and then we'd lose quality. Drawing
+  // the canvas every frame lets Konva sample from full res when scaling to the node.
   useEffect(() => {
     const node = imageRef.current;
     if (!node) return;
 
     node.clearCache();
     node.filters([]);
-
-    if (filteredCanvas) {
-      // GPU canvas is at display×2 — cache at pixelRatio 1 gives display-res raster
-      node.cache({ pixelRatio: 1 });
-    }
 
     node.getLayer()?.batchDraw();
   }, [filteredCanvas, hasActiveFilters]);

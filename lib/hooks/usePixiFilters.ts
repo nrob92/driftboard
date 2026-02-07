@@ -116,10 +116,8 @@ export function usePixiFilters({
   // Uses engine.renderImage() which is mutex-protected to prevent race conditions
   // Reads image/bypassedTabs from refs to avoid re-triggering on x/y changes
   //
-  // Renders at DISPLAY×2 resolution (not source resolution) for performance:
-  // - 20 images at source (1500×1000) = 120MB of canvases → causes memory pressure
-  // - 20 images at display×2 (600×400) = 19MB → fast, good retina quality
-  // - Full-res rendering is handled separately by exportFiltered() for export
+  // Render at full SOURCE resolution (naturalWidth × naturalHeight) so filtered quality
+  // matches the unfiltered image. No cap — we never upscale and never degrade.
   useEffect(() => {
     if (!imgElement) return;
 
@@ -138,10 +136,8 @@ export function usePixiFilters({
     const currentImage = imageRef.current;
     const currentBypass = bypassRef.current;
 
-    // Render at 2× display size (retina quality) instead of full source resolution.
-    // This keeps canvases small while looking sharp on screen.
-    const renderW = currentImage.width * 2;
-    const renderH = currentImage.height * 2;
+    const renderW = imgElement.naturalWidth || currentImage.width;
+    const renderH = imgElement.naturalHeight || currentImage.height;
 
     engine.renderImage(imgElement, currentImage, currentBypass, renderW, renderH).then((clonedCanvas) => {
       // Discard if a newer render was started while we waited for the lock

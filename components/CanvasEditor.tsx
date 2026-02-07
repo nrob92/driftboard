@@ -37,6 +37,7 @@ import {
   getFolderBounds, getFolderBorderHeight, distanceToRectBorder,
   getImageCellPositions, calculateMinimumFolderSize, smartRepackImages,
   positionImagesInCells, rectsOverlap, resolveFolderOverlaps,
+  getFolderImagesSorted,
   type ImageCellPosition, type CellAssignment,
 } from '@/lib/folders/folderLayout';
 
@@ -915,7 +916,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       const oldFolder = currentFolders.find(f => f.id === newFolder.id);
       if (!oldFolder || (oldFolder.x === newFolder.x && oldFolder.y === newFolder.y)) continue;
 
-      const folderImgs = updatedImages.filter(img => newFolder.imageIds.includes(img.id));
+      const folderImgs = getFolderImagesSorted(updatedImages, newFolder.imageIds);
       if (folderImgs.length === 0) continue;
 
       const isChangedFolderWithAdd = newFolder.id === changedFolderId && addedImageId;
@@ -935,10 +936,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             ? existingImgs.map((img) => ({ ...img, x: img.x + dx(newFolder, oldFolder), y: img.y + dy(newFolder, oldFolder) }))
             : reflowImagesInFolder(existingImgs, newFolder.x, newFolder.y, newFolder.width);
 
-        updatedImages = updatedImages.map(img => {
-          const r = reflowed.find(ri => ri.id === img.id);
-          return r || img;
-        });
+        const reflowedMap = new Map(reflowed.map(r => [r.id, r]));
+        updatedImages = updatedImages.map(img => reflowedMap.get(img.id) ?? img);
       }
 
       // Dropped image: move with folder only (keep drop position + delta)

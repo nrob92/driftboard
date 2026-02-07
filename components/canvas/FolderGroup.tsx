@@ -10,10 +10,8 @@ import {
   SOCIAL_LAYOUT_PAGE_WIDTH, SOCIAL_LAYOUT_MAX_PAGES,
   DEFAULT_SOCIAL_LAYOUT_BG, GRID_CONFIG, CELL_SIZE, CELL_HEIGHT,
   isSocialLayout, getFolderBorderHeight,
-  calculateColsFromWidth,
-  getImageCellPositions, calculateMinimumFolderSize, smartRepackImages,
-  positionImagesInCells,
-  type CellAssignment,
+  calculateColsFromWidth, calculateMinimumFolderSize,
+  reflowImagesInFolder, getFolderImagesSorted,
 } from '@/lib/folders/folderLayout';
 
 interface FolderGroupProps {
@@ -344,39 +342,11 @@ export function FolderGroup({
             const proposedContentHeight = Math.max(100, e.target.y() - borderY + handleSize);
             const proposedHeight = 30 + proposedContentHeight;
 
-            const folderImgs = latestImages.filter(img => latestFolder.imageIds.includes(img.id));
+            const folderImgs = getFolderImagesSorted(latestImages, latestFolder.imageIds);
             const minSize = calculateMinimumFolderSize(folderImgs.length, proposedWidth);
             const newWidth = Math.max(proposedWidth, minSize.width);
             const newHeight = Math.max(proposedHeight, minSize.height);
             const newContentHeight = newHeight - 30;
-
-            const oldCols = calculateColsFromWidth(latestFolder.width);
-            const newCols = calculateColsFromWidth(newWidth);
-            const dimensionsChanged = newWidth !== latestFolder.width || newHeight !== latestFolder.height;
-            const needsRepack = newCols !== oldCols || newHeight < (latestFolder.height ?? Infinity);
-
-            const currentPositions = folderImgs.length > 0
-              ? getImageCellPositions(folderImgs, latestFolder.x, latestFolder.y, latestFolder.width)
-              : [];
-
-            let cellAssignments: CellAssignment[] = [];
-            if (folderImgs.length > 0) {
-              if (dimensionsChanged && needsRepack) {
-                cellAssignments = smartRepackImages(
-                  folderImgs,
-                  currentPositions,
-                  latestFolder.width,
-                  newWidth,
-                  newHeight
-                );
-              } else {
-                cellAssignments = currentPositions.map(pos => ({
-                  imageId: pos.imageId,
-                  col: pos.col,
-                  row: pos.row,
-                }));
-              }
-            }
 
             const updatedFolders = latestFolders.map((f) =>
               f.id === currentFolder.id
@@ -387,20 +357,11 @@ export function FolderGroup({
             e.target.x(borderX + newWidth - handleSize);
             e.target.y(borderY + newContentHeight - handleSize);
 
-            let updatedImages = [...latestImages];
-            if (folderImgs.length > 0 && cellAssignments.length > 0) {
-              const positionedImages = positionImagesInCells(
-                folderImgs,
-                cellAssignments,
-                latestFolder.x,
-                latestFolder.y,
-                newWidth
-              );
-
-              updatedImages = latestImages.map((img) => {
-                const positioned = positionedImages.find(p => p.id === img.id);
-                return positioned ? positioned : img;
-              });
+            let updatedImages = latestImages;
+            if (folderImgs.length > 0) {
+              const reflowed = reflowImagesInFolder(folderImgs, latestFolder.x, latestFolder.y, newWidth);
+              const reflowedMap = new Map(reflowed.map(r => [r.id, r]));
+              updatedImages = latestImages.map(img => reflowedMap.get(img.id) ?? img);
             }
 
             pendingResizeDragRef.current = { updatedFolders, updatedImages };
@@ -437,14 +398,12 @@ export function FolderGroup({
             const resizedFolder = latestFolders.find(f => f.id === currentFolder.id);
             if (!resizedFolder) return;
 
-            const folderImgs = latestImages.filter(img => resizedFolder.imageIds.includes(img.id));
+            const folderImgs = getFolderImagesSorted(latestImages, resizedFolder.imageIds);
             const imageCount = folderImgs.length;
 
             if (imageCount === 0) {
               const { folders: finalFolders, images: finalImages } = resolveOverlapsAndReflow(
-                latestFolders,
-                latestImages,
-                currentFolder.id
+                latestFolders, latestImages, currentFolder.id
               );
               setFolders(finalFolders);
               setImages(finalImages);
@@ -452,46 +411,17 @@ export function FolderGroup({
               return;
             }
 
-            const currentPositions = getImageCellPositions(
-              folderImgs,
-              resizedFolder.x,
-              resizedFolder.y,
-              resizedFolder.width
-            );
-
+            // Snap to grid dimensions
             const cols = calculateColsFromWidth(resizedFolder.width);
+            const minRows = Math.ceil(imageCount / cols) || 1;
             const currentContentHeight = (resizedFolder.height ?? 130) - 30;
             const availableForCells = currentContentHeight - (2 * GRID_CONFIG.folderPadding) + GRID_CONFIG.imageGap;
             const rowsFromHeight = Math.max(1, Math.floor(availableForCells / CELL_HEIGHT));
-            const maxRowWithImage = imageCount > 0 ? Math.max(0, ...currentPositions.map(p => p.row)) : 0;
-            const minRowsNeeded = maxRowWithImage + 1;
-            const rows = Math.max(rowsFromHeight, minRowsNeeded);
+            const rows = Math.max(rowsFromHeight, minRows);
 
             const snappedWidth = (2 * GRID_CONFIG.folderPadding) + (cols * CELL_SIZE) - GRID_CONFIG.imageGap;
             const snappedContentHeight = (2 * GRID_CONFIG.folderPadding) + (rows * CELL_HEIGHT) - GRID_CONFIG.imageGap;
             const snappedHeight = 30 + Math.max(snappedContentHeight, 100);
-
-            const snappedCols = calculateColsFromWidth(snappedWidth);
-            const snappedMaxRows = Math.max(1, Math.floor((snappedHeight - 30 - 2 * GRID_CONFIG.folderPadding + GRID_CONFIG.imageGap) / CELL_HEIGHT));
-
-            let cellAssignments: CellAssignment[];
-            const needsRepack = currentPositions.some(p => p.col >= snappedCols || p.row >= snappedMaxRows);
-
-            if (needsRepack) {
-              cellAssignments = smartRepackImages(
-                folderImgs,
-                currentPositions,
-                resizedFolder.width,
-                snappedWidth,
-                snappedHeight
-              );
-            } else {
-              cellAssignments = currentPositions.map(pos => ({
-                imageId: pos.imageId,
-                col: pos.col,
-                row: pos.row,
-              }));
-            }
 
             const snappedFolders = latestFolders.map(f =>
               f.id === resizedFolder.id
@@ -499,23 +429,13 @@ export function FolderGroup({
                 : f
             );
 
-            const positionedImages = positionImagesInCells(
-              folderImgs,
-              cellAssignments,
-              resizedFolder.x,
-              resizedFolder.y,
-              snappedWidth
-            );
-
-            const snappedImages = latestImages.map(img => {
-              const positioned = positionedImages.find(p => p.id === img.id);
-              return positioned ? positioned : img;
-            });
+            // Reflow images deterministically from imageIds order
+            const reflowed = reflowImagesInFolder(folderImgs, resizedFolder.x, resizedFolder.y, snappedWidth);
+            const reflowedMap = new Map(reflowed.map(r => [r.id, r]));
+            const snappedImages = latestImages.map(img => reflowedMap.get(img.id) ?? img);
 
             const { folders: finalFolders, images: finalImages } = resolveOverlapsAndReflow(
-              snappedFolders,
-              snappedImages,
-              currentFolder.id
+              snappedFolders, snappedImages, currentFolder.id
             );
             setFolders(finalFolders);
             setImages(finalImages);
