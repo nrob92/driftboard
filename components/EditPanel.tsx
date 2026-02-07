@@ -10,6 +10,7 @@ import {
   type CanvasImage, type CanvasText, type ActivePanel, type BypassTab, type Preset,
   DEFAULT_CURVES,
 } from '@/lib/types';
+import { useFilteredPreviewUrl } from '@/lib/hooks/useFilteredPreviewUrl';
 
 interface EditPanelProps {
   object: CanvasImage | CanvasText;
@@ -163,6 +164,13 @@ function Slider({
 export function EditPanel(props: EditPanelProps) {
   const { object, onUpdate, onDelete, onResetToOriginal, onExport, bypassedTabs, onToggleBypass, isDeleting, onSliderDraggingChange, onSliderSettled, onSliderUnsettled, onApplyPresetProgress, isMobile, onCloseMobileEdit, imagePreviewUrl } = props;
   const isImage = 'src' in object;
+
+  // Mobile fullscreen: render image through filter pipeline so preview shows edits live
+  const filteredPreviewUrl = useFilteredPreviewUrl(
+    isImage ? (object as CanvasImage) : null,
+    bypassedTabs ?? new Set(),
+    !!(isMobile && isImage)
+  );
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [renamingPresetId, setRenamingPresetId] = useState<string | null>(null);
@@ -719,11 +727,11 @@ export function EditPanel(props: EditPanelProps) {
           </button>
         </div>
 
-        {/* Image Preview */}
+        {/* Image Preview - uses filtered output so edits show live */}
         <div className="flex-shrink-0 h-[35vh] bg-black flex items-center justify-center p-2">
-          {imagePreviewUrl ? (
+          {(filteredPreviewUrl ?? imagePreviewUrl) ? (
             <img
-              src={imagePreviewUrl}
+              src={filteredPreviewUrl ?? imagePreviewUrl}
               alt="Preview"
               className="max-h-full max-w-full object-contain rounded"
             />
