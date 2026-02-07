@@ -21,7 +21,7 @@ export interface ImageNodeProps {
   bypassedTabs?: Set<'curves' | 'light' | 'color' | 'effects'>;
   useLowResPreview?: boolean;
   isSelected?: boolean;
-  isPreviewingQuality?: boolean;
+  draggable?: boolean;
 }
 
 // Image node component - memoized to prevent unnecessary re-renders
@@ -39,6 +39,7 @@ export const ImageNode = React.memo(function ImageNode({
   onUpdate,
   bypassedTabs,
   isSelected,
+  draggable = true,
 }: ImageNodeProps) {
   const [img, imgStatus] = useImage(image.src, 'anonymous');
   const imageRef = useRef<Konva.Image>(null);
@@ -105,7 +106,8 @@ export const ImageNode = React.memo(function ImageNode({
       rotation={image.rotation}
       scaleX={image.scaleX}
       scaleY={image.scaleY}
-      draggable
+      draggable={draggable}
+      listening={draggable}
       onClick={onClick}
       onDblClick={(e) => {
         e.cancelBubble = true;
@@ -125,7 +127,7 @@ export const ImageNode = React.memo(function ImageNode({
       onTouchMove={(e) => onTouchMove?.(e, image.id)}
       onMouseEnter={(e) => {
         const container = e.target.getStage()?.container();
-        if (container) container.style.cursor = 'pointer';
+        if (container && draggable) container.style.cursor = 'pointer';
       }}
       onMouseLeave={(e) => {
         const container = e.target.getStage()?.container();

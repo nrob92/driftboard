@@ -4,7 +4,6 @@ interface InteractionState {
   isDragging: boolean;
   isAdjustingSliders: boolean;
   sliderSettledWhileDragging: boolean;
-  isPreviewingQuality: boolean;
   isSpacePressed: boolean;
   dragHoveredFolderId: string | null;
   dragSourceFolderBorderHovered: string | null;
@@ -26,7 +25,6 @@ interface InteractionState {
   setIsDragging: (v: boolean) => void;
   setIsAdjustingSliders: (v: boolean) => void;
   setSliderSettledWhileDragging: (v: boolean) => void;
-  setIsPreviewingQuality: (v: boolean) => void;
   setIsSpacePressed: (v: boolean) => void;
   setDragHoveredFolderId: (v: string | null) => void;
   setDragSourceFolderBorderHovered: (v: string | null) => void;
@@ -43,7 +41,6 @@ export const useInteractionStore = create<InteractionState>()((set) => ({
   isDragging: false,
   isAdjustingSliders: false,
   sliderSettledWhileDragging: false,
-  isPreviewingQuality: false,
   isSpacePressed: false,
   dragHoveredFolderId: null,
   dragSourceFolderBorderHovered: null,
@@ -58,7 +55,6 @@ export const useInteractionStore = create<InteractionState>()((set) => ({
   setIsDragging: (v) => set({ isDragging: v }),
   setIsAdjustingSliders: (v) => set({ isAdjustingSliders: v }),
   setSliderSettledWhileDragging: (v) => set({ sliderSettledWhileDragging: v }),
-  setIsPreviewingQuality: (v) => set({ isPreviewingQuality: v }),
   setIsSpacePressed: (v) => set({ isSpacePressed: v }),
   setDragHoveredFolderId: (v) => set({ dragHoveredFolderId: v }),
   setDragSourceFolderBorderHovered: (v) => set({ dragSourceFolderBorderHovered: v }),
@@ -74,6 +70,5 @@ export const useInteractionStore = create<InteractionState>()((set) => ({
 // Selectors
 export const selectIsDragging = (state: InteractionState) => state.isDragging;
 export const selectIsAdjustingSliders = (state: InteractionState) => state.isAdjustingSliders;
-export const selectIsPreviewingQuality = (state: InteractionState) => state.isPreviewingQuality;
 export const selectIsSpacePressed = (state: InteractionState) => state.isSpacePressed;
 export const selectSelectedFolderId = (state: InteractionState) => state.selectedFolderId;

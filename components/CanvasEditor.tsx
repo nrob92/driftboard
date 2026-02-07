@@ -171,7 +171,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const isDragging = useInteractionStore((s) => s.isDragging);
   const isAdjustingSliders = useInteractionStore((s) => s.isAdjustingSliders);
   const sliderSettledWhileDragging = useInteractionStore((s) => s.sliderSettledWhileDragging);
-  const isPreviewingQuality = useInteractionStore((s) => s.isPreviewingQuality);
   const isSpacePressed = useInteractionStore((s) => s.isSpacePressed);
   const dragHoveredFolderId = useInteractionStore((s) => s.dragHoveredFolderId);
   const dragSourceFolderBorderHovered = useInteractionStore((s) => s.dragSourceFolderBorderHovered);
@@ -186,7 +185,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const setIsDragging = intActions.setIsDragging;
   const setIsAdjustingSliders = intActions.setIsAdjustingSliders;
   const setSliderSettledWhileDragging = intActions.setSliderSettledWhileDragging;
-  const setIsPreviewingQuality = intActions.setIsPreviewingQuality;
   const setIsSpacePressed = intActions.setIsSpacePressed;
   const setDragHoveredFolderId = intActions.setDragHoveredFolderId;
   const setDragSourceFolderBorderHovered = intActions.setDragSourceFolderBorderHovered;
@@ -342,6 +340,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       if (e.code === 'Space') {
         e.preventDefault();
         setIsSpacePressed(true);
+        // Force Konva to re-evaluate listening state for all elements
+        stageRef.current?.getLayers().forEach((layer) => layer.batchDraw());
       }
       if (e.code === 'Escape' && zoomedImageId) {
         if (zoomAnimationRef.current != null) {
@@ -362,6 +362,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         e.preventDefault();
         setIsSpacePressed(false);
         setIsDragging(false);
+        // Force Konva to re-evaluate listening state for all elements
+        stageRef.current?.getLayers().forEach((layer) => layer.batchDraw());
       }
     };
 
@@ -369,6 +371,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     const handleBlur = () => {
       setIsSpacePressed(false);
       setIsDragging(false);
+      // Force Konva to re-evaluate listening state for all elements
+      stageRef.current?.getLayers().forEach((layer) => layer.batchDraw());
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -1123,16 +1127,26 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     setIsDragging(false);
   }, []);
 
-  // Handle stage drag — clear selection when left-clicking empty (Stage only). Right-click must not clear so paste-to-selection sees full selection.
+  // Handle stage drag — clear selection when left-clicking empty space or folder borders (not images/texts)
   const handleStageMouseDown = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
     if (e.evt.button !== 0) return;
-    const clickedOnEmpty = e.target === e.target.getStage();
-    if (clickedOnEmpty) {
+    const target = e.target;
+    const stage = target.getStage();
+
+    // Check if clicked on stage itself OR on a shape that isn't an image/text
+    const clickedOnStage = target === stage;
+    const parent = target.parent;
+    const clickedOnImageOrText = parent?.attrs?.id && (
+      images.some(img => img.id === parent.attrs.id) ||
+      texts.some(txt => txt.id === parent.attrs.id)
+    );
+
+    if (clickedOnStage || !clickedOnImageOrText) {
       setSelectedIds([]);
       setSelectedFolderId(null);
       lastSelectedIdRef.current = null;
     }
-  }, []);
+  }, [images, texts]);
 
   // Remember last multi-selection so context menu can use it even if a spurious click overwrote selectedIds. Only clear when selection is empty, not when it becomes single.
   useEffect(() => {
@@ -1935,6 +1949,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
   const handleObjectDragEnd = useCallback(
     (e: Konva.KonvaEventObject<DragEvent>, type: 'image' | 'text') => {
+      // Ignore drag end if spacebar is pressed (shouldn't happen, but just in case)
+      if (isSpacePressed) return;
+
       if (dragMoveRafRef.current != null) {
         cancelAnimationFrame(dragMoveRafRef.current);
         dragMoveRafRef.current = null;
@@ -2499,7 +2516,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         );
       }
     },
-    [images, user, resolveOverlapsAndReflow, saveToHistory]
+    [images, user, resolveOverlapsAndReflow, saveToHistory, isSpacePressed]
   );
 
 
@@ -2961,26 +2978,13 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     );
   }, [zoomedImageId, stageScale, stagePosition, dimensions.width, dimensions.height, animateView, isMobile]);
 
-  // Clicking stage background when zoomed: zoom back out (left button only)
+  // Clicking stage background when zoomed: just deselect, don't unzoom
   const handleStageMouseDownWithZoom = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
     prevMouseDownButtonRef.current = lastMouseDownButtonRef.current;
     lastMouseDownButtonRef.current = e.evt.button;
-    const clickedOnEmpty = e.target === e.target.getStage();
-    if (zoomedImageId && clickedOnEmpty && e.evt.button === 0) {
-      const pre = preZoomViewRef.current;
-      if (pre) {
-        animateView(
-          { scale: stageScale, x: stagePosition.x, y: stagePosition.y },
-          { scale: pre.scale, x: pre.x, y: pre.y },
-          () => setZoomedImageId(null)
-        );
-      } else {
-        setZoomedImageId(null);
-      }
-      return;
-    }
+    // When zoomed, clicking empty space just clears selection (doesn't unzoom)
     handleStageMouseDown(e);
-  }, [zoomedImageId, stageScale, stagePosition, animateView, handleStageMouseDown]);
+  }, [handleStageMouseDown]);
 
   // Get selected object (only when exactly one selected, for edit panel)
   const selectedObject = selectedIds.length === 1
@@ -3530,23 +3534,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           className="hidden"
         />
 
-        {/* Preview Quality Button - Hold to see high-res */}
-        {selectedIds.length > 0 && (
-          <button
-            className={`fixed bottom-6 right-6 z-10 px-6 py-3 rounded-xl font-medium text-sm transition-all ${
-              isPreviewingQuality
-                ? 'bg-[#3ECF8E] text-[#0d0d0d] shadow-lg shadow-[#3ECF8E]/50'
-                : 'bg-[#252525] text-white border border-[#444] hover:border-[#3ECF8E]'
-            }`}
-            onMouseDown={() => setIsPreviewingQuality(true)}
-            onMouseUp={() => setIsPreviewingQuality(false)}
-            onMouseLeave={() => setIsPreviewingQuality(false)}
-            onTouchStart={() => setIsPreviewingQuality(true)}
-            onTouchEnd={() => setIsPreviewingQuality(false)}
-          >
-            {isPreviewingQuality ? '📸 High Quality' : '👁️ Preview Quality'}
-          </button>
-        )}
 
         <Stage
           ref={stageRef}
@@ -3643,7 +3630,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               />
             </Group>
             {/* Folder Borders and Labels — only show folders that have at least one visible image when filter is on */}
-            {folders
+            {!zoomedImageId && folders
               .filter((folder) => visibleImageIds === null || folder.imageIds.some((id) => visibleImageIds.has(id)))
               .map((folder) => {
                 // Calculate folder dimensions
@@ -3699,11 +3686,11 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                     <Group
                       x={currentFolder.x}
                       y={currentFolder.y - labelYOffset}
-                      draggable
-                      listening={true}
+                      draggable={!isSpacePressed}
+                      listening={!isSpacePressed}
                       onMouseEnter={(e) => {
                         const container = e.target.getStage()?.container();
-                        if (container) container.style.cursor = 'pointer';
+                        if (container && !isSpacePressed) container.style.cursor = 'pointer';
                       }}
                       onMouseLeave={(e) => {
                         const container = e.target.getStage()?.container();
@@ -3905,6 +3892,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                       shadowColor={currentFolder.color}
                       shadowBlur={dragSourceFolderBorderHovered === currentFolder.id ? (dragBorderBlink ? 20 : 0) : (dragHoveredFolderId === currentFolder.id || isHovered ? 20 : 0)}
                       shadowOpacity={dragSourceFolderBorderHovered === currentFolder.id ? (dragBorderBlink ? 0.2 : 0) : (dragHoveredFolderId === currentFolder.id || isHovered ? 0.6 : 0)}
+                      listening={!isSpacePressed}
                       onMouseEnter={() => setHoveredFolderBorder(currentFolder.id)}
                       onMouseLeave={() => {
                         if (!resizingFolderId) setHoveredFolderBorder(null);
@@ -3925,7 +3913,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                         fill={isHovered || isResizing ? currentFolder.color : 'transparent'}
                         opacity={isHovered || isResizing ? 0.6 : 0}
                         cornerRadius={4}
-                        draggable
+                        draggable={!isSpacePressed}
+                        listening={!isSpacePressed}
                         dragBoundFunc={(pos) => pos}
                         onMouseEnter={(e) => {
                           const container = e.target.getStage()?.container();
@@ -4218,7 +4207,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 bypassedTabs={bypassedTabs}
                 useLowResPreview={isAdjustingSliders && !sliderSettledWhileDragging && selectedIds[0] === img.id}
                 isSelected={selectedIds.includes(img.id)}
-                isPreviewingQuality={isPreviewingQuality}
+                draggable={!isSpacePressed}
                 onClick={handleObjectClick}
                 onDblClick={(e) => handleImageDoubleClick(img, e)}
                 onContextMenu={handleImageContextMenu}
@@ -4263,6 +4252,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                 key={txt.id}
                 text={txt}
                 isSelected={selectedIds.includes(txt.id)}
+                draggable={!isSpacePressed}
                 onClick={handleObjectClick}
                 onDragEnd={(e) => handleObjectDragEnd(e, 'text')}
                 onUpdate={(updates) => {
@@ -4851,12 +4841,14 @@ function TextNode({
   onClick,
   onDragEnd,
   onUpdate,
+  draggable = true,
 }: {
   text: CanvasText;
   isSelected: boolean;
   onClick: (e: Konva.KonvaEventObject<MouseEvent>) => void;
   onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) => void;
   onUpdate: (updates: Partial<CanvasText>) => void;
+  draggable?: boolean;
 }) {
   const textRef = useRef<Konva.Text>(null);
 
@@ -4883,7 +4875,8 @@ function TextNode({
       fontSize={text.fontSize}
       fill={text.fill}
       rotation={text.rotation}
-      draggable
+      draggable={draggable}
+      listening={draggable}
       onClick={onClick}
       onDragEnd={onDragEnd}
       onTransformEnd={() => {
