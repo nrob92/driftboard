@@ -1807,12 +1807,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       const currentX = node.x();
       const currentY = node.y();
 
-      // Sync position to store on every drag move (like folder drag) — keeps React in sync and triggers batchDraw
-      setImages((prev) =>
-        prev.map((img) =>
-          img.id === node.id() ? { ...img, x: currentX, y: currentY } : img
-        )
-      );
+      node.x(currentX);
+      node.y(currentY);
       // Force redraw immediately — Konva.autoDrawEnabled is false, so we must call batchDraw
       stageRef.current?.getLayers().forEach((l) => l.batchDraw());
 
@@ -1938,7 +1934,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         setDragHoveredFolderId(targetFolderId || null);
       });
     },
-    [images, folders]
+    [folders]
   );
 
   const handleObjectDragEnd = useCallback(
@@ -1965,9 +1961,14 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         const latestImages = latestImagesRef.current;
         const currentImg = latestImages.find((img) => img.id === node.id());
         if (currentImg) {
-          // Get the current position (already updated by handleImageDragMove if in folder)
           newX = currentX;
           newY = currentY;
+
+          setImages((prev) =>
+            prev.map((img) =>
+              img.id === node.id() ? { ...img, x: newX, y: newY } : img
+            )
+          );
 
           // Calculate current center position
           const currentCenterX = currentX + currentImg.width / 2;

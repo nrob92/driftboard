@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import type { CanvasImage } from '@/lib/types';
 import { exportWithCanvasFilters } from '@/lib/filters/clientFilters';
+import { getPixiFilterEngine } from '@/lib/filters/pixiFilterEngine';
 
 interface UseExportOptions {
   images: CanvasImage[];
@@ -47,8 +48,8 @@ export function useExport({ images, selectedIds, decodeDNG }: UseExportOptions):
             const dngBlob = await response.blob();
             const arrayBuffer = await dngBlob.arrayBuffer();
             const decoded = await decodeDNG(arrayBuffer, false);
-            // Use same canvas filter pipeline as UI so DNG export matches what you see (WYSIWYG)
-            const blob = await exportWithCanvasFilters(image, decoded.dataUrl);
+            // Use GPU filter pipeline for fast full-res export (WYSIWYG)
+            const blob = await exportImageWithFilters(image, decoded.dataUrl);
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -79,7 +80,7 @@ export function useExport({ images, selectedIds, decodeDNG }: UseExportOptions):
         throw new Error(err.error || 'Failed to get image URL');
       }
       const { signedUrl } = await signedRes.json();
-      const blob = await exportWithCanvasFilters(image, signedUrl);
+      const blob = await exportImageWithFilters(image, signedUrl);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -148,4 +149,40 @@ export function useExport({ images, selectedIds, decodeDNG }: UseExportOptions):
   }, [images, exportImageToDownload]);
 
   return { exportProgress, setExportProgress, exportImageToDownload, handleExport, handleExportSelection };
+}
+
+/** Export image with GPU filters (fallback to CPU if GPU unavailable) */
+async function exportImageWithFilters(image: CanvasImage, imageUrl: string): Promise<Blob> {
+  try {
+    // Try GPU pipeline first
+    const engine = getPixiFilterEngine();
+    const hasFilters = engine.hasActiveFilters(image);
+
+    if (hasFilters) {
+      // Load full-res image
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.crossOrigin = 'anonymous';
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error('Failed to load image'));
+        el.src = imageUrl;
+      });
+
+      // Initialize GPU engine at full resolution
+      const w = img.naturalWidth || img.width;
+      const h = img.naturalHeight || img.height;
+      const ok = await engine.init(w, h);
+
+      if (ok) {
+        // GPU export (fast!)
+        const blob = await engine.exportFiltered(image, img);
+        return blob;
+      }
+    }
+  } catch (e) {
+    console.warn('[useExport] GPU export failed, falling back to CPU:', e);
+  }
+
+  // Fallback: CPU pipeline
+  return exportWithCanvasFilters(image, imageUrl);
 }
