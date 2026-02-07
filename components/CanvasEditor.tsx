@@ -507,11 +507,38 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       const originalsList = (originalsFiles ?? []).filter((f) => !f.name.startsWith('.'));
       if (photosList.length === 0 && originalsList.length === 0) {
         // No photos - still load folders (e.g. empty social layouts) so they appear on canvas
+        const emptyFolders = buildFoldersFromSaved([]);
         loadKeyRef.current = loadKey;
         setImages([]);
-        setFolders(buildFoldersFromSaved([]));
-        setHistory([{ images: [], texts: [], folders: buildFoldersFromSaved([]) }]);
+        setFolders(emptyFolders);
+        setHistory([{ images: [], texts: [], folders: emptyFolders }]);
         setHistoryIndex(0);
+        if (emptyFolders.length > 0) {
+          const { dimensions: dims } = useCanvasStore.getState();
+          const padding = 48;
+          const vw = Math.max(200, dims.width - padding * 2);
+          const vh = Math.max(200, dims.height - padding * 2);
+          let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+          for (const folder of emptyFolders) {
+            const bounds = getFolderBounds(folder, 0);
+            minX = Math.min(minX, bounds.x);
+            maxX = Math.max(maxX, bounds.right);
+            minY = Math.min(minY, bounds.y);
+            maxY = Math.max(maxY, bounds.bottom);
+          }
+          const contentW = maxX - minX || 1;
+          const contentH = maxY - minY || 1;
+          const contentCenterX = (minX + maxX) / 2;
+          const contentCenterY = (minY + maxY) / 2;
+          const scaleX = vw / contentW;
+          const scaleY = vh / contentH;
+          const scale = Math.max(0.1, Math.min(2, Math.min(scaleX, scaleY)));
+          setStageScale(scale);
+          setStagePosition({
+            x: dims.width / 2 - contentCenterX * scale,
+            y: dims.height / 2 - contentCenterY * scale,
+          });
+        }
         onPhotosLoadStateChange?.(false);
         return;
       }
@@ -817,35 +844,39 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         setHistory([{ images: newImages, texts: [], folders: loadedFolders }]);
         setHistoryIndex(0);
 
-        if (newImages.length > 0) {
-          // Center the viewport on the loaded content
-          if (loadedFolders.length > 0) {
-            // Calculate bounding box of all folders
-            let minX = Infinity, maxX = -Infinity;
-            let minY = Infinity, maxY = -Infinity;
+        // Fit viewport to show all folders on load
+        if (loadedFolders.length > 0) {
+          const { dimensions: dims } = useCanvasStore.getState();
+          const padding = 48;
+          const vw = Math.max(200, dims.width - padding * 2);
+          const vh = Math.max(200, dims.height - padding * 2);
 
-            for (const folder of loadedFolders) {
-              const folderImgCount = newImages.filter(img => folder.imageIds.includes(img.id)).length;
-              const bounds = getFolderBounds(folder, folderImgCount);
-              minX = Math.min(minX, bounds.x);
-              maxX = Math.max(maxX, bounds.right);
-              minY = Math.min(minY, bounds.y);
-              maxY = Math.max(maxY, bounds.bottom);
-            }
+          let minX = Infinity, maxX = -Infinity;
+          let minY = Infinity, maxY = -Infinity;
 
-            // Calculate center of all content
-            const contentCenterX = (minX + maxX) / 2;
-            const contentCenterY = (minY + maxY) / 2;
-
-            // Pan so content is centered in viewport
-            const viewportCenterX = window.innerWidth / 2;
-            const viewportCenterY = window.innerHeight / 2;
-
-            setStagePosition({
-              x: viewportCenterX - contentCenterX,
-              y: viewportCenterY - contentCenterY,
-            });
+          for (const folder of loadedFolders) {
+            const folderImgCount = newImages.filter(img => folder.imageIds.includes(img.id)).length;
+            const bounds = getFolderBounds(folder, folderImgCount);
+            minX = Math.min(minX, bounds.x);
+            maxX = Math.max(maxX, bounds.right);
+            minY = Math.min(minY, bounds.y);
+            maxY = Math.max(maxY, bounds.bottom);
           }
+
+          const contentW = maxX - minX || 1;
+          const contentH = maxY - minY || 1;
+          const contentCenterX = (minX + maxX) / 2;
+          const contentCenterY = (minY + maxY) / 2;
+
+          const scaleX = vw / contentW;
+          const scaleY = vh / contentH;
+          const scale = Math.max(0.1, Math.min(2, Math.min(scaleX, scaleY)));
+
+          setStageScale(scale);
+          setStagePosition({
+            x: dims.width / 2 - contentCenterX * scale,
+            y: dims.height / 2 - contentCenterY * scale,
+          });
         }
       } catch (err) {
         console.error('Error loading user photos:', err);
