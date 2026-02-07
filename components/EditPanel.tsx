@@ -978,552 +978,11 @@ export function EditPanel(props: EditPanelProps) {
     );
   }
 
-  // ─── Desktop Edit Panel (unchanged) ───
+  // ─── Desktop Edit Panel ───
+  const modalWrapper = 'absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-20';
+
   return (
     <>
-      {/* Curves Editor Popup */}
-      {activePanel === 'curves' && isImage && (
-        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-20">
-          <CurvesEditor
-            curves={img.curves || DEFAULT_CURVES}
-            onChange={handleCurvesChange}
-            onClose={() => setActivePanel(null)}
-          />
-        </div>
-      )}
-
-      {/* Light Panel Popup */}
-      {activePanel === 'light' && isImage && (
-        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-20">
-          <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-4 w-72">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-medium text-white">Light</h3>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => onUpdate({ exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0 })}
-                  className="text-xs text-[#888] hover:text-white transition-colors cursor-pointer"
-                >
-                  Reset
-                </button>
-                <button
-                  onClick={() => setActivePanel(null)}
-                  className="p-1 text-[#888] hover:text-white transition-colors cursor-pointer"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div className="space-y-3">
-              <Slider label="Exposure" value={img.exposure} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ exposure: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
-              <Slider label="Contrast" value={img.contrast} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ contrast: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
-              <Slider label="Highlights" value={img.highlights} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ highlights: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
-              <Slider label="Shadows" value={img.shadows} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ shadows: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
-              <Slider label="Whites" value={img.whites} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ whites: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
-              <Slider label="Blacks" value={img.blacks} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ blacks: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Color Panel Popup */}
-      {activePanel === 'color' && isImage && (
-        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-20">
-          <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-4 w-80">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-medium text-white">Color</h3>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    const defaultHSL: ColorHSL = {
-                      red: { hue: 0, saturation: 0, luminance: 0 },
-                      orange: { hue: 0, saturation: 0, luminance: 0 },
-                      yellow: { hue: 0, saturation: 0, luminance: 0 },
-                      green: { hue: 0, saturation: 0, luminance: 0 },
-                      aqua: { hue: 0, saturation: 0, luminance: 0 },
-                      blue: { hue: 0, saturation: 0, luminance: 0 },
-                      purple: { hue: 0, saturation: 0, luminance: 0 },
-                      magenta: { hue: 0, saturation: 0, luminance: 0 },
-                    };
-                    onUpdate({ temperature: 0, vibrance: 0, saturation: 0, colorHSL: defaultHSL });
-                  }}
-                  className="text-xs text-[#888] hover:text-white transition-colors cursor-pointer"
-                >
-                  Reset
-                </button>
-                <button
-                  onClick={() => setActivePanel(null)}
-                  className="p-1 text-[#888] hover:text-white transition-colors cursor-pointer"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div className="max-h-96 overflow-y-auto space-y-3 pr-2">
-              {/* Basic Color Adjustments */}
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-xs text-[#888] w-20">Temp</span>
-                <div className="flex items-center gap-2 flex-1">
-                  <span className="text-[10px] text-[#74c0fc]">Cool</span>
-                  <input
-                    type="range"
-                    min={-1}
-                    max={1}
-                    step={0.01}
-                    value={img.temperature}
-                    onChange={(e) => onUpdate({ temperature: parseFloat(e.target.value) })}
-                    onMouseDown={handleSliderDragStart}
-                    onMouseUp={handleSliderDragEnd}
-                    onTouchStart={handleSliderDragStart}
-                    onTouchEnd={handleSliderDragEnd}
-                    onDoubleClick={() => onUpdate({ temperature: 0 })}
-                    className="flex-1 h-1 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:cursor-pointer"
-                    style={{ background: 'linear-gradient(to right, #74c0fc, #ff9f43)' }}
-                  />
-                  <span className="text-[10px] text-[#ff9f43]">Warm</span>
-                </div>
-              </div>
-              <Slider label="Vibrance" value={img.vibrance} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ vibrance: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
-              <Slider label="Saturation" value={img.saturation} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ saturation: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
-
-              {/* HSL Color Adjustments */}
-              <div className="border-t border-[#2a2a2a] pt-3 mt-4">
-                <button
-                  onClick={() => setIsHSLExpanded(!isHSLExpanded)}
-                  className="w-full flex items-center justify-between mb-3 text-xs font-medium text-white hover:text-[#3ECF8E] transition-colors cursor-pointer"
-                >
-                  <span>HSL / Color</span>
-                  <svg
-                    className={`w-4 h-4 transition-transform ${isHSLExpanded ? 'rotate-180' : ''}`}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </button>
-
-                {isHSLExpanded && (
-                  <>
-                    {/* Red */}
-                    <div className="mb-4">
-                  <div className="text-[11px] font-medium text-[#ff6b6b] mb-2">Red</div>
-                  <Slider
-                    label="Hue"
-                    value={img.colorHSL?.red?.hue ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, red: { ...img.colorHSL?.red, hue: v, saturation: img.colorHSL?.red?.saturation ?? 0, luminance: img.colorHSL?.red?.luminance ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                  <Slider
-                    label="Saturation"
-                    value={img.colorHSL?.red?.saturation ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, red: { ...img.colorHSL?.red, saturation: v, hue: img.colorHSL?.red?.hue ?? 0, luminance: img.colorHSL?.red?.luminance ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                  <Slider
-                    label="Luminance"
-                    value={img.colorHSL?.red?.luminance ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, red: { ...img.colorHSL?.red, luminance: v, hue: img.colorHSL?.red?.hue ?? 0, saturation: img.colorHSL?.red?.saturation ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                </div>
-
-                {/* Orange */}
-                <div className="mb-4">
-                  <div className="text-[11px] font-medium text-[#ff9f43] mb-2">Orange</div>
-                  <Slider
-                    label="Hue"
-                    value={img.colorHSL?.orange?.hue ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, orange: { ...img.colorHSL?.orange, hue: v, saturation: img.colorHSL?.orange?.saturation ?? 0, luminance: img.colorHSL?.orange?.luminance ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                  <Slider
-                    label="Saturation"
-                    value={img.colorHSL?.orange?.saturation ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, orange: { ...img.colorHSL?.orange, saturation: v, hue: img.colorHSL?.orange?.hue ?? 0, luminance: img.colorHSL?.orange?.luminance ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                  <Slider
-                    label="Luminance"
-                    value={img.colorHSL?.orange?.luminance ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, orange: { ...img.colorHSL?.orange, luminance: v, hue: img.colorHSL?.orange?.hue ?? 0, saturation: img.colorHSL?.orange?.saturation ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                </div>
-
-                {/* Yellow */}
-                <div className="mb-4">
-                  <div className="text-[11px] font-medium text-[#ffd93d] mb-2">Yellow</div>
-                  <Slider
-                    label="Hue"
-                    value={img.colorHSL?.yellow?.hue ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, yellow: { ...img.colorHSL?.yellow, hue: v, saturation: img.colorHSL?.yellow?.saturation ?? 0, luminance: img.colorHSL?.yellow?.luminance ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                  <Slider
-                    label="Saturation"
-                    value={img.colorHSL?.yellow?.saturation ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, yellow: { ...img.colorHSL?.yellow, saturation: v, hue: img.colorHSL?.yellow?.hue ?? 0, luminance: img.colorHSL?.yellow?.luminance ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                  <Slider
-                    label="Luminance"
-                    value={img.colorHSL?.yellow?.luminance ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, yellow: { ...img.colorHSL?.yellow, luminance: v, hue: img.colorHSL?.yellow?.hue ?? 0, saturation: img.colorHSL?.yellow?.saturation ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                </div>
-
-                {/* Green */}
-                <div className="mb-4">
-                  <div className="text-[11px] font-medium text-[#6bcf7f] mb-2">Green</div>
-                  <Slider
-                    label="Hue"
-                    value={img.colorHSL?.green?.hue ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, green: { ...img.colorHSL?.green, hue: v, saturation: img.colorHSL?.green?.saturation ?? 0, luminance: img.colorHSL?.green?.luminance ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                  <Slider
-                    label="Saturation"
-                    value={img.colorHSL?.green?.saturation ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, green: { ...img.colorHSL?.green, saturation: v, hue: img.colorHSL?.green?.hue ?? 0, luminance: img.colorHSL?.green?.luminance ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                  <Slider
-                    label="Luminance"
-                    value={img.colorHSL?.green?.luminance ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, green: { ...img.colorHSL?.green, luminance: v, hue: img.colorHSL?.green?.hue ?? 0, saturation: img.colorHSL?.green?.saturation ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                </div>
-
-                {/* Aqua */}
-                <div className="mb-4">
-                  <div className="text-[11px] font-medium text-[#4ecdc4] mb-2">Aqua</div>
-                  <Slider
-                    label="Hue"
-                    value={img.colorHSL?.aqua?.hue ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, aqua: { ...img.colorHSL?.aqua, hue: v, saturation: img.colorHSL?.aqua?.saturation ?? 0, luminance: img.colorHSL?.aqua?.luminance ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                  <Slider
-                    label="Saturation"
-                    value={img.colorHSL?.aqua?.saturation ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, aqua: { ...img.colorHSL?.aqua, saturation: v, hue: img.colorHSL?.aqua?.hue ?? 0, luminance: img.colorHSL?.aqua?.luminance ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                  <Slider
-                    label="Luminance"
-                    value={img.colorHSL?.aqua?.luminance ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, aqua: { ...img.colorHSL?.aqua, luminance: v, hue: img.colorHSL?.aqua?.hue ?? 0, saturation: img.colorHSL?.aqua?.saturation ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                </div>
-
-                {/* Blue */}
-                <div className="mb-4">
-                  <div className="text-[11px] font-medium text-[#4d96ff] mb-2">Blue</div>
-                  <Slider
-                    label="Hue"
-                    value={img.colorHSL?.blue?.hue ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, blue: { ...img.colorHSL?.blue, hue: v, saturation: img.colorHSL?.blue?.saturation ?? 0, luminance: img.colorHSL?.blue?.luminance ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                  <Slider
-                    label="Saturation"
-                    value={img.colorHSL?.blue?.saturation ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, blue: { ...img.colorHSL?.blue, saturation: v, hue: img.colorHSL?.blue?.hue ?? 0, luminance: img.colorHSL?.blue?.luminance ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                  <Slider
-                    label="Luminance"
-                    value={img.colorHSL?.blue?.luminance ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, blue: { ...img.colorHSL?.blue, luminance: v, hue: img.colorHSL?.blue?.hue ?? 0, saturation: img.colorHSL?.blue?.saturation ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                </div>
-
-                {/* Purple */}
-                <div className="mb-4">
-                  <div className="text-[11px] font-medium text-[#a78bfa] mb-2">Purple</div>
-                  <Slider
-                    label="Hue"
-                    value={img.colorHSL?.purple?.hue ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, purple: { ...img.colorHSL?.purple, hue: v, saturation: img.colorHSL?.purple?.saturation ?? 0, luminance: img.colorHSL?.purple?.luminance ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                  <Slider
-                    label="Saturation"
-                    value={img.colorHSL?.purple?.saturation ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, purple: { ...img.colorHSL?.purple, saturation: v, hue: img.colorHSL?.purple?.hue ?? 0, luminance: img.colorHSL?.purple?.luminance ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                  <Slider
-                    label="Luminance"
-                    value={img.colorHSL?.purple?.luminance ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, purple: { ...img.colorHSL?.purple, luminance: v, hue: img.colorHSL?.purple?.hue ?? 0, saturation: img.colorHSL?.purple?.saturation ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                </div>
-
-                {/* Magenta */}
-                <div className="mb-4">
-                  <div className="text-[11px] font-medium text-[#f472b6] mb-2">Magenta</div>
-                  <Slider
-                    label="Hue"
-                    value={img.colorHSL?.magenta?.hue ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, magenta: { ...img.colorHSL?.magenta, hue: v, saturation: img.colorHSL?.magenta?.saturation ?? 0, luminance: img.colorHSL?.magenta?.luminance ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                  <Slider
-                    label="Saturation"
-                    value={img.colorHSL?.magenta?.saturation ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, magenta: { ...img.colorHSL?.magenta, saturation: v, hue: img.colorHSL?.magenta?.hue ?? 0, luminance: img.colorHSL?.magenta?.luminance ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                  <Slider
-                    label="Luminance"
-                    value={img.colorHSL?.magenta?.luminance ?? 0}
-                    min={-100}
-                    max={100}
-                    step={1}
-                    defaultValue={0}
-                    onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, magenta: { ...img.colorHSL?.magenta, luminance: v, hue: img.colorHSL?.magenta?.hue ?? 0, saturation: img.colorHSL?.magenta?.saturation ?? 0 } } as ColorHSL })}
-                  onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled}
-                  />
-                </div>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Effects Panel Popup */}
-      {activePanel === 'effects' && isImage && (
-        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-20">
-          <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-4 w-72">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-medium text-white">Effects</h3>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => onUpdate({ clarity: 0, dehaze: 0, vignette: 0, grain: 0 })}
-                  className="text-xs text-[#888] hover:text-white transition-colors cursor-pointer"
-                >
-                  Reset
-                </button>
-                <button
-                  onClick={() => setActivePanel(null)}
-                  className="p-1 text-[#888] hover:text-white transition-colors cursor-pointer"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div className="space-y-3">
-              <Slider label="Clarity" value={img.clarity} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ clarity: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
-              <Slider label="Dehaze" value={img.dehaze} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ dehaze: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
-              <Slider label="Vignette" value={img.vignette} min={0} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ vignette: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
-              <Slider label="Grain" value={img.grain} min={0} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ grain: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Presets Panel Popup */}
-      {activePanel === 'presets' && isImage && (
-        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-20">
-          <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-4 w-80">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-medium text-white">Presets</h3>
-              <button
-                onClick={() => setActivePanel(null)}
-                className="p-1 text-[#888] hover:text-white transition-colors cursor-pointer"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            {/* Hidden file input */}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".xmp"
-              multiple
-              onChange={handleFileSelect}
-              className="hidden"
-            />
-
-            {/* Drag and drop area */}
-            <div
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
-              className={`mb-3 border-2 border-dashed rounded-lg py-3 px-4 text-center cursor-pointer transition-colors ${
-                isDraggingOver
-                  ? 'border-[#3ECF8E] bg-[#3ECF8E]/10'
-                  : 'border-[#333] bg-[#252525] hover:border-[#3ECF8E]/50'
-              }`}
-            >
-              <svg className="w-6 h-6 mx-auto mb-1 text-[#666]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
-              <p className="text-xs text-[#888]">Drop .xmp or click</p>
-            </div>
-
-            {/* Presets list */}
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {presets.length === 0 ? (
-                <p className="text-xs text-[#666] text-center py-4">No presets yet</p>
-              ) : (
-                presets
-                  .sort((a, b) => a.name.localeCompare(b.name))
-                  .map((preset) => (
-                    <div
-                      key={preset.id}
-                      className="flex items-center justify-between gap-2 p-3 bg-[#252525] hover:bg-[#333] rounded-lg transition-colors group"
-                    >
-                      {renamingPresetId === preset.id ? (
-                        <input
-                          type="text"
-                          value={renameValue}
-                          onChange={(e) => setRenameValue(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              handleRenameSubmit();
-                            } else if (e.key === 'Escape') {
-                              handleRenameCancel();
-                            }
-                          }}
-                          onBlur={handleRenameSubmit}
-                          autoFocus
-                          className="flex-1 px-2 py-1 text-sm text-white bg-[#1a1a1a] border border-[#3ECF8E] rounded focus:outline-none"
-                        />
-                      ) : (
-                        <button
-                          onClick={() => applyPreset(preset)}
-                          onDoubleClick={() => handlePresetDoubleClick(preset)}
-                          className="flex-1 text-left text-sm text-white cursor-pointer"
-                        >
-                          {preset.name}
-                        </button>
-                      )}
-                      <button
-                        onClick={() => deletePreset(preset.id)}
-                        className="p-1 text-[#888] hover:text-[#f87171] transition-colors opacity-0 group-hover:opacity-100 cursor-pointer flex-shrink-0"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
-                    </div>
-                  ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Main Toolbar */}
       <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-10">
@@ -1533,30 +992,42 @@ export function EditPanel(props: EditPanelProps) {
               {isImage ? (
                 <>
                   {/* Curves */}
-                  <button
-                    onClick={(e) => {
-                      if (e.ctrlKey || e.metaKey) {
-                        onToggleBypass?.('curves');
-                      } else {
-                        togglePanel('curves');
-                      }
-                    }}
-                    className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
-                      bypassedTabs?.has('curves')
-                        ? 'bg-[#ff6b6b]/20 text-[#ff6b6b] opacity-50'
-                        : activePanel === 'curves' || isCurvesModified
-                        ? 'bg-[#3ECF8E]/20 text-[#3ECF8E]'
-                        : 'bg-[#252525] text-[#999] hover:bg-[#333] hover:text-white'
-                    }`}
-                    title="Click to edit, Ctrl+click to bypass"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 20 C 8 20, 8 4, 12 4 C 16 4, 16 20, 20 20" />
-                    </svg>
-                    <span className={`text-[10px] font-medium uppercase tracking-wider ${bypassedTabs?.has('curves') ? 'line-through' : ''}`}>Curves</span>
-                  </button>
+                  <div className="relative">
+                    <button
+                      onClick={(e) => {
+                        if (e.ctrlKey || e.metaKey) {
+                          onToggleBypass?.('curves');
+                        } else {
+                          togglePanel('curves');
+                        }
+                      }}
+                      className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
+                        bypassedTabs?.has('curves')
+                          ? 'bg-[#ff6b6b]/20 text-[#ff6b6b] opacity-50'
+                          : activePanel === 'curves' || isCurvesModified
+                          ? 'bg-[#3ECF8E]/20 text-[#3ECF8E]'
+                          : 'bg-[#252525] text-[#999] hover:bg-[#333] hover:text-white'
+                      }`}
+                      title="Click to edit, Ctrl+click to bypass"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 20 C 8 20, 8 4, 12 4 C 16 4, 16 20, 20 20" />
+                      </svg>
+                      <span className={`text-[10px] font-medium uppercase tracking-wider ${bypassedTabs?.has('curves') ? 'line-through' : ''}`}>Curves</span>
+                    </button>
+                    {activePanel === 'curves' && isImage && (
+                      <div className={modalWrapper}>
+                        <CurvesEditor
+                          curves={img.curves || DEFAULT_CURVES}
+                          onChange={handleCurvesChange}
+                          onClose={() => setActivePanel(null)}
+                        />
+                      </div>
+                    )}
+                  </div>
 
                   {/* Light */}
+                  <div className="relative">
                   <button
                     onClick={(e) => {
                       if (e.ctrlKey || e.metaKey) {
@@ -1579,8 +1050,33 @@ export function EditPanel(props: EditPanelProps) {
                     </svg>
                     <span className={`text-[10px] font-medium uppercase tracking-wider ${bypassedTabs?.has('light') ? 'line-through' : ''}`}>Light</span>
                   </button>
+                  {activePanel === 'light' && isImage && (
+                    <div className={modalWrapper}>
+                      <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-4 w-72">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="text-sm font-medium text-white">Light</h3>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => onUpdate({ exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0 })} className="text-xs text-[#888] hover:text-white transition-colors cursor-pointer">Reset</button>
+                            <button onClick={() => setActivePanel(null)} className="p-1 text-[#888] hover:text-white transition-colors cursor-pointer">
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                          </div>
+                        </div>
+                        <div className="space-y-3">
+                          <Slider label="Exposure" value={img.exposure} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ exposure: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                          <Slider label="Contrast" value={img.contrast} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ contrast: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                          <Slider label="Highlights" value={img.highlights} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ highlights: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                          <Slider label="Shadows" value={img.shadows} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ shadows: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                          <Slider label="Whites" value={img.whites} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ whites: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                          <Slider label="Blacks" value={img.blacks} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ blacks: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  </div>
 
                   {/* Color */}
+                  <div className="relative">
                   <button
                     onClick={(e) => {
                       if (e.ctrlKey || e.metaKey) {
@@ -1603,8 +1099,54 @@ export function EditPanel(props: EditPanelProps) {
                     </svg>
                     <span className={`text-[10px] font-medium uppercase tracking-wider ${bypassedTabs?.has('color') ? 'line-through' : ''}`}>Color</span>
                   </button>
+                  {activePanel === 'color' && isImage && (
+                    <div className={modalWrapper}>
+                      <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-4 w-80">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="text-sm font-medium text-white">Color</h3>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => { const d: ColorHSL = { red: { hue: 0, saturation: 0, luminance: 0 }, orange: { hue: 0, saturation: 0, luminance: 0 }, yellow: { hue: 0, saturation: 0, luminance: 0 }, green: { hue: 0, saturation: 0, luminance: 0 }, aqua: { hue: 0, saturation: 0, luminance: 0 }, blue: { hue: 0, saturation: 0, luminance: 0 }, purple: { hue: 0, saturation: 0, luminance: 0 }, magenta: { hue: 0, saturation: 0, luminance: 0 } }; onUpdate({ temperature: 0, vibrance: 0, saturation: 0, colorHSL: d }); }} className="text-xs text-[#888] hover:text-white transition-colors cursor-pointer">Reset</button>
+                            <button onClick={() => setActivePanel(null)} className="p-1 text-[#888] hover:text-white transition-colors cursor-pointer">
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                          </div>
+                        </div>
+                        <div className="max-h-96 overflow-y-auto space-y-3 pr-2">
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-xs text-[#888] w-20">Temp</span>
+                            <div className="flex items-center gap-2 flex-1">
+                              <span className="text-[10px] text-[#74c0fc]">Cool</span>
+                              <input type="range" min={-1} max={1} step={0.01} value={img.temperature} onChange={(e) => onUpdate({ temperature: parseFloat(e.target.value) })} onMouseDown={handleSliderDragStart} onMouseUp={handleSliderDragEnd} onTouchStart={handleSliderDragStart} onTouchEnd={handleSliderDragEnd} onDoubleClick={() => onUpdate({ temperature: 0 })} className="flex-1 h-1 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:cursor-pointer" style={{ background: 'linear-gradient(to right, #74c0fc, #ff9f43)' }} />
+                              <span className="text-[10px] text-[#ff9f43]">Warm</span>
+                            </div>
+                          </div>
+                          <Slider label="Vibrance" value={img.vibrance} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ vibrance: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                          <Slider label="Saturation" value={img.saturation} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ saturation: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                          <div className="border-t border-[#2a2a2a] pt-3 mt-4">
+                            <button onClick={() => setIsHSLExpanded(!isHSLExpanded)} className="w-full flex items-center justify-between mb-3 text-xs font-medium text-white hover:text-[#3ECF8E] transition-colors cursor-pointer">
+                              <span>HSL / Color</span>
+                              <svg className={`w-4 h-4 transition-transform ${isHSLExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                            </button>
+                            {isHSLExpanded && (['red', 'orange', 'yellow', 'green', 'aqua', 'blue', 'purple', 'magenta'] as const).map((color) => {
+                              const colorLabels: Record<string, string> = { red: '#ff6b6b', orange: '#ff9f43', yellow: '#ffd93d', green: '#6bcf7f', aqua: '#4ecdc4', blue: '#4d96ff', purple: '#a78bfa', magenta: '#f472b6' };
+                              return (
+                                <div key={color} className="mb-4">
+                                  <div className="text-[11px] font-medium mb-2" style={{ color: colorLabels[color] }}>{color.charAt(0).toUpperCase() + color.slice(1)}</div>
+                                  <Slider label="Hue" value={img.colorHSL?.[color]?.hue ?? 0} min={-100} max={100} step={1} defaultValue={0} onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, [color]: { ...img.colorHSL?.[color], hue: v, saturation: img.colorHSL?.[color]?.saturation ?? 0, luminance: img.colorHSL?.[color]?.luminance ?? 0 } } as ColorHSL })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                                  <Slider label="Sat" value={img.colorHSL?.[color]?.saturation ?? 0} min={-100} max={100} step={1} defaultValue={0} onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, [color]: { ...img.colorHSL?.[color], saturation: v, hue: img.colorHSL?.[color]?.hue ?? 0, luminance: img.colorHSL?.[color]?.luminance ?? 0 } } as ColorHSL })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                                  <Slider label="Lum" value={img.colorHSL?.[color]?.luminance ?? 0} min={-100} max={100} step={1} defaultValue={0} onChange={(v) => onUpdate({ colorHSL: { ...img.colorHSL, [color]: { ...img.colorHSL?.[color], luminance: v, hue: img.colorHSL?.[color]?.hue ?? 0, saturation: img.colorHSL?.[color]?.saturation ?? 0 } } as ColorHSL })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  </div>
 
                   {/* Effects */}
+                  <div className="relative">
                   <button
                     onClick={(e) => {
                       if (e.ctrlKey || e.metaKey) {
@@ -1627,8 +1169,31 @@ export function EditPanel(props: EditPanelProps) {
                     </svg>
                     <span className={`text-[10px] font-medium uppercase tracking-wider ${bypassedTabs?.has('effects') ? 'line-through' : ''}`}>Effects</span>
                   </button>
+                  {activePanel === 'effects' && isImage && (
+                    <div className={modalWrapper}>
+                      <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-4 w-72">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="text-sm font-medium text-white">Effects</h3>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => onUpdate({ clarity: 0, dehaze: 0, vignette: 0, grain: 0 })} className="text-xs text-[#888] hover:text-white transition-colors cursor-pointer">Reset</button>
+                            <button onClick={() => setActivePanel(null)} className="p-1 text-[#888] hover:text-white transition-colors cursor-pointer">
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                          </div>
+                        </div>
+                        <div className="space-y-3">
+                          <Slider label="Clarity" value={img.clarity} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ clarity: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                          <Slider label="Dehaze" value={img.dehaze} min={-1} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ dehaze: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                          <Slider label="Vignette" value={img.vignette} min={0} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ vignette: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                          <Slider label="Grain" value={img.grain} min={0} max={1} step={0.01} defaultValue={0} onChange={(v) => onUpdate({ grain: v })} onDragStart={handleSliderDragStart} onDragEnd={handleSliderDragEnd} onSliderSettled={onSliderSettled} onSliderUnsettled={onSliderUnsettled} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  </div>
 
                   {/* Presets */}
+                  <div className="relative">
                   <button
                     onClick={() => togglePanel('presets')}
                     className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
@@ -1642,6 +1207,42 @@ export function EditPanel(props: EditPanelProps) {
                     </svg>
                     <span className="text-[10px] font-medium uppercase tracking-wider">Presets</span>
                   </button>
+                  {activePanel === 'presets' && isImage && (
+                    <div className={modalWrapper}>
+                      <div className="bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 p-4 w-80">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="text-sm font-medium text-white">Presets</h3>
+                          <button onClick={() => setActivePanel(null)} className="p-1 text-[#888] hover:text-white transition-colors cursor-pointer">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                          </button>
+                        </div>
+                        <input ref={fileInputRef} type="file" accept=".xmp" multiple onChange={handleFileSelect} className="hidden" />
+                        <div onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop} onClick={() => fileInputRef.current?.click()} className={`mb-3 border-2 border-dashed rounded-lg py-3 px-4 text-center cursor-pointer transition-colors ${isDraggingOver ? 'border-[#3ECF8E] bg-[#3ECF8E]/10' : 'border-[#333] bg-[#252525] hover:border-[#3ECF8E]/50'}`}>
+                          <svg className="w-6 h-6 mx-auto mb-1 text-[#666]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+                          <p className="text-xs text-[#888]">Drop .xmp or click</p>
+                        </div>
+                        <div className="space-y-2 max-h-64 overflow-y-auto">
+                          {presets.length === 0 ? (
+                            <p className="text-xs text-[#666] text-center py-4">No presets yet</p>
+                          ) : (
+                            presets.sort((a, b) => a.name.localeCompare(b.name)).map((preset) => (
+                              <div key={preset.id} className="flex items-center justify-between gap-2 p-2 rounded-lg bg-[#252525] hover:bg-[#2a2a2a]">
+                                {renamingPresetId === preset.id ? (
+                                  <input type="text" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleRenameSubmit(); else if (e.key === 'Escape') handleRenameCancel(); }} onBlur={handleRenameSubmit} autoFocus className="flex-1 px-2 py-1 text-sm text-white bg-[#1a1a1a] border border-[#3ECF8E] rounded focus:outline-none" />
+                                ) : (
+                                  <button onClick={() => applyPreset(preset)} onDoubleClick={(e) => { e.preventDefault(); handlePresetDoubleClick(preset); }} className="flex-1 text-left text-sm text-white hover:text-[#3ECF8E]">{preset.name}</button>
+                                )}
+                                <button onClick={() => deletePreset(preset.id)} className="p-1 text-[#888] hover:text-[#f87171] transition-colors" title="Delete preset">
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                </button>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  </div>
 
                   {/* Divider */}
                   <div className="w-px h-10 bg-[#333] mx-1" />

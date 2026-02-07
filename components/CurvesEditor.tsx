@@ -38,7 +38,7 @@ const channelBgColors: Record<Channel, string> = {
 };
 
 export function CurvesEditor({ curves, onChange, onClose, isMobile }: CurvesEditorProps) {
-  const canvasSize = isMobile ? 260 : 140;
+  const canvasSize = isMobile ? 260 : 200;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [activeChannel, setActiveChannel] = useState<Channel>('rgb');
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
