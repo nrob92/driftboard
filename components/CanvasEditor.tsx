@@ -299,7 +299,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   // Auto-save hook (handles saveStatus, editSignature, debounced save)
   const { saveStatus, setSaveStatus, handleSave } = useAutoSave({ user, images, selectedIds });
   // Export hook (handles exportProgress, single/batch export)
-  const { exportProgress, setExportProgress, exportImageToDownload, handleExport, handleExportSelection: handleExportSelectionBase } = useExport({ images, selectedIds, decodeDNG });
+  const { exportProgress, setExportProgress, exportImageToDownload, handleExport, handleExportSelection: handleExportSelectionBase, handleExportLayout } = useExport({ images, selectedIds, folders, decodeDNG });
 
   // Bridge: saveStatus/exportProgress from hooks to uiStore (hooks own internal state)
   const uiStoreSync = useUIStore.getState();
@@ -1802,12 +1802,20 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     }
   }, [folders, user, saveToHistory]);
 
-  const handleLayoutBackgroundColor = useCallback((folderId: string, color: string) => {
+  // Live preview only (no DB call) — fires on every color picker drag tick
+  const handleLayoutBackgroundColorPreview = useCallback((folderId: string, color: string) => {
     const updated = folders.map((f) =>
       f.id === folderId ? { ...f, backgroundColor: color } : f
     );
     setFolders(updated);
-    setFolderContextMenu(null);
+  }, [folders]);
+
+  // Commit to DB — fires once when the color picker is released/closed
+  const handleLayoutBackgroundColorCommit = useCallback((folderId: string, color: string) => {
+    const updated = folders.map((f) =>
+      f.id === folderId ? { ...f, backgroundColor: color } : f
+    );
+    setFolders(updated);
     saveToHistory();
     if (user) {
       supabase.from('photo_folders').update({ background_color: color }).eq('id', folderId).eq('user_id', user.id).then(({ error }) => { if (error) console.error('Failed to update layout background:', error); });
@@ -4368,7 +4376,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               <input
                 type="color"
                 value={bg}
-                onChange={(e) => handleLayoutBackgroundColor(selectedFolder.id, e.target.value)}
+                onInput={(e) => handleLayoutBackgroundColorPreview(selectedFolder.id, (e.target as HTMLInputElement).value)}
+                onChange={(e) => e.stopPropagation()}
+                onBlur={(e) => handleLayoutBackgroundColorCommit(selectedFolder.id, e.target.value)}
                 className="w-8 h-8 rounded cursor-pointer border border-[#333] bg-transparent"
               />
             </label>
@@ -4414,7 +4424,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                   <input
                     type="color"
                     value={folder.backgroundColor ?? DEFAULT_SOCIAL_LAYOUT_BG}
-                    onChange={(e) => handleLayoutBackgroundColor(folder.id, e.target.value)}
+                    onInput={(e) => handleLayoutBackgroundColorPreview(folder.id, (e.target as HTMLInputElement).value)}
+                    onChange={(e) => e.stopPropagation()}
+                    onBlur={(e) => handleLayoutBackgroundColorCommit(folder.id, e.target.value)}
                     className="w-6 h-6 rounded cursor-pointer border border-[#333] bg-transparent"
                     onClick={(e) => e.stopPropagation()}
                   />
@@ -4434,6 +4446,16 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                   className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   Remove page
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFolderContextMenu(null);
+                    handleExportLayout(folder.id);
+                  }}
+                  className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-[#252525] transition-colors"
+                >
+                  Export layout
                 </button>
                 <div className="my-1 border-t border-[#2a2a2a]" />
               </>

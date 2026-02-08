@@ -1,11 +1,19 @@
 import { useCallback, useState } from 'react';
-import type { CanvasImage } from '@/lib/types';
+import type { CanvasImage, PhotoFolder } from '@/lib/types';
 import { exportWithCanvasFilters } from '@/lib/filters/clientFilters';
 import { getPixiFilterEngine } from '@/lib/filters/pixiFilterEngine';
+import {
+  SOCIAL_LAYOUT_PAGE_WIDTH,
+  SOCIAL_LAYOUT_ASPECT,
+  SOCIAL_LAYOUT_MAX_PAGES,
+  DEFAULT_SOCIAL_LAYOUT_BG,
+  isSocialLayout,
+} from '@/lib/folders/folderLayout';
 
 interface UseExportOptions {
   images: CanvasImage[];
   selectedIds: string[];
+  folders: PhotoFolder[];
   decodeDNG: (buffer: ArrayBuffer, forPreview?: boolean) => Promise<{ dataUrl: string; width: number; height: number }>;
 }
 
@@ -15,9 +23,10 @@ interface UseExportReturn {
   exportImageToDownload: (image: CanvasImage, silent?: boolean) => Promise<boolean>;
   handleExport: () => void;
   handleExportSelection: (contextMenuSelectedIds: string[]) => void;
+  handleExportLayout: (folderId: string) => void;
 }
 
-export function useExport({ images, selectedIds, decodeDNG }: UseExportOptions): UseExportReturn {
+export function useExport({ images, selectedIds, folders, decodeDNG }: UseExportOptions): UseExportReturn {
   const [exportProgress, setExportProgress] = useState<{ current: number; total: number } | null>(null);
 
   // Export a single image with edits (DNG full-res or server). silent = true for multi-export (no per-image alerts).
@@ -148,11 +157,93 @@ export function useExport({ images, selectedIds, decodeDNG }: UseExportOptions):
     })();
   }, [images, exportImageToDownload]);
 
-  return { exportProgress, setExportProgress, exportImageToDownload, handleExport, handleExportSelection };
+  // Export a social layout (one image per page)
+  const handleExportLayout = useCallback((folderId: string) => {
+    const folder = folders.find(f => f.id === folderId);
+    if (!folder || !isSocialLayout(folder)) return;
+
+    const pageCount = Math.max(1, Math.min(SOCIAL_LAYOUT_MAX_PAGES, folder.pageCount ?? 1));
+    const folderImages = folder.imageIds
+      .map(id => images.find(img => img.id === id))
+      .filter((img): img is CanvasImage => !!img);
+
+    setExportProgress({ current: 1, total: pageCount });
+
+    (async () => {
+      try {
+        for (let page = 0; page < pageCount; page++) {
+          setExportProgress({ current: page + 1, total: pageCount });
+          await exportSocialLayoutPage(folder, folderImages, page, decodeDNG);
+          if (page < pageCount - 1) {
+            await new Promise(r => setTimeout(r, 400));
+          }
+        }
+      } catch (error) {
+        console.error('Layout export error:', error);
+        alert(`Layout export failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      } finally {
+        setExportProgress(null);
+      }
+    })();
+  }, [folders, images, decodeDNG]);
+
+  return { exportProgress, setExportProgress, exportImageToDownload, handleExport, handleExportSelection, handleExportLayout };
 }
 
-/** Export image with GPU filters (fallback to CPU if GPU unavailable) */
+/** Add border around a filtered image blob if the image has a border */
+async function applyBorderToBlob(blob: Blob, image: CanvasImage): Promise<Blob> {
+  const borderWidth = image.borderWidth ?? 0;
+  if (borderWidth <= 0) return blob;
+
+  const borderColor = image.borderColor ?? '#ffffff';
+
+  // Load the filtered image
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error('Failed to load filtered image for border'));
+      el.src = url;
+    });
+
+    const imgW = img.naturalWidth || img.width;
+    const imgH = img.naturalHeight || img.height;
+
+    // Scale border relative to image size (borderWidth is in canvas display units,
+    // but the exported image may be at full source resolution)
+    // The border on canvas is relative to image.width (display size), so scale proportionally
+    const scale = imgW / image.width;
+    const scaledBorder = Math.round(borderWidth * scale);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = imgW + scaledBorder * 2;
+    canvas.height = imgH + scaledBorder * 2;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return blob;
+
+    // Fill with border color
+    ctx.fillStyle = borderColor;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Draw the filtered image centered
+    ctx.drawImage(img, scaledBorder, scaledBorder);
+
+    return new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        b => (b ? resolve(b) : reject(new Error('toBlob failed'))),
+        'image/jpeg',
+        0.95,
+      );
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/** Export image with GPU filters (fallback to CPU if GPU unavailable), then apply border */
 async function exportImageWithFilters(image: CanvasImage, imageUrl: string): Promise<Blob> {
+  let blob: Blob;
   try {
     // Try GPU pipeline first
     const engine = getPixiFilterEngine();
@@ -175,8 +266,8 @@ async function exportImageWithFilters(image: CanvasImage, imageUrl: string): Pro
 
       if (ok) {
         // GPU export (fast!)
-        const blob = await engine.exportFiltered(image, img);
-        return blob;
+        blob = await engine.exportFiltered(image, img);
+        return applyBorderToBlob(blob, image);
       }
     }
   } catch (e) {
@@ -184,5 +275,155 @@ async function exportImageWithFilters(image: CanvasImage, imageUrl: string): Pro
   }
 
   // Fallback: CPU pipeline
-  return exportWithCanvasFilters(image, imageUrl);
+  blob = await exportWithCanvasFilters(image, imageUrl);
+  return applyBorderToBlob(blob, image);
+}
+
+/** Get a signed URL for an image's cloud storage path */
+async function getSignedUrl(image: CanvasImage): Promise<string> {
+  const pathToFetch = image.storagePath || image.originalStoragePath;
+  const bucket = image.storagePath ? 'photos' : 'originals';
+  const signedRes = await fetch('/api/signed-url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bucket, path: pathToFetch }),
+  });
+  if (!signedRes.ok) {
+    const err = await signedRes.json();
+    throw new Error(err.error || 'Failed to get image URL');
+  }
+  const { signedUrl } = await signedRes.json();
+  return signedUrl;
+}
+
+/** Export a single page of a social layout as a composite image */
+async function exportSocialLayoutPage(
+  folder: PhotoFolder,
+  folderImages: CanvasImage[],
+  pageIndex: number,
+  decodeDNG: (buffer: ArrayBuffer, forPreview?: boolean) => Promise<{ dataUrl: string; width: number; height: number }>,
+): Promise<void> {
+  const pageWidth = SOCIAL_LAYOUT_PAGE_WIDTH;
+  const pageHeight = (pageWidth * SOCIAL_LAYOUT_ASPECT.h) / SOCIAL_LAYOUT_ASPECT.w;
+  const bg = folder.backgroundColor ?? DEFAULT_SOCIAL_LAYOUT_BG;
+
+  // Export at high resolution (3x for quality)
+  const exportScale = 3;
+  const canvasW = Math.round(pageWidth * exportScale);
+  const canvasH = Math.round(pageHeight * exportScale);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = canvasW;
+  canvas.height = canvasH;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas 2D not available');
+
+  // Fill background
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, canvasW, canvasH);
+
+  // The page region in canvas coords:
+  // page starts at folder.x + pageIndex * pageWidth, folder.y + 30 (label offset)
+  const pageLeft = folder.x + pageIndex * pageWidth;
+  const pageTop = folder.y + 30; // 30px label offset
+
+  // Find images that fall within this page's bounds
+  for (const image of folderImages) {
+    // Image position in canvas space
+    const imgLeft = image.x;
+    const imgTop = image.y;
+    const imgW = image.width * (image.scaleX ?? 1);
+    const imgH = image.height * (image.scaleY ?? 1);
+    const imgRight = imgLeft + imgW;
+    const imgBottom = imgTop + imgH;
+
+    // Check if this image overlaps with this page
+    const pageRight = pageLeft + pageWidth;
+    const pageBottom = pageTop + pageHeight;
+    if (imgRight <= pageLeft || imgLeft >= pageRight || imgBottom <= pageTop || imgTop >= pageBottom) {
+      continue; // Image not on this page
+    }
+
+    // Get filtered image for this photo
+    let filteredImg: HTMLImageElement;
+    try {
+      const hasCloudPath = image.storagePath || image.originalStoragePath;
+      if (!hasCloudPath) continue;
+
+      const pathIsDng = (p: string | undefined) => p?.toLowerCase().endsWith('.dng') ?? false;
+      const isDngSource = image.originalStoragePath && pathIsDng(image.originalStoragePath);
+
+      let imageBlob: Blob;
+      if (isDngSource && image.originalStoragePath) {
+        try {
+          const signedUrl = await getSignedUrl({ ...image, storagePath: undefined, originalStoragePath: image.originalStoragePath } as CanvasImage);
+          const response = await fetch(signedUrl);
+          const dngBlob = await response.blob();
+          const arrayBuffer = await dngBlob.arrayBuffer();
+          const decoded = await decodeDNG(arrayBuffer, false);
+          imageBlob = await exportImageWithFilters(image, decoded.dataUrl);
+        } catch {
+          // Fallback to preview
+          const signedUrl = await getSignedUrl(image);
+          imageBlob = await exportImageWithFilters(image, signedUrl);
+        }
+      } else {
+        const signedUrl = await getSignedUrl(image);
+        imageBlob = await exportImageWithFilters(image, signedUrl);
+      }
+
+      const blobUrl = URL.createObjectURL(imageBlob);
+      try {
+        filteredImg = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const el = new Image();
+          el.onload = () => resolve(el);
+          el.onerror = () => reject(new Error('Failed to load filtered image'));
+          el.src = blobUrl;
+        });
+      } finally {
+        URL.revokeObjectURL(blobUrl);
+      }
+    } catch (e) {
+      console.warn(`[exportLayout] Failed to render image ${image.id}:`, e);
+      continue;
+    }
+
+    // Calculate position relative to this page, then scale to export resolution
+    const relX = (imgLeft - pageLeft) * exportScale;
+    const relY = (imgTop - pageTop) * exportScale;
+    const drawW = imgW * exportScale;
+    const drawH = imgH * exportScale;
+
+    // The filtered image blob already includes the border (from applyBorderToBlob),
+    // so we need to account for the border in the draw position
+    const borderWidth = image.borderWidth ?? 0;
+    const hasBorder = borderWidth > 0;
+
+    if (hasBorder) {
+      // The blob includes the border, so the total image is larger
+      // Offset the draw position by the border width (in export-scaled units)
+      const scaledBorder = borderWidth * exportScale;
+      ctx.drawImage(filteredImg, relX - scaledBorder, relY - scaledBorder, drawW + scaledBorder * 2, drawH + scaledBorder * 2);
+    } else {
+      ctx.drawImage(filteredImg, relX, relY, drawW, drawH);
+    }
+  }
+
+  // Download the page
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      b => (b ? resolve(b) : reject(new Error('toBlob failed'))),
+      'image/jpeg',
+      0.95,
+    );
+  });
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${folder.name}-page${pageIndex + 1}-${Date.now()}.jpg`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }

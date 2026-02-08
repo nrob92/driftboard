@@ -412,12 +412,20 @@ export function useFolderOps({
     }
   }, [user, saveToHistory]);
 
-  const handleLayoutBackgroundColor = useCallback((folderId: string, color: string) => {
+  // Live preview only (no DB call) — fires on every color picker drag tick
+  const handleLayoutBackgroundColorPreview = useCallback((folderId: string, color: string) => {
     const { folders, setFolders } = useCanvasStore.getState();
     setFolders(folders.map((f) =>
       f.id === folderId ? { ...f, backgroundColor: color } : f
     ));
-    useUIStore.getState().setFolderContextMenu(null);
+  }, []);
+
+  // Commit to DB — fires once when the color picker is released/closed
+  const handleLayoutBackgroundColorCommit = useCallback((folderId: string, color: string) => {
+    const { folders, setFolders } = useCanvasStore.getState();
+    setFolders(folders.map((f) =>
+      f.id === folderId ? { ...f, backgroundColor: color } : f
+    ));
     saveToHistory();
     if (user) {
       supabase.from('photo_folders').update({ background_color: color }).eq('id', folderId).eq('user_id', user.id).then(({ error }) => { if (error) console.error('Failed to update layout background:', error); });
@@ -649,7 +657,8 @@ export function useFolderOps({
     handleCreateSocialLayoutCancel,
     handleLayoutAddPage,
     handleLayoutRemovePage,
-    handleLayoutBackgroundColor,
+    handleLayoutBackgroundColorPreview,
+    handleLayoutBackgroundColorCommit,
     handleRenameFolder,
     handleDeleteFolder,
     handleDeletePhotos,

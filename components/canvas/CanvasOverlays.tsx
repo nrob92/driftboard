@@ -26,7 +26,8 @@ interface CanvasOverlaysProps {
   handleCreateFolderFromSelectionCancel: () => void;
   handleLayoutAddPage: (folderId: string) => void;
   handleLayoutRemovePage: (folderId: string) => void;
-  handleLayoutBackgroundColor: (folderId: string, color: string) => void;
+  handleLayoutBackgroundColorPreview: (folderId: string, color: string) => void;
+  handleLayoutBackgroundColorCommit: (folderId: string, color: string) => void;
   // Edit handlers
   handleCopyEdit: () => void;
   handlePasteEdit: () => void;
@@ -57,7 +58,8 @@ export function CanvasOverlays({
   handleCreateFolderFromSelectionCancel,
   handleLayoutAddPage,
   handleLayoutRemovePage,
-  handleLayoutBackgroundColor,
+  handleLayoutBackgroundColorPreview,
+  handleLayoutBackgroundColorCommit,
   handleCopyEdit,
   handlePasteEdit,
   handleExportSelection,
@@ -401,7 +403,7 @@ export function CanvasOverlays({
             <div className="w-px h-6 bg-[#333]" />
             <label className="flex items-center gap-2 text-sm text-white">
               <span className="text-[#666]">Bg</span>
-              <input type="color" value={bg} onChange={(e) => handleLayoutBackgroundColor(selectedFolder.id, e.target.value)} className="w-8 h-8 rounded cursor-pointer border border-[#333] bg-transparent" />
+              <input type="color" value={bg} onInput={(e) => handleLayoutBackgroundColorPreview(selectedFolder.id, (e.target as HTMLInputElement).value)} onChange={(e) => e.stopPropagation()} onBlur={(e) => handleLayoutBackgroundColorCommit(selectedFolder.id, e.target.value)} className="w-8 h-8 rounded cursor-pointer border border-[#333] bg-transparent" />
             </label>
             <button type="button" onClick={() => handleLayoutAddPage(selectedFolder.id)} disabled={!canAdd} className="px-3 py-1.5 text-sm font-medium text-white bg-[#252525] hover:bg-[#333] disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors">+ Page</button>
             <button type="button" onClick={() => handleLayoutRemovePage(selectedFolder.id)} disabled={!canRemove} className="px-3 py-1.5 text-sm font-medium text-white bg-[#252525] hover:bg-[#333] disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors">&minus; Page</button>
@@ -424,7 +426,7 @@ export function CanvasOverlays({
                 <div className="px-4 py-2 text-xs text-[#666] uppercase tracking-wide">Layout</div>
                 <label className="flex items-center gap-2 w-full px-4 py-2.5 text-sm text-white hover:bg-[#252525] cursor-pointer">
                   <span>Background color</span>
-                  <input type="color" value={folder.backgroundColor ?? DEFAULT_SOCIAL_LAYOUT_BG} onChange={(e) => handleLayoutBackgroundColor(folder.id, e.target.value)} className="w-6 h-6 rounded cursor-pointer border border-[#333] bg-transparent" onClick={(e) => e.stopPropagation()} />
+                  <input type="color" value={folder.backgroundColor ?? DEFAULT_SOCIAL_LAYOUT_BG} onInput={(e) => handleLayoutBackgroundColorPreview(folder.id, (e.target as HTMLInputElement).value)} onChange={(e) => e.stopPropagation()} onBlur={(e) => handleLayoutBackgroundColorCommit(folder.id, e.target.value)} className="w-6 h-6 rounded cursor-pointer border border-[#333] bg-transparent" onClick={(e) => e.stopPropagation()} />
                 </label>
                 <button type="button" onClick={() => handleLayoutAddPage(folder.id)} disabled={!canAdd} className="w-full px-4 py-3.5 md:py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">Add page</button>
                 <button type="button" onClick={() => handleLayoutRemovePage(folder.id)} disabled={!canRemove} className="w-full px-4 py-3.5 md:py-2.5 text-left text-sm text-white hover:bg-[#252525] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">Remove page</button>
