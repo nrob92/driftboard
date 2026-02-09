@@ -378,15 +378,15 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow }: Use
           const col = imageIndex % cols;
           const row = Math.floor(imageIndex / cols);
 
-          // Center images in their cells for consistent spacing
-          // Border starts at folderX, content starts at folderX + padding
-          // Border is 30px below label, add padding for content area
+          // Center images horizontally in their cells, top-aligned vertically
           const contentStartX = folderX + GRID_CONFIG.folderPadding;
           const contentStartY = folderY + 30 + GRID_CONFIG.folderPadding;
-          const cellOffsetX = (GRID_CONFIG.imageMaxSize - width) / 2;
-          const cellOffsetY = (GRID_CONFIG.imageMaxHeight - height) / 2;
+          // Compute display width for centering (image will be scaled to uniform row height)
+          const fitScale = Math.min(GRID_CONFIG.imageMaxSize / width, GRID_CONFIG.imageMaxHeight / height, 1);
+          const displayW = width * fitScale;
+          const cellOffsetX = (GRID_CONFIG.imageMaxSize - displayW) / 2;
           const x = contentStartX + col * CELL_SIZE + Math.max(0, cellOffsetX);
-          const y = contentStartY + row * CELL_HEIGHT + Math.max(0, cellOffsetY);
+          const y = contentStartY + row * CELL_HEIGHT;
 
           console.log('Image position:', x, y, 'Size:', width, height);
 
@@ -793,10 +793,11 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow }: Use
             const row = Math.floor(imageIndex / cols);
             const contentStartX = folderX + GRID_CONFIG.folderPadding;
             const contentStartY = folderY + 30 + GRID_CONFIG.folderPadding;
-            const cellOffsetX = (GRID_CONFIG.imageMaxSize - width) / 2;
-            const cellOffsetY = (GRID_CONFIG.imageMaxHeight - height) / 2;
+            const fitScale = Math.min(GRID_CONFIG.imageMaxSize / width, GRID_CONFIG.imageMaxHeight / height, 1);
+            const displayW = width * fitScale;
+            const cellOffsetX = (GRID_CONFIG.imageMaxSize - displayW) / 2;
             x = contentStartX + col * CELL_SIZE + Math.max(0, cellOffsetX);
-            y = contentStartY + row * CELL_HEIGHT + Math.max(0, cellOffsetY);
+            y = contentStartY + row * CELL_HEIGHT;
           }
 
           const imageId = `img-${Date.now()}-${Math.random()}`;

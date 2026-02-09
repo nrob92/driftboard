@@ -237,17 +237,18 @@ export function useDragHandlers({
               const contentStartY = targetFolder.y + 30 + folderPadding;
               const folderHeight = targetFolder.height ?? getFolderBorderHeight(targetFolder, targetFolder.imageIds.length);
               const contentHeight = folderHeight - (2 * folderPadding);
-              const maxRows = Math.max(1, Math.floor(contentHeight / CELL_HEIGHT));
+              const maxRows = Math.max(1, Math.floor((contentHeight + GRID_CONFIG.imageGap) / CELL_HEIGHT));
               const relativeX = currentX - contentStartX;
               const relativeY = currentY - contentStartY;
               const targetCol = Math.max(0, Math.min(cols - 1, Math.round(relativeX / CELL_SIZE)));
               const targetRow = Math.max(0, Math.min(maxRows - 1, Math.round(relativeY / CELL_HEIGHT)));
-              const imgWidth = Math.min(currentImg.width * currentImg.scaleX, imageMaxSize);
-              const imgHeight = Math.min(currentImg.height * currentImg.scaleY, imageMaxHeight);
-              const cellOffsetX = (imageMaxSize - imgWidth) / 2;
-              const cellOffsetY = (imageMaxHeight - imgHeight) / 2;
+              const origW = currentImg.width * currentImg.scaleX;
+              const origH = currentImg.height * currentImg.scaleY;
+              const fitScale = Math.min(imageMaxSize / origW, imageMaxHeight / origH, 1);
+              const displayW = origW * fitScale;
+              const cellOffsetX = (imageMaxSize - displayW) / 2;
               newX = contentStartX + targetCol * CELL_SIZE + cellOffsetX;
-              newY = contentStartY + targetRow * CELL_HEIGHT + cellOffsetY;
+              newY = contentStartY + targetRow * CELL_HEIGHT;
               node.position({ x: newX, y: newY });
             }
           } else if (!targetFolderId) {
@@ -290,10 +291,11 @@ export function useDragHandlers({
               const imgW = currentImg.width * (currentImg.scaleX ?? 1);
               const imgH = currentImg.height * (currentImg.scaleY ?? 1);
               const { imageMaxSize, imageMaxHeight } = GRID_CONFIG;
-              const cellOffsetX = Math.max(0, (imageMaxSize - imgW) / 2);
-              const cellOffsetY = Math.max(0, (imageMaxHeight - imgH) / 2);
+              const fitScale = Math.min(imageMaxSize / imgW, imageMaxHeight / imgH, 1);
+              const displayW = imgW * fitScale;
+              const cellOffsetX = Math.max(0, (imageMaxSize - displayW) / 2);
               const centeredX = contentStartX + cellOffsetX;
-              const centeredY = contentStartY + cellOffsetY;
+              const centeredY = contentStartY;
 
               const updatedFolders = latestFolders
                 .map((f) =>
@@ -413,10 +415,11 @@ export function useDragHandlers({
                 const relativeY = currentCenterY - contentStartY;
                 const targetCol = Math.max(0, Math.min(cols - 1, Math.floor(relativeX / CELL_SIZE)));
                 const targetRow = Math.max(0, Math.min(maxRows - 1, Math.floor(relativeY / CELL_HEIGHT)));
-                const cellOffsetX = (imageMaxSize - finalWidth) / 2;
-                const cellOffsetY = (imageMaxHeight - finalHeight) / 2;
+                const fitScale = Math.min(imageMaxSize / finalWidth, imageMaxHeight / finalHeight, 1);
+                const displayW = finalWidth * fitScale;
+                const cellOffsetX = (imageMaxSize - displayW) / 2;
                 gridX = contentStartX + targetCol * CELL_SIZE + cellOffsetX;
-                gridY = contentStartY + targetRow * CELL_HEIGHT + cellOffsetY;
+                gridY = contentStartY + targetRow * CELL_HEIGHT;
               }
 
               const updatedFolders = latestFolders.map((f) => {
@@ -528,7 +531,7 @@ export function useDragHandlers({
               const contentStartY = targetFolder.y + 30 + folderPadding;
               const folderHeight = targetFolder.height ?? getFolderBorderHeight(targetFolder, targetFolder.imageIds.length);
               const contentHeight = folderHeight - (2 * folderPadding);
-              const maxRows = Math.max(1, Math.floor(contentHeight / CELL_HEIGHT));
+              const maxRows = Math.max(1, Math.floor((contentHeight + GRID_CONFIG.imageGap) / CELL_HEIGHT));
               const relativeX = currentX - contentStartX;
               const relativeY = currentY - contentStartY;
               const targetCol = Math.max(0, Math.min(cols - 1, Math.round(relativeX / CELL_SIZE)));
@@ -561,12 +564,13 @@ export function useDragHandlers({
                   const occupiedImg = otherFolderImages.find(img => img.id === occupiedById);
                   if (occupiedImg) {
                     swapImgId = occupiedById;
-                    const swapImgWidth = Math.min(occupiedImg.width * occupiedImg.scaleX, imageMaxSize);
-                    const swapImgHeight = Math.min(occupiedImg.height * occupiedImg.scaleY, imageMaxHeight);
-                    const swapOffsetX = (imageMaxSize - swapImgWidth) / 2;
-                    const swapOffsetY = (imageMaxHeight - swapImgHeight) / 2;
+                    const swapOrigW = occupiedImg.width * occupiedImg.scaleX;
+                    const swapOrigH = occupiedImg.height * occupiedImg.scaleY;
+                    const swapFitScale = Math.min(imageMaxSize / swapOrigW, imageMaxHeight / swapOrigH, 1);
+                    const swapDisplayW = swapOrigW * swapFitScale;
+                    const swapOffsetX = (imageMaxSize - swapDisplayW) / 2;
                     swapX = contentStartX + prevCell.col * CELL_SIZE + swapOffsetX;
-                    swapY = contentStartY + prevCell.row * CELL_HEIGHT + swapOffsetY;
+                    swapY = contentStartY + prevCell.row * CELL_HEIGHT;
                   }
                 } else {
                   for (let radius = 0; radius < maxRows * cols; radius++) {
@@ -591,12 +595,13 @@ export function useDragHandlers({
                 }
               }
 
-              const imgWidth = Math.min(currentImg.width * currentImg.scaleX, imageMaxSize);
-              const imgHeight = Math.min(currentImg.height * currentImg.scaleY, imageMaxHeight);
-              const cellOffsetX = (imageMaxSize - imgWidth) / 2;
-              const cellOffsetY = (imageMaxHeight - imgHeight) / 2;
+              const origW = currentImg.width * currentImg.scaleX;
+              const origH = currentImg.height * currentImg.scaleY;
+              const fitScale = Math.min(imageMaxSize / origW, imageMaxHeight / origH, 1);
+              const displayW = origW * fitScale;
+              const cellOffsetX = (imageMaxSize - displayW) / 2;
               finalX = contentStartX + finalCol * CELL_SIZE + cellOffsetX;
-              finalY = contentStartY + finalRow * CELL_HEIGHT + cellOffsetY;
+              finalY = contentStartY + finalRow * CELL_HEIGHT;
               node.position({ x: finalX, y: finalY });
 
               if (swapImgId && swapX !== undefined && swapY !== undefined) {

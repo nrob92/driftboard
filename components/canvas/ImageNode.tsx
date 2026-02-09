@@ -6,6 +6,7 @@ import useImage from 'use-image';
 import Konva from 'konva';
 import type { CanvasImage } from '@/lib/types';
 import { usePixiFilters } from '@/lib/hooks/usePixiFilters';
+import { GRID_CONFIG } from '@/lib/folders/folderLayout';
 
 export interface ImageNodeProps {
   image: CanvasImage;
@@ -97,6 +98,18 @@ export const ImageNode = React.memo(function ImageNode({
   // Use GPU-filtered canvas when available, otherwise original image
   const displayImage = filteredCanvas ?? img;
 
+  // For images in folders, scale to uniform row height so all images are same height
+  let groupScaleX = image.scaleX;
+  let groupScaleY = image.scaleY;
+  if (image.folderId) {
+    const { imageMaxSize, imageMaxHeight } = GRID_CONFIG;
+    const origW = image.width * image.scaleX;
+    const origH = image.height * image.scaleY;
+    const fitScale = Math.min(imageMaxSize / origW, imageMaxHeight / origH, 1);
+    groupScaleX = image.scaleX * fitScale;
+    groupScaleY = image.scaleY * fitScale;
+  }
+
   return (
     <Group
       ref={groupRef}
@@ -104,8 +117,8 @@ export const ImageNode = React.memo(function ImageNode({
       x={image.x}
       y={image.y}
       rotation={image.rotation}
-      scaleX={image.scaleX}
-      scaleY={image.scaleY}
+      scaleX={groupScaleX}
+      scaleY={groupScaleY}
       draggable={draggable}
       listening={draggable}
       onClick={onClick}
