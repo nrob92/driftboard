@@ -403,7 +403,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     queryFn: async () => {
       if (!user) return null;
 
-      const [editsResult, foldersResult, photosResult, originalsResult, thumbsResult] = await Promise.all([
+      const [editsResult, foldersResult, photosResult, originalsResult] = await Promise.all([
         supabase.from('photo_edits').select('*').eq('user_id', user.id),
         supabase.from('photo_folders').select('*').eq('user_id', user.id),
         supabase.storage.from('photos').list(user.id, {
@@ -414,10 +414,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           limit: 500,
           sortBy: { column: 'created_at', order: 'asc' },
         }),
-        supabase.storage.from('photos').list(`${user.id}/thumbs`, {
-          limit: 500,
-          sortBy: { column: 'name', order: 'asc' },
-        }),
       ]);
 
       return {
@@ -425,7 +421,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         savedFolders: foldersResult.data,
         photosFiles: photosResult.data,
         originalsFiles: originalsResult.data,
-        thumbsFiles: thumbsResult.data ?? [],
         photosError: photosResult.error,
       };
     },
@@ -467,8 +462,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         return;
       }
 
-      const { savedEdits, savedFolders, photosFiles, originalsFiles, thumbsFiles, photosError } = photoData;
-      const thumbNames = new Set((thumbsFiles ?? []).filter((f) => !f.name.startsWith('.')).map((f) => f.name));
+      const { savedEdits, savedFolders, photosFiles, originalsFiles, photosError } = photoData;
 
       const defaultFolderX = 100;
       const defaultFolderY = 100;
@@ -503,8 +497,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       };
 
       // Check if there are any files to load
-      const photosList = (photosFiles ?? []).filter((f) => !f.name.startsWith('.'));
-      const originalsList = (originalsFiles ?? []).filter((f) => !f.name.startsWith('.'));
+      const isImageFile = (name: string) => /\.(jpe?g|png|webp|dng|tiff?)$/i.test(name);
+      const photosList = (photosFiles ?? []).filter((f) => !f.name.startsWith('.') && isImageFile(f.name));
+      const originalsList = (originalsFiles ?? []).filter((f) => !f.name.startsWith('.') && isImageFile(f.name));
       if (photosList.length === 0 && originalsList.length === 0) {
         // No photos - still load folders (e.g. empty social layouts) so they appear on canvas
         const emptyFolders = buildFoldersFromSaved([]);
@@ -648,30 +643,65 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         const loadOne = async (file: FileEntry, i: number): Promise<CanvasImage | null> => {
           const storagePath = `${user.id}/${file.name}`;
           const bucket = file.bucket;
-          // Use thumbnail for grid when available (reduces egress ~5–10x)
-          const useThumb = bucket === 'photos' && thumbNames.has(file.name);
-          const fetchPath = useThumb ? getThumbStoragePath(storagePath) : storagePath;
+
+          // Always use thumbnail for grid display to minimize egress.
+          // The /api/thumbnail endpoint generates + caches thumbs on-demand server-side.
+          const isRawFile = isDNG(file.name) && file.bucket === 'originals';
+
           let imageUrl: string;
           try {
-            imageUrl = await queryClient.ensureQueryData({
-              queryKey: ['signed-url', bucket, fetchPath],
-              queryFn: async () => {
-                const res = await fetch('/api/signed-url', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ bucket, path: fetchPath }),
-                });
-                if (!res.ok) {
-                  const err = await res.json().catch(() => ({}));
-                  throw new Error(err?.error ?? 'Signed URL failed');
-                }
-                const { signedUrl } = await res.json();
-                return signedUrl as string;
-              },
-              staleTime: SIGNED_URL_STALE_MS,
-            });
+            if (isRawFile) {
+              // RAW files can't be thumbnailed server-side — use signed URL directly
+              imageUrl = await queryClient.ensureQueryData({
+                queryKey: ['signed-url', bucket, storagePath],
+                queryFn: async () => {
+                  const res = await fetch('/api/signed-url', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bucket, path: storagePath }),
+                  });
+                  if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err?.error ?? 'Signed URL failed');
+                  }
+                  const { signedUrl } = await res.json();
+                  return signedUrl as string;
+                },
+                staleTime: SIGNED_URL_STALE_MS,
+              });
+            } else {
+              // Use thumbnail API — generates thumb server-side if missing (~50-100KB vs 5-10MB)
+              imageUrl = await queryClient.ensureQueryData({
+                queryKey: ['thumbnail-url', bucket, storagePath],
+                queryFn: async () => {
+                  const res = await fetch('/api/thumbnail', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bucket, path: storagePath }),
+                  });
+                  if (!res.ok) {
+                    // Fallback to full-res signed URL if thumbnail API fails
+                    const fallbackRes = await fetch('/api/signed-url', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ bucket, path: storagePath }),
+                    });
+                    if (!fallbackRes.ok) {
+                      const err = await fallbackRes.json().catch(() => ({}));
+                      throw new Error(err?.error ?? 'Signed URL failed');
+                    }
+                    const { signedUrl } = await fallbackRes.json();
+                    return signedUrl as string;
+                  }
+                  const data = await res.json();
+                  if (data.signedUrl) return data.signedUrl as string;
+                  throw new Error('No signed URL in thumbnail response');
+                },
+                staleTime: SIGNED_URL_STALE_MS,
+              });
+            }
           } catch (e) {
-            console.warn(`Signed URL failed for ${file.name}:`, e);
+            console.warn(`Image URL failed for ${file.name}:`, e);
             return null;
           }
 
@@ -680,14 +710,15 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             let width: number;
             let height: number;
 
-            if (isDNG(file.name) && file.bucket === 'originals') {
+            if (isRawFile) {
               const decoded = await decodeDNGFromUrl(imageUrl);
               imgSrc = decoded.dataUrl;
               width = decoded.width;
               height = decoded.height;
             } else {
-              // Use IndexedDB cache: fetch blob, cache it, create object URL
-              const blob = await getCachedImage(fetchPath, async () => {
+              // Use IndexedDB cache keyed by thumb path: fetch blob, cache it, create object URL
+              const thumbPath = getThumbStoragePath(storagePath);
+              const blob = await getCachedImage(thumbPath, async () => {
                 const response = await fetch(imageUrl);
                 if (!response.ok) throw new Error('Failed to fetch image');
                 return response.blob();
