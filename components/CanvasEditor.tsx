@@ -4310,13 +4310,22 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               .map((img) => {
                 const folder = folders.find(f => f.id === img.folderId || f.imageIds.includes(img.id));
                 const strokeColor = folder ? hexToRgba(folder.color, 0.4) : hexToRgba('#3ECF8E', 0.4);
+                // Match fitScale from ImageNode for folder images
+                let displayW = img.width * img.scaleX;
+                let displayH = img.height * img.scaleY;
+                if (img.folderId) {
+                  const { imageMaxSize, imageMaxHeight } = GRID_CONFIG;
+                  const fitScale = Math.min(imageMaxSize / displayW, imageMaxHeight / displayH, 1);
+                  displayW *= fitScale;
+                  displayH *= fitScale;
+                }
                 return (
                   <Rect
                     key={`outline-${img.id}`}
                     x={img.x}
                     y={img.y}
-                    width={img.width * img.scaleX}
-                    height={img.height * img.scaleY}
+                    width={displayW}
+                    height={displayH}
                     rotation={img.rotation}
                     stroke={strokeColor}
                     strokeWidth={2}
