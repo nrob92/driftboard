@@ -33,6 +33,13 @@ export async function POST(request: NextRequest) {
           { status: 500 }
         );
       }
+
+      // Also delete the thumbnail if it exists (user_id/file.jpg -> user_id/thumbs/file.jpg)
+      const lastSlash = storagePath.lastIndexOf('/');
+      const thumbPath = lastSlash < 0
+        ? `thumbs/${storagePath}`
+        : storagePath.slice(0, lastSlash + 1) + 'thumbs/' + storagePath.slice(lastSlash + 1);
+      await supabase.storage.from('photos').remove([thumbPath]).catch(() => {});
     }
 
     if (originalStoragePath) {
