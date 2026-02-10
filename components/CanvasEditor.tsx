@@ -545,6 +545,74 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
       onPhotosLoadStateChange?.(true);
 
+      // Fit viewport to all folders BEFORE images load, using saved folder data.
+      // This prevents visual "jumping" — folders stay in their saved positions
+      // while the viewport zooms/pans to show them all.
+      if (savedFolders && savedFolders.length > 0) {
+        // Count images per folder from savedEdits (available before image blobs load)
+        const imgCountByFolder = new Map<string, number>();
+        if (savedEdits) {
+          for (const e of savedEdits) {
+            if (e.folder_id != null) {
+              const fid = String(e.folder_id);
+              imgCountByFolder.set(fid, (imgCountByFolder.get(fid) ?? 0) + 1);
+            }
+          }
+        }
+
+        // Build temporary folder objects for bounds calculation
+        const tempFolders: PhotoFolder[] = [];
+        for (const sf of savedFolders) {
+          const folderId = String(sf.id);
+          const sfX = sf.x != null && Number.isFinite(Number(sf.x)) ? Number(sf.x) : defaultFolderX;
+          const sfY = sf.y != null && Number.isFinite(Number(sf.y)) ? Number(sf.y) : defaultFolderY;
+          const isLayout = sf.type === 'social_layout';
+          const pageCount = isLayout && sf.page_count != null ? Math.max(1, Math.min(SOCIAL_LAYOUT_MAX_PAGES, Number(sf.page_count))) : undefined;
+          const layoutWidth = isLayout && pageCount ? pageCount * SOCIAL_LAYOUT_PAGE_WIDTH : undefined;
+          const sfWidth = layoutWidth ?? (sf.width != null && Number.isFinite(Number(sf.width)) ? Number(sf.width) : GRID_CONFIG.defaultFolderWidth);
+          const sfHeight = sf.height != null && Number.isFinite(Number(sf.height)) ? Number(sf.height) : undefined;
+          tempFolders.push({
+            id: folderId, name: String(sf.name ?? 'Untitled'),
+            x: sfX, y: sfY, width: sfWidth, height: sfHeight,
+            color: String(sf.color ?? FOLDER_COLORS[0]),
+            imageIds: [], // not needed for bounds — getFolderBounds uses imageCount param
+            type: isLayout ? 'social_layout' : 'folder',
+            pageCount,
+            backgroundColor: isLayout && sf.background_color ? String(sf.background_color) : undefined,
+          });
+        }
+
+        const { dimensions: dims } = useCanvasStore.getState();
+        const padding = 48;
+        const vw = Math.max(200, dims.width - padding * 2);
+        const vh = Math.max(200, dims.height - padding * 2);
+
+        let minX = Infinity, maxX = -Infinity;
+        let minY = Infinity, maxY = -Infinity;
+        for (const folder of tempFolders) {
+          const imgCount = imgCountByFolder.get(folder.id) ?? 0;
+          const bounds = getFolderBounds(folder, imgCount);
+          minX = Math.min(minX, bounds.x);
+          maxX = Math.max(maxX, bounds.right);
+          minY = Math.min(minY, bounds.y);
+          maxY = Math.max(maxY, bounds.bottom);
+        }
+
+        const contentW = maxX - minX || 1;
+        const contentH = maxY - minY || 1;
+        const contentCenterX = (minX + maxX) / 2;
+        const contentCenterY = (minY + maxY) / 2;
+        const scaleX = vw / contentW;
+        const scaleY = vh / contentH;
+        const scale = Math.max(0.1, Math.min(2, Math.min(scaleX, scaleY)));
+
+        setStageScale(scale);
+        setStagePosition({
+          x: dims.width / 2 - contentCenterX * scale,
+          y: dims.height / 2 - contentCenterY * scale,
+        });
+      }
+
       try {
         // Base names we already have from photos (preview) - don't duplicate from originals
         const photosBaseNames = new Set(photosList.map((f) => f.name.replace(/\.[^.]+$/, '').toLowerCase()));
@@ -843,41 +911,6 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         setFolders(loadedFolders);
         setHistory([{ images: newImages, texts: [], folders: loadedFolders }]);
         setHistoryIndex(0);
-
-        // Fit viewport to show all folders on load
-        if (loadedFolders.length > 0) {
-          const { dimensions: dims } = useCanvasStore.getState();
-          const padding = 48;
-          const vw = Math.max(200, dims.width - padding * 2);
-          const vh = Math.max(200, dims.height - padding * 2);
-
-          let minX = Infinity, maxX = -Infinity;
-          let minY = Infinity, maxY = -Infinity;
-
-          for (const folder of loadedFolders) {
-            const folderImgCount = newImages.filter(img => folder.imageIds.includes(img.id)).length;
-            const bounds = getFolderBounds(folder, folderImgCount);
-            minX = Math.min(minX, bounds.x);
-            maxX = Math.max(maxX, bounds.right);
-            minY = Math.min(minY, bounds.y);
-            maxY = Math.max(maxY, bounds.bottom);
-          }
-
-          const contentW = maxX - minX || 1;
-          const contentH = maxY - minY || 1;
-          const contentCenterX = (minX + maxX) / 2;
-          const contentCenterY = (minY + maxY) / 2;
-
-          const scaleX = vw / contentW;
-          const scaleY = vh / contentH;
-          const scale = Math.max(0.1, Math.min(2, Math.min(scaleX, scaleY)));
-
-          setStageScale(scale);
-          setStagePosition({
-            x: dims.width / 2 - contentCenterX * scale,
-            y: dims.height / 2 - contentCenterY * scale,
-          });
-        }
       } catch (err) {
         console.error('Error loading user photos:', err);
       } finally {
