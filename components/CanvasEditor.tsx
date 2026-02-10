@@ -293,6 +293,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressTriggeredRef = useRef<boolean>(false);
   const longPressTouchPosRef = useRef<{ x: number; y: number } | null>(null);
+  const colorPreviewPendingRef = useRef<{ folderId: string; color: string } | null>(null);
+  const colorPreviewRafRef = useRef<number | null>(null);
   const queryClient = useQueryClient();
   const { user } = useAuth();
 
@@ -1921,13 +1923,23 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     }
   }, [folders, user, saveToHistory]);
 
-  // Live preview only (no DB call) — fires on every color picker drag tick
+  // Live preview only (no DB call) — throttled to once per frame so dragging feels smooth
   const handleLayoutBackgroundColorPreview = useCallback((folderId: string, color: string) => {
-    const updated = folders.map((f) =>
-      f.id === folderId ? { ...f, backgroundColor: color } : f
-    );
-    setFolders(updated);
-  }, [folders]);
+    colorPreviewPendingRef.current = { folderId, color };
+    if (colorPreviewRafRef.current == null) {
+      colorPreviewRafRef.current = requestAnimationFrame(() => {
+        colorPreviewRafRef.current = null;
+        const p = colorPreviewPendingRef.current;
+        if (p) {
+          const { folders: currentFolders, setFolders } = useCanvasStore.getState();
+          const updated = currentFolders.map((f) =>
+            f.id === p.folderId ? { ...f, backgroundColor: p.color } : f
+          );
+          setFolders(updated);
+        }
+      });
+    }
+  }, []);
 
   // Commit to DB — fires once when the color picker is released/closed
   const handleLayoutBackgroundColorCommit = useCallback((folderId: string, color: string) => {
@@ -3817,12 +3829,15 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
                   <Group
                     key={folder.id}
                     onContextMenu={(e) => {
+                      // Social layout: toolbar on background click duplicates these actions — skip right-click menu
+                      if (isSocialLayout(currentFolder)) return;
                       e.evt.preventDefault();
                       e.cancelBubble = true;
                       setCanvasContextMenu(null);
                       setFolderContextMenu({ x: e.evt.clientX, y: e.evt.clientY, folderId: currentFolder.id });
                     }}
                     onTouchStart={isMobile ? (e) => {
+                      if (isSocialLayout(currentFolder)) return;
                       const touch = e.evt.touches[0];
                       if (!touch) return;
                       longPressTriggeredRef.current = false;

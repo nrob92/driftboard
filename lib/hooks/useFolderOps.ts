@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
@@ -44,6 +44,8 @@ export function useFolderOps({
   skipNextPhotosLoadRef,
 }: UseFolderOpsOptions) {
   const queryClient = useQueryClient();
+  const colorPreviewPendingRef = useRef<{ folderId: string; color: string } | null>(null);
+  const colorPreviewRafRef = useRef<number | null>(null);
 
   const handleCreateFolderFromSelection = useCallback(() => {
     const { imageContextMenu } = useUIStore.getState();
@@ -412,12 +414,21 @@ export function useFolderOps({
     }
   }, [user, saveToHistory]);
 
-  // Live preview only (no DB call) — fires on every color picker drag tick
+  // Live preview only (no DB call) — throttled to once per frame so dragging feels smooth
   const handleLayoutBackgroundColorPreview = useCallback((folderId: string, color: string) => {
-    const { folders, setFolders } = useCanvasStore.getState();
-    setFolders(folders.map((f) =>
-      f.id === folderId ? { ...f, backgroundColor: color } : f
-    ));
+    colorPreviewPendingRef.current = { folderId, color };
+    if (colorPreviewRafRef.current == null) {
+      colorPreviewRafRef.current = requestAnimationFrame(() => {
+        colorPreviewRafRef.current = null;
+        const p = colorPreviewPendingRef.current;
+        if (p) {
+          const { folders, setFolders } = useCanvasStore.getState();
+          setFolders(folders.map((f) =>
+            f.id === p.folderId ? { ...f, backgroundColor: p.color } : f
+          ));
+        }
+      });
+    }
   }, []);
 
   // Commit to DB — fires once when the color picker is released/closed

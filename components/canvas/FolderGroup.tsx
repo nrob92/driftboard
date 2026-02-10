@@ -78,6 +78,8 @@ export function FolderGroup({
   return (
     <Group
       onContextMenu={(e) => {
+        // Social layout: toolbar on background click duplicates these actions — skip right-click menu
+        if (isSocialLayout(currentFolder)) return;
         e.evt.preventDefault();
         e.cancelBubble = true;
         uiActions.setCanvasContextMenu(null);
