@@ -85,7 +85,7 @@ export const getFolderLayoutMode = (folderWidth: number): 'grid' | 'stack' => {
 };
 
 // Reflow images within a folder based on its width (uniform row height)
-// Perfect grid: each image uses its actual width + gap for even spacing
+// Uses CELL_SIZE grid with centered images — matches upload and drag-snap positioning
 export const reflowImagesInFolder = (
   folderImages: CanvasImage[],
   folderX: number,
@@ -93,7 +93,7 @@ export const reflowImagesInFolder = (
   folderWidth: number
 ): CanvasImage[] => {
   const layoutMode = getFolderLayoutMode(folderWidth);
-  const { folderPadding, imageGap, imageMaxHeight } = GRID_CONFIG;
+  const { folderPadding, imageMaxSize, imageGap, imageMaxHeight } = GRID_CONFIG;
 
   const contentStartX = folderX + folderPadding;
   const contentStartY = folderY + 30 + folderPadding;
@@ -109,27 +109,16 @@ export const reflowImagesInFolder = (
   }
 
   const cols = calculateColsFromWidth(folderWidth);
-
-  // Layout images in a perfect grid using actual widths
-  let currentX = contentStartX;
-
   return folderImages.map((img, index) => {
     const col = index % cols;
     const row = Math.floor(index / cols);
-
-    // Start new row
-    if (col === 0) {
-      currentX = contentStartX;
-    }
-
     const { w } = getImageDisplaySize(img);
-    const x = currentX;
-    const y = contentStartY + row * CELL_HEIGHT;
-
-    // Advance X for next image
-    currentX += w + imageGap;
-
-    return { ...img, x, y };
+    const cellOffsetX = (imageMaxSize - w) / 2;
+    return {
+      ...img,
+      x: contentStartX + col * CELL_SIZE + cellOffsetX,
+      y: contentStartY + row * CELL_HEIGHT,
+    };
   });
 };
 
@@ -230,25 +219,21 @@ export interface ImageCellPosition {
 }
 
 // Get current grid cell positions for all images in a folder
-// With dynamic width-based layout, we determine position based on sequential order
 export const getImageCellPositions = (
   folderImages: CanvasImage[],
-  _folderX: number,
-  _folderY: number,
+  folderX: number,
+  folderY: number,
   currentWidth: number
 ): ImageCellPosition[] => {
   const cols = calculateColsFromWidth(currentWidth);
+  const contentStartX = folderX + GRID_CONFIG.folderPadding;
+  const contentStartY = folderY + 30 + GRID_CONFIG.folderPadding;
 
-  // Sort images by Y first (row), then X (column within row)
-  const sortedImages = [...folderImages].sort((a, b) => {
-    const rowDiff = a.y - b.y;
-    if (Math.abs(rowDiff) > CELL_HEIGHT / 2) return rowDiff;
-    return a.x - b.x;
-  });
-
-  return sortedImages.map((img, index) => {
-    const col = index % cols;
-    const row = Math.floor(index / cols);
+  return folderImages.map((img) => {
+    const relativeX = img.x - contentStartX;
+    const relativeY = img.y - contentStartY;
+    const col = Math.max(0, Math.floor(relativeX / CELL_SIZE));
+    const row = Math.max(0, Math.floor(relativeY / CELL_HEIGHT));
 
     return {
       imageId: img.id,
@@ -411,7 +396,6 @@ export const smartRepackImages = (
 };
 
 // Position images at specific cells (not sequential like reflowImagesInFolder)
-// Uses actual image widths for perfect grid spacing
 export const positionImagesInCells = (
   folderImages: CanvasImage[],
   cellAssignments: CellAssignment[],
@@ -419,7 +403,7 @@ export const positionImagesInCells = (
   folderY: number,
   folderWidth: number
 ): CanvasImage[] => {
-  const { folderPadding, imageGap } = GRID_CONFIG;
+  const { folderPadding, imageMaxSize } = GRID_CONFIG;
   const layoutMode = getFolderLayoutMode(folderWidth);
 
   const contentStartX = folderX + folderPadding;
@@ -428,55 +412,25 @@ export const positionImagesInCells = (
   const assignmentMap = new Map<string, CellAssignment>();
   cellAssignments.forEach((a) => assignmentMap.set(a.imageId, a));
 
-  if (layoutMode === 'stack') {
-    return folderImages.map((img) => {
-      const assignment = assignmentMap.get(img.id);
-      if (!assignment) return img;
-
-      const { w } = getImageDisplaySize(img);
-      const availableWidth = folderWidth - (2 * folderPadding);
-      const cellOffsetX = (availableWidth - w) / 2;
-      const yOffset = assignment.row * CELL_HEIGHT;
-      return { ...img, x: contentStartX + cellOffsetX, y: contentStartY + yOffset };
-    });
-  }
-
-  // For grid layout, calculate X positions based on actual widths in each row
-  // Group images by row
-  const rowImages = new Map<number, Array<{ img: CanvasImage; assignment: CellAssignment }>>();
-  folderImages.forEach((img) => {
-    const assignment = assignmentMap.get(img.id);
-    if (!assignment) return;
-
-    if (!rowImages.has(assignment.row)) {
-      rowImages.set(assignment.row, []);
-    }
-    rowImages.get(assignment.row)!.push({ img, assignment });
-  });
-
-  // Sort each row by column
-  rowImages.forEach((items) => {
-    items.sort((a, b) => a.assignment.col - b.assignment.col);
-  });
-
-  // Calculate positions
   return folderImages.map((img) => {
     const assignment = assignmentMap.get(img.id);
     if (!assignment) return img;
 
-    const rowItems = rowImages.get(assignment.row)!;
+    const { w } = getImageDisplaySize(img);
 
-    // Calculate X by summing widths of images before this one
-    let x = contentStartX;
-    for (const item of rowItems) {
-      if (item.assignment.col >= assignment.col) break;
-      const { w } = getImageDisplaySize(item.img);
-      x += w + imageGap;
+    if (layoutMode === 'stack') {
+      const availableWidth = folderWidth - (2 * folderPadding);
+      const cellOffsetX = (availableWidth - w) / 2;
+      const yOffset = assignment.row * CELL_HEIGHT;
+      return { ...img, x: contentStartX + cellOffsetX, y: contentStartY + yOffset };
     }
 
-    const y = contentStartY + assignment.row * CELL_HEIGHT;
-
-    return { ...img, x, y };
+    const cellOffsetX = (imageMaxSize - w) / 2;
+    return {
+      ...img,
+      x: contentStartX + assignment.col * CELL_SIZE + cellOffsetX,
+      y: contentStartY + assignment.row * CELL_HEIGHT,
+    };
   });
 };
 
