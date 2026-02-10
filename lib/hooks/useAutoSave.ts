@@ -17,12 +17,64 @@ interface UseAutoSaveReturn {
   handleSave: (silent?: boolean) => Promise<void>;
 }
 
+/** Edit signature for dirty tracking — matches fields we upsert to photo_edits */
+function getEditSignature(img: CanvasImage): string {
+  return JSON.stringify({
+    folder_id: img.folderId || null,
+    x: Math.round(img.x),
+    y: Math.round(img.y),
+    width: Math.round(img.width),
+    height: Math.round(img.height),
+    rotation: img.rotation,
+    scale_x: img.scaleX,
+    scale_y: img.scaleY,
+    exposure: img.exposure,
+    contrast: img.contrast,
+    highlights: img.highlights,
+    shadows: img.shadows,
+    whites: img.whites,
+    blacks: img.blacks,
+    texture: img.texture ?? 0,
+    temperature: img.temperature,
+    vibrance: img.vibrance,
+    saturation: img.saturation,
+    shadow_tint: img.shadowTint ?? 0,
+    color_hsl: img.colorHSL ?? null,
+    split_toning: img.splitToning ?? null,
+    color_grading: img.colorGrading ?? null,
+    color_calibration: img.colorCalibration ?? null,
+    clarity: img.clarity,
+    dehaze: img.dehaze,
+    vignette: img.vignette,
+    grain: img.grain,
+    grain_size: img.grainSize ?? 0,
+    grain_roughness: img.grainRoughness ?? 0,
+    curves: img.curves,
+    brightness: img.brightness,
+    hue: img.hue,
+    blur: img.blur,
+    filters: img.filters,
+    border_width: img.borderWidth,
+    border_color: img.borderColor,
+    original_storage_path: img.originalStoragePath ?? null,
+    is_raw: img.isRaw ?? false,
+    original_width: img.originalWidth ?? null,
+    original_height: img.originalHeight ?? null,
+    taken_at: img.takenAt ?? null,
+    camera_make: img.cameraMake ?? null,
+    camera_model: img.cameraModel ?? null,
+    labels: img.labels ?? null,
+  });
+}
+
 export function useAutoSave({ user, images, selectedIds, debounceMs = 800 }: UseAutoSaveOptions): UseAutoSaveReturn {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const saveStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSavedRef = useRef<Map<string, string>>(new Map());
 
   // Save edits to Supabase database. silent = true for auto-save (no alerts, use saveStatus).
+  // Dirty tracking: only upsert images whose edits differ from last save.
   const handleSave = useCallback(async (silent = false) => {
     if (!user) {
       if (!silent) alert('Please sign in to save your edits');
@@ -38,9 +90,21 @@ export function useAutoSave({ user, images, selectedIds, debounceMs = 800 }: Use
       return;
     }
 
+    // Only save images that have changed since last save (dirty tracking)
+    const dirtyImages = imagesToSave.filter(img => {
+      const path = img.storagePath || img.originalStoragePath!;
+      const sig = getEditSignature(img);
+      return lastSavedRef.current.get(path) !== sig;
+    });
+
+    if (dirtyImages.length === 0) {
+      setSaveStatus('idle');
+      return;
+    }
+
     try {
       // Canonical key: prefer photos path, else originals path (for DNG-only)
-      const editsToSave = imagesToSave.map(img => ({
+      const editsToSave = dirtyImages.map(img => ({
         storage_path: img.storagePath || img.originalStoragePath!,
         user_id: user.id,
         folder_id: img.folderId || null,
@@ -107,6 +171,12 @@ export function useAutoSave({ user, images, selectedIds, debounceMs = 800 }: Use
         return;
       }
 
+      // Update last-saved state for dirty tracking
+      for (const img of dirtyImages) {
+        const path = img.storagePath || img.originalStoragePath!;
+        lastSavedRef.current.set(path, getEditSignature(img));
+      }
+
       setSaveStatus('saved');
       if (!silent) alert('Edits saved successfully! Your original photos are preserved.');
 
@@ -122,6 +192,21 @@ export function useAutoSave({ user, images, selectedIds, debounceMs = 800 }: Use
       if (!silent) alert('Failed to save edits');
     }
   }, [user, images]);
+
+  // Clear lastSavedRef when user changes (e.g. logout or switch account)
+  useEffect(() => {
+    lastSavedRef.current.clear();
+  }, [user?.id]);
+
+  // Seed lastSavedRef when images first load from DB (so we don't save unchanged images on first edit)
+  useEffect(() => {
+    if (images.length > 0 && lastSavedRef.current.size === 0) {
+      for (const img of images) {
+        const path = img.storagePath || img.originalStoragePath;
+        if (path) lastSavedRef.current.set(path, getEditSignature(img));
+      }
+    }
+  }, [images]);
 
   // Auto-save: debounce save when the selected photo's edits change
   const selectedImageEditSignature = useMemo(() => {

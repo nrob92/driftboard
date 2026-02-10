@@ -850,20 +850,75 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         };
 
         // Lazy load: prioritize visible images (top rows), load rest in chunks to reduce initial egress
+        // Parallel loading: up to 5 images load concurrently within each batch
         const INITIAL_BATCH = 12;
         const CHUNK_SIZE = 6;
         const CHUNK_DELAY_MS = 150;
+        const LOAD_CONCURRENCY = 5;
         const loadedImages: CanvasImage[] = [];
-        const loadBatch = async (start: number, end: number) => {
-          for (let i = start; i < end && i < validFiles.length; i++) {
-            const image = await loadOne(validFiles[i], i);
-            if (image) {
-              loadedImages.push(image);
-              setImages([...loadedImages]);
-              setFolders(buildFoldersFromSaved(loadedImages));
+
+        const runWithConcurrency = async <T, R>(
+          items: T[],
+          concurrency: number,
+          fn: (item: T, i: number) => Promise<R | null>
+        ): Promise<(R | null)[]> => {
+          const results: (R | null)[] = new Array(items.length);
+          let idx = 0;
+          async function worker() {
+            while (idx < items.length) {
+              const i = idx++;
+              results[i] = await fn(items[i], i);
             }
           }
+          await Promise.all(
+            Array.from({ length: Math.min(concurrency, items.length) }, () => worker())
+          );
+          return results;
         };
+
+        const loadBatch = async (start: number, end: number) => {
+          const sliceEnd = Math.min(end, validFiles.length);
+          const batchFiles = validFiles.slice(start, sliceEnd);
+
+          // Prefetch thumbnail URLs via batch API (reduces HTTP round-trips)
+          const batchItems = batchFiles
+            .filter((f) => !(isDNG(f.name) && f.bucket === 'originals'))
+            .map((f) => ({ bucket: f.bucket, path: `${user.id}/${f.name}` }));
+          if (batchItems.length > 0) {
+            try {
+              const batchRes = await fetch('/api/thumbnail-batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ items: batchItems }),
+              });
+              if (batchRes.ok) {
+                const batchData = await batchRes.json();
+                for (const item of batchData.items ?? []) {
+                  if (item.signedUrl && item.bucket && item.path) {
+                    queryClient.setQueryData(['thumbnail-url', item.bucket, item.path], item.signedUrl);
+                  }
+                }
+              }
+            } catch {
+              // Fall through — loadOne will use single thumbnail API
+            }
+          }
+
+          const results = await runWithConcurrency(
+            batchFiles,
+            LOAD_CONCURRENCY,
+            (file, j) => loadOne(file, start + j)
+          );
+          for (let j = 0; j < results.length; j++) {
+            const image = results[j];
+            if (image) {
+              loadedImages.push(image);
+            }
+          }
+          setImages([...loadedImages]);
+          setFolders(buildFoldersFromSaved(loadedImages));
+        };
+
         await loadBatch(0, INITIAL_BATCH);
         for (let start = INITIAL_BATCH; start < validFiles.length; start += CHUNK_SIZE) {
           await new Promise((r) => setTimeout(r, CHUNK_DELAY_MS));
