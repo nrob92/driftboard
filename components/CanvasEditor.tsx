@@ -300,6 +300,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
   // Auto-save hook (handles saveStatus, editSignature, debounced save)
   const { saveStatus, setSaveStatus, handleSave } = useAutoSave({ user, images, selectedIds });
+  // Debounce ref for multi-select preset/paste save
+  const multiSelectSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Export hook (handles exportProgress, single/batch export)
   const { exportProgress, setExportProgress, exportImageToDownload, handleExport, handleExportSelection: handleExportSelectionBase, handleExportLayout } = useExport({ images, selectedIds, folders, decodeDNG });
 
@@ -313,6 +315,14 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     latestFoldersRef.current = folders;
     latestImagesRef.current = images;
   }, [folders, images]);
+
+  // Cleanup multi-select save timeout on unmount
+  useEffect(() => () => {
+    if (multiSelectSaveTimeoutRef.current) {
+      clearTimeout(multiSelectSaveTimeoutRef.current);
+      multiSelectSaveTimeoutRef.current = null;
+    }
+  }, []);
 
   // Get window dimensions
   useEffect(() => {
@@ -1463,11 +1473,17 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     }
     setTimeout(() => useUIStore.getState().setApplyPresetProgress(null), 400);
     saveToHistory();
+    // Debounced save to database for multi-select paste
+    if (multiSelectSaveTimeoutRef.current) clearTimeout(multiSelectSaveTimeoutRef.current);
+    multiSelectSaveTimeoutRef.current = setTimeout(() => {
+      handleSave(true);
+      multiSelectSaveTimeoutRef.current = null;
+    }, 1000);
     if (total > 1) {
       setSelectedIds([]);
       lastSelectedIdRef.current = null;
     }
-  }, [imageContextMenu, copiedEdit, saveToHistory]);
+  }, [imageContextMenu, copiedEdit, saveToHistory, handleSave]);
 
   const handleCreatePresetClick = useCallback(() => {
     if (!imageContextMenu) return;
@@ -1527,7 +1543,13 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     }
     setTimeout(() => useUIStore.getState().setApplyPresetProgress(null), 400);
     saveToHistory();
-  }, [applyPresetToSelectionIds, setApplyPresetToSelectionIds, saveToHistory]);
+    // Debounced save to database for multi-select preset application
+    if (multiSelectSaveTimeoutRef.current) clearTimeout(multiSelectSaveTimeoutRef.current);
+    multiSelectSaveTimeoutRef.current = setTimeout(() => {
+      handleSave(true);
+      multiSelectSaveTimeoutRef.current = null;
+    }, 1000);
+  }, [applyPresetToSelectionIds, setApplyPresetToSelectionIds, saveToHistory, handleSave]);
 
   // Open modal to name folder when creating from multi-select
   const handleCreateFolderFromSelection = useCallback(() => {

@@ -72,6 +72,12 @@ export function useAutoSave({ user, images, selectedIds, debounceMs = 800 }: Use
   const saveStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedRef = useRef<Map<string, string>>(new Map());
+  const imagesRef = useRef<CanvasImage[]>(images);
+
+  // Keep imagesRef in sync with the latest images
+  useEffect(() => {
+    imagesRef.current = images;
+  }, [images]);
 
   // Save edits to Supabase database. silent = true for auto-save (no alerts, use saveStatus).
   // Dirty tracking: only upsert images whose edits differ from last save.
@@ -83,7 +89,8 @@ export function useAutoSave({ user, images, selectedIds, debounceMs = 800 }: Use
 
     setSaveStatus('saving');
 
-    const imagesToSave = images.filter(img => img.storagePath || img.originalStoragePath);
+    // Use imagesRef to always get the latest images state
+    const imagesToSave = imagesRef.current.filter(img => img.storagePath || img.originalStoragePath);
     if (imagesToSave.length === 0) {
       setSaveStatus('idle');
       if (!silent) alert('No photos to save. Upload some photos first!');
@@ -191,7 +198,7 @@ export function useAutoSave({ user, images, selectedIds, debounceMs = 800 }: Use
       setSaveStatus('error');
       if (!silent) alert('Failed to save edits');
     }
-  }, [user, images]);
+  }, [user]);
 
   // Clear lastSavedRef when user changes (e.g. logout or switch account)
   useEffect(() => {
