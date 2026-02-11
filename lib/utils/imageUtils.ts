@@ -36,7 +36,7 @@ export async function loadLibRaw(): Promise<void> {
 }
 
 // Thumbnail max dimension for egress reduction (load small thumbs in grid, full-res on export)
-export const THUMB_MAX_DIM = 800;
+export const THUMB_MAX_DIM = 1200;
 
 /** Create a thumbnail blob from a file (max 800px) for low-egress grid display */
 export async function createThumbnailBlob(file: File, maxDim = THUMB_MAX_DIM): Promise<Blob> {
@@ -61,7 +61,7 @@ export async function createThumbnailBlob(file: File, maxDim = THUMB_MAX_DIM): P
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, tw, th);
-      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('toBlob failed'))), 'image/jpeg', 0.85);
+      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('toBlob failed'))), 'image/jpeg', 0.95);
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);

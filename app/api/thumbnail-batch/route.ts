@@ -7,7 +7,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-const THUMB_MAX_DIM = 800;
+const THUMB_MAX_DIM = 1200;
 const BATCH_CONCURRENCY = 4;
 
 const RAW_EXTENSIONS = ['.dng', '.raw', '.cr2', '.nef', '.arw'];
@@ -55,7 +55,7 @@ async function processOneThumb(
     try {
       thumbBuffer = await sharp(sourceBuffer)
         .resize(THUMB_MAX_DIM, THUMB_MAX_DIM, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 85 })
+        .jpeg({ quality: 95 })
         .toBuffer();
     } catch {
       return { bucket, path, error: 'Failed to resize' };
