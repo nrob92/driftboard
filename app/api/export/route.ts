@@ -15,12 +15,13 @@ interface ExportRequest {
   edits: EditValues;
   format: 'jpeg' | 'png' | 'tiff';
   quality?: number;
+  sessionId?: string;            // If present, look in collab-photos
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body: ExportRequest = await request.json();
-    const { storagePath, originalStoragePath, edits, format, quality = 95 } = body;
+    const { storagePath, originalStoragePath, edits, format, quality = 95, sessionId } = body;
 
     if (!storagePath && !originalStoragePath) {
       return NextResponse.json(
@@ -30,7 +31,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Prefer photos bucket (JPEG preview) when available so Sharp can decode; use originals only when no preview
-    const bucket = storagePath ? 'photos' : 'originals';
+    // If sessionId is present and using storagePath (preview), use 'collab-photos'
+    const bucket = storagePath 
+      ? (sessionId ? 'collab-photos' : 'photos') 
+      : 'originals';
+      
     const path = storagePath || originalStoragePath!;
 
     // Sharp cannot decode DNG/RAW; reject so client can use client-side export

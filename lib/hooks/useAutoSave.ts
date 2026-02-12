@@ -9,6 +9,7 @@ interface UseAutoSaveOptions {
   images: CanvasImage[];
   selectedIds: string[];
   debounceMs?: number;
+  sessionId?: string;
 }
 
 interface UseAutoSaveReturn {
@@ -17,7 +18,7 @@ interface UseAutoSaveReturn {
   handleSave: (silent?: boolean) => Promise<void>;
 }
 
-/** Edit signature for dirty tracking — matches fields we upsert to photo_edits */
+/** Edit signature for dirty tracking — matches fields we upsert to photo_edits or collab_photos */
 function getEditSignature(img: CanvasImage): string {
   return JSON.stringify({
     folder_id: img.folderId || null,
@@ -67,7 +68,7 @@ function getEditSignature(img: CanvasImage): string {
   });
 }
 
-export function useAutoSave({ user, images, selectedIds, debounceMs = 800 }: UseAutoSaveOptions): UseAutoSaveReturn {
+export function useAutoSave({ user, images, selectedIds, debounceMs = 800, sessionId }: UseAutoSaveOptions): UseAutoSaveReturn {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const saveStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -114,6 +115,7 @@ export function useAutoSave({ user, images, selectedIds, debounceMs = 800 }: Use
       const editsToSave = dirtyImages.map(img => ({
         storage_path: img.storagePath || img.originalStoragePath!,
         user_id: user.id,
+        ...(sessionId ? { session_id: sessionId } : {}),
         folder_id: img.folderId || null,
         x: Math.round(img.x),
         y: Math.round(img.y),
@@ -162,13 +164,18 @@ export function useAutoSave({ user, images, selectedIds, debounceMs = 800 }: Use
         camera_make: img.cameraMake ?? null,
         camera_model: img.cameraModel ?? null,
         labels: img.labels ?? null,
+        border_width: img.borderWidth,
+        border_color: img.borderColor,
       }));
+
+      const tableName = sessionId ? 'collab_photos' : 'photo_edits';
+      const conflictOn = sessionId ? 'storage_path,session_id' : 'storage_path,user_id';
 
       // Upsert edits (insert or update)
       const { error } = await supabase
-        .from('photo_edits')
+        .from(tableName)
         .upsert(editsToSave, {
-          onConflict: 'storage_path,user_id',
+          onConflict: conflictOn,
         });
 
       if (error) {

@@ -32,7 +32,7 @@ async function processOneThumb(
   try {
     // Check if thumb already exists
     const { data: existingUrl, error: existingError } = await supabase.storage
-      .from('photos')
+      .from(bucket)
       .createSignedUrl(thumbPath, 3600);
 
     if (!existingError && existingUrl?.signedUrl) {
@@ -62,7 +62,7 @@ async function processOneThumb(
     }
 
     const { error: uploadError } = await supabase.storage
-      .from('photos')
+      .from(bucket)
       .upload(thumbPath, thumbBuffer, {
         contentType: 'image/jpeg',
         cacheControl: '86400',
@@ -74,7 +74,7 @@ async function processOneThumb(
     }
 
     const { data: newUrl, error: urlError } = await supabase.storage
-      .from('photos')
+      .from(bucket)
       .createSignedUrl(thumbPath, 3600);
 
     if (urlError || !newUrl?.signedUrl) {
@@ -131,7 +131,7 @@ export async function POST(request: NextRequest) {
       (item) =>
         item.bucket &&
         item.path &&
-        (item.bucket === 'photos' || item.bucket === 'originals') &&
+        (item.bucket === 'photos' || item.bucket === 'originals' || item.bucket === 'collab-photos') &&
         !isRawPath(item.path)
     );
 

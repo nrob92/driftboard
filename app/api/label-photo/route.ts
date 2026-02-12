@@ -12,7 +12,7 @@ const supabase = createClient(
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { storagePath, userId } = body as { storagePath?: string; userId?: string };
+    const { storagePath, userId, sessionId } = body as { storagePath?: string; userId?: string; sessionId?: string };
 
     if (!storagePath || !userId) {
       return NextResponse.json(
@@ -29,8 +29,11 @@ export async function POST(request: NextRequest) {
     //   );
     // }
 
-    // Prefer photos bucket (preview); path usually is userId/filename
-    const bucket = storagePath.toLowerCase().endsWith('.dng') ? 'originals' : 'photos';
+    // Prefer photos bucket (preview); path usually is userId/filename or sessionId/filename
+    const bucket = storagePath.toLowerCase().endsWith('.dng') 
+      ? 'originals' 
+      : (sessionId ? 'collab-photos' : 'photos');
+      
     const { data: signed, error: signError } = await supabase.storage
       .from(bucket)
       .createSignedUrl(storagePath, 300);
@@ -108,11 +111,19 @@ export async function POST(request: NextRequest) {
     // Return empty labels for now
     const labels: string[] = [];
 
-    const { error: updateError } = await supabase
-      .from('photo_edits')
+    const table = sessionId ? 'collab_photos' : 'photo_edits';
+    const query = supabase
+      .from(table)
       .update({ labels })
-      .eq('storage_path', storagePath)
-      .eq('user_id', userId);
+      .eq('storage_path', storagePath);
+      
+    if (sessionId) {
+      query.eq('session_id', sessionId);
+    } else {
+      query.eq('user_id', userId);
+    }
+
+    const { error: updateError } = await query;
 
     if (updateError) {
       console.error('label-photo update error:', updateError);

@@ -76,6 +76,7 @@ export interface ColorCalibration {
 
 export interface CanvasImage {
   id: string;
+  userId?: string;
   x: number;
   y: number;
   width: number;
@@ -119,6 +120,7 @@ export interface CanvasImage {
   filters: string[];
   // DNG/RAW support
   originalStoragePath?: string;
+  thumbnailPath?: string;
   isRaw?: boolean;
   originalWidth?: number;
   originalHeight?: number;
@@ -145,6 +147,7 @@ export interface CanvasText {
 
 export interface PhotoFolder {
   id: string;
+  userId?: string;
   name: string;
   x: number;
   y: number;

@@ -15,6 +15,7 @@ interface UseExportOptions {
   selectedIds: string[];
   folders: PhotoFolder[];
   decodeDNG: (buffer: ArrayBuffer, forPreview?: boolean) => Promise<{ dataUrl: string; width: number; height: number }>;
+  sessionId?: string;
 }
 
 interface UseExportReturn {
@@ -26,7 +27,7 @@ interface UseExportReturn {
   handleExportLayout: (folderId: string) => void;
 }
 
-export function useExport({ images, selectedIds, folders, decodeDNG }: UseExportOptions): UseExportReturn {
+export function useExport({ images, selectedIds, folders, decodeDNG, sessionId }: UseExportOptions): UseExportReturn {
   const [exportProgress, setExportProgress] = useState<{ current: number; total: number } | null>(null);
 
   // Export a single image with edits (DNG full-res or server). silent = true for multi-export (no per-image alerts).
@@ -78,7 +79,12 @@ export function useExport({ images, selectedIds, folders, decodeDNG }: UseExport
 
       // Use client-side canvas filters so export matches the UI (WYSIWYG). Get signed URL and run same pipeline as display.
       const pathToFetch = image.storagePath || image.originalStoragePath;
-      const bucket = image.storagePath ? 'photos' : 'originals';
+      const bucket = isDngSource 
+        ? 'originals' 
+        : (image.storagePath 
+            ? (sessionId ? 'collab-photos' : 'photos') 
+            : 'originals');
+      
       const signedRes = await fetch('/api/signed-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -104,7 +110,7 @@ export function useExport({ images, selectedIds, folders, decodeDNG }: UseExport
       if (!silent) alert(`Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return false;
     }
-  }, [decodeDNG]);
+  }, [decodeDNG, sessionId]); // Added sessionId dependency
 
   // Handle export with edits applied (single selected image). Runs in background with progress overlay.
   const handleExport = useCallback(() => {

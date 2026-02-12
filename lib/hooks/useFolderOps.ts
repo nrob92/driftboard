@@ -174,9 +174,49 @@ export function useFolderOps({
       } catch (err) {
         console.error('Failed to create folder / update edits:', err);
       }
+      // Update React Query cache directly instead of invalidating to avoid redundant network requests
       if (user) {
-        skipNextPhotosLoadRef.current = true;
-        queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
+        queryClient.setQueryData(['user-photos', user.id], (old: {
+          savedEdits: unknown[];
+          savedFolders: unknown[];
+          photosFiles: unknown[];
+          originalsFiles: unknown[];
+        } | undefined) => {
+          const newFolderData = {
+            id: folderId,
+            user_id: user.id,
+            name,
+            x: Math.round(newFolder.x),
+            y: Math.round(newFolder.y),
+            width: GRID_CONFIG.defaultFolderWidth,
+            color: FOLDER_COLORS[colorIndex],
+          };
+          
+          // Update edits for images moved to the new folder
+          const updatedEdits = (old?.savedEdits ?? []).map((e: unknown) => {
+            const edit = e as { storage_path: string; folder_id?: string; x: number; y: number };
+            const matchingImg = resolvedImages.find(
+              img => (img.storagePath === edit.storage_path || img.originalStoragePath === edit.storage_path) && 
+                     ids.includes(img.id)
+            );
+            if (matchingImg) {
+              return {
+                ...edit,
+                folder_id: folderId,
+                x: Math.round(matchingImg.x),
+                y: Math.round(matchingImg.y),
+              };
+            }
+            return edit;
+          });
+
+          return {
+            savedEdits: updatedEdits,
+            savedFolders: [...(old?.savedFolders ?? []), newFolderData],
+            photosFiles: old?.photosFiles ?? [],
+            originalsFiles: old?.originalsFiles ?? [],
+          };
+        });
       }
     }
 

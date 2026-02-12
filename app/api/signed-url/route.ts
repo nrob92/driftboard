@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Only allow originals and photos buckets for security
-    if (bucket !== 'originals' && bucket !== 'photos') {
+    if (bucket !== 'originals' && bucket !== 'photos' && bucket !== 'collab-photos') {
       return NextResponse.json(
         { error: 'Invalid bucket' },
         { status: 400 }

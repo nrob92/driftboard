@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
     if (!bucket || !path) {
       return NextResponse.json({ error: 'Missing bucket or path' }, { status: 400 });
     }
-    if (bucket !== 'photos' && bucket !== 'originals') {
+    if (bucket !== 'photos' && bucket !== 'originals' && bucket !== 'collab-photos') {
       return NextResponse.json({ error: 'Invalid bucket' }, { status: 400 });
     }
 
@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
 
     // Check if thumb already exists by trying to create a signed URL
     const { data: existingUrl, error: existingError } = await supabase.storage
-      .from('photos')
+      .from(bucket)
       .createSignedUrl(thumbPath, 3600);
 
     if (!existingError && existingUrl?.signedUrl) {
@@ -76,9 +76,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to resize image' }, { status: 500 });
     }
 
-    // Upload thumb to photos bucket at the thumbs/ path
+    // Upload thumb to the same bucket at the thumbs/ path
     const { error: uploadError } = await supabase.storage
-      .from('photos')
+      .from(bucket)
       .upload(thumbPath, thumbBuffer, {
         contentType: 'image/jpeg',
         cacheControl: '86400',
@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
 
     // Return signed URL for the newly created thumb
     const { data: newUrl, error: urlError } = await supabase.storage
-      .from('photos')
+      .from(bucket)
       .createSignedUrl(thumbPath, 3600);
 
     if (urlError || !newUrl?.signedUrl) {

@@ -3,6 +3,18 @@
 import { useRef, useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth';
 import { useUIStore } from '@/lib/stores/uiStore';
+import { useRouter } from 'next/navigation';
+import { supabase } from '@/lib/supabase';
+
+interface CollabSession {
+  id: string;
+  name: string;
+  invite_code: string;
+  owner_id: string;
+  max_collaborators: number;
+  is_active: boolean;
+  created_at: string;
+}
 
 export interface PhotoFilterState {
   dateFrom?: string;
@@ -74,11 +86,19 @@ export function TopBar({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const helpRef = useRef<HTMLDivElement>(null);
   const filterRef = useRef<HTMLDivElement>(null);
+  const sessionRef = useRef<HTMLDivElement>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [collabSessions, setCollabSessions] = useState<CollabSession[]>([]);
+  const [loadingSessions, setLoadingSessions] = useState(false);
+  const [success, setSuccess] = useState('');
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
   const { user, signOut } = useAuth();
   const mobileMenuOpen = useUIStore((s) => s.mobileMenuOpen);
   const setMobileMenuOpen = useUIStore((s) => s.setMobileMenuOpen);
+  const router = useRouter();
 
   useEffect(() => {
     if (!helpOpen) return;
@@ -97,6 +117,91 @@ export function TopBar({
     window.addEventListener('click', close, true);
     return () => window.removeEventListener('click', close, true);
   }, [filterOpen]);
+
+  useEffect(() => {
+    if (!sessionsOpen) return;
+    const close = (e: MouseEvent) => {
+      if (sessionRef.current && !sessionRef.current.contains(e.target as Node)) setSessionsOpen(false);
+    };
+    window.addEventListener('click', close, true);
+    return () => window.removeEventListener('click', close, true);
+  }, [sessionsOpen]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const channel = supabase
+      .channel('session-updates')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'collab_members',
+          filter: `user_id=eq.${user.id}`
+        },
+        (payload: { eventType?: string; new?: { user_id?: string; status?: string }; old?: { user_id?: string } }) => {
+          console.log('TopBar pg-change received:', payload.eventType, payload);
+          if (payload.new?.user_id === user?.id || payload.old?.user_id === user?.id) {
+            fetchCollabSessions();
+            
+            if (payload.eventType === 'UPDATE' && payload.new?.status === 'approved') {
+              console.log('TopBar showing toast');
+              setToastMessage('Your join request was approved!');
+              setShowToast(true);
+              setTimeout(() => setShowToast(false), 3000);
+            }
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('TopBar subscription status:', status);
+      });
+
+    const sessionChannel = supabase
+      .channel('session-inserts')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'collab_sessions',
+          filter: `owner_id=eq.${user.id}`
+        },
+        () => {
+          console.log('New owned session detected');
+          fetchCollabSessions();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+      supabase.removeChannel(sessionChannel);
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (user && sessionsOpen) {
+      fetchCollabSessions();
+    }
+  }, [user, sessionsOpen]);
+
+  const fetchCollabSessions = async () => {
+    setLoadingSessions(true);
+    try {
+      const response = await fetch(`/api/collab/session?userId=${user?.id}`);
+      const result = await response.json();
+      
+      if (result.sessions) {
+        setCollabSessions(result.sessions as CollabSession[]);
+      }
+    } catch (err) {
+      console.error('Error fetching sessions:', err);
+    } finally {
+      setLoadingSessions(false);
+    }
+  };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     onUpload(e.target.files);
@@ -348,6 +453,86 @@ export function TopBar({
           </button>
         </div>
 
+        {/* Community / Session Selector */}
+        <div className="hidden md:block relative" ref={sessionRef}>
+          <button
+            type="button"
+            onClick={() => setSessionsOpen((o) => !o)}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-[#888] hover:text-white hover:bg-[#252525] rounded-lg transition-colors cursor-pointer"
+            title="Community Sessions"
+            aria-expanded={sessionsOpen}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+            </svg>
+            <span>Sessions</span>
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {sessionsOpen && (
+            <div className="absolute right-0 top-full mt-2 w-72 bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 z-50 overflow-hidden">
+              <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-white">Your Sessions</h3>
+                <button
+                  onClick={() => router.push('/community')}
+                  className="text-xs text-[#3ECF8E] hover:text-[#35b87a] transition-colors"
+                >
+                  Manage all
+                </button>
+              </div>
+              <div className="max-h-64 overflow-y-auto">
+                {loadingSessions ? (
+                  <div className="px-4 py-6 text-center">
+                    <div className="w-5 h-5 border-2 border-[#3ECF8E] border-t-transparent rounded-full animate-spin mx-auto" />
+                  </div>
+                ) : collabSessions.length === 0 ? (
+                  <div className="px-4 py-6 text-center">
+                    <p className="text-sm text-gray-400 mb-3">No sessions yet</p>
+                    <button
+                      onClick={() => { setSessionsOpen(false); router.push('/community'); }}
+                      className="px-3 py-1.5 text-xs bg-[#3ECF8E] text-black font-medium rounded-lg hover:bg-[#35b87a] transition-colors"
+                    >
+                      Create Session
+                    </button>
+                  </div>
+                ) : (
+                  <div className="py-2">
+                    {collabSessions.map((session) => (
+                      <button
+                        key={session.id}
+                        onClick={() => { router.push(`/community/${session.id}`); setSessionsOpen(false); }}
+                        className="w-full px-4 py-2 text-left hover:bg-[#252525] transition-colors flex items-center gap-3"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-[#252525] flex items-center justify-center">
+                          <svg className="w-4 h-4 text-[#3ECF8E]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+                          </svg>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-white truncate">{session.name}</p>
+                          <p className="text-xs text-gray-500">{session.owner_id === user?.id ? 'You are master' : 'Collaborator'}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="px-4 py-3 border-t border-[#2a2a2a]">
+                <button
+                  onClick={() => { setSessionsOpen(false); router.push('/community'); }}
+                  className="w-full px-3 py-1.5 text-sm text-[#888] hover:text-white hover:bg-[#252525] rounded-lg transition-colors flex items-center justify-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  Create or Join Session
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Desktop: User menu */}
         <div className="hidden md:flex items-center gap-2">
           {user?.user_metadata?.avatar_url ? (
@@ -468,6 +653,19 @@ export function TopBar({
 
           <div className="w-full h-px bg-[#2a2a2a]" />
 
+          {/* Community - mobile hamburger */}
+          <button
+            onClick={() => { router.push('/community'); setMobileMenuOpen(false); }}
+            className="flex items-center gap-3 w-full py-2 text-sm text-[#888] hover:text-white transition-colors"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+            </svg>
+            Community Sessions
+          </button>
+
+          <div className="w-full h-px bg-[#2a2a2a]" />
+
           {/* Help - mobile tips */}
           <div>
             <h3 className="text-sm font-semibold text-white mb-2">Tips</h3>
@@ -479,6 +677,19 @@ export function TopBar({
               <li>Drag to pan</li>
             </ul>
           </div>
+
+          <div className="w-full h-px bg-[#2a2a2a]" />
+
+          {/* Community - mobile */}
+          <button
+            onClick={() => { router.push('/community'); setMobileMenuOpen(false); }}
+            className="flex items-center gap-3 w-full py-2 text-sm text-[#888] hover:text-white transition-colors"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+            </svg>
+            Community Sessions
+          </button>
 
           <div className="w-full h-px bg-[#2a2a2a]" />
 
@@ -502,6 +713,18 @@ export function TopBar({
             >
               Sign out
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Toast notification */}
+      {showToast && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-[#171717] border border-[#3ECF8E]/30 rounded-lg shadow-lg">
+          <div className="flex items-center gap-2">
+            <svg className="w-4 h-4 text-[#3ECF8E]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+            <span className="text-sm text-white">{toastMessage}</span>
           </div>
         </div>
       )}

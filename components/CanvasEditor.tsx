@@ -127,9 +127,10 @@ interface PhotoEdits {
 
 type CanvasEditorProps = {
   onPhotosLoadStateChange?: (loading: boolean) => void;
+  sessionId?: string;
 };
 
-export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}) {
+export function CanvasEditor({ onPhotosLoadStateChange, sessionId }: CanvasEditorProps = {}) {
   const stageRef = useRef<Konva.Stage>(null);
   const folderLabelRefs = useRef<Record<string, Konva.Text>>({});
   const [folderLabelWidths, setFolderLabelWidths] = useState<Record<string, number>>({});
@@ -411,33 +412,37 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
 
   // React Query for fetching photo metadata (cached for fast reloads). Fetch all data; filter is show/hide in UI only.
   const { data: photoData } = useQuery({
-    queryKey: ['user-photos', user?.id],
+    queryKey: ['user-photos', user?.id, sessionId],
     queryFn: async () => {
       if (!user) return null;
 
-      const [editsResult, foldersResult, photosResult, originalsResult] = await Promise.all([
-        supabase.from('photo_edits').select('*').eq('user_id', user.id),
-        supabase.from('photo_folders').select('*').eq('user_id', user.id),
-        supabase.storage.from('photos').list(user.id, {
-          limit: 500,
-          sortBy: { column: 'created_at', order: 'asc' },
-        }),
-        supabase.storage.from('originals').list(user.id, {
-          limit: 500,
-          sortBy: { column: 'created_at', order: 'asc' },
-        }),
+      const isSession = !!sessionId;
+      const photoTable = isSession ? 'collab_photos' : 'photo_edits';
+      const folderTable = isSession ? 'collab_folders' : 'photo_folders';
+      const bucket = isSession ? 'collab-photos' : 'photos';
+      const storagePath = isSession ? sessionId : user.id;
+
+      // Single bucket for both sessions and personal mode
+      const [editsResult, foldersResult, photosResult] = await Promise.all([
+        isSession
+          ? supabase.from(photoTable).select('*').eq('session_id', sessionId)
+          : supabase.from(photoTable).select('*').eq('user_id', user.id),
+        isSession 
+          ? supabase.from(folderTable).select('*').eq('session_id', sessionId)
+          : supabase.from(folderTable).select('*').eq('user_id', user.id),
+        supabase.storage.from(bucket).list(storagePath, { limit: 500, sortBy: { column: 'created_at', order: 'asc' } }),
       ]);
 
       return {
         savedEdits: editsResult.data,
         savedFolders: foldersResult.data,
         photosFiles: photosResult.data,
-        originalsFiles: originalsResult.data,
+        originalsFiles: [], // No longer using separate originals bucket
         photosError: photosResult.error,
       };
     },
     enabled: !!user,
-    staleTime: 5 * 60 * 1000, // Cache 5 min to reduce refetches
+    staleTime: 5 * 60 * 1000,
   });
 
   const { data: presets = [] } = useQuery({
@@ -455,7 +460,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     staleTime: 5 * 60 * 1000,
   });
 
-  // Track load key (user + filter) to prevent duplicate processing
+  // Track load key (user + sessionId) to prevent duplicate processing
   const loadKeyRef = useRef<string | null>(null);
   // After upload or create-folder we invalidate; skip the next effect run so we don't overwrite canvas/positions
 
@@ -468,13 +473,13 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         onPhotosLoadStateChange?.(false);
         return;
       }
-      const loadKey = user.id;
+      const loadKey = sessionId ? `${user.id}-${sessionId}` : user.id;
       if (loadKeyRef.current === loadKey) {
         onPhotosLoadStateChange?.(false);
         return;
       }
 
-      const { savedEdits, savedFolders, photosFiles, originalsFiles, photosError } = photoData;
+      const { savedEdits, savedFolders, photosFiles, photosError } = photoData;
 
       const defaultFolderX = 100;
       const defaultFolderY = 100;
@@ -511,8 +516,8 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       // Check if there are any files to load
       const isImageFile = (name: string) => /\.(jpe?g|png|webp|dng|tiff?)$/i.test(name);
       const photosList = (photosFiles ?? []).filter((f) => !f.name.startsWith('.') && isImageFile(f.name));
-      const originalsList = (originalsFiles ?? []).filter((f) => !f.name.startsWith('.') && isImageFile(f.name));
-      if (photosList.length === 0 && originalsList.length === 0) {
+      // originalsList is always empty now (single bucket for both personal and sessions)
+      if (photosList.length === 0) {
         // No photos - still load folders (e.g. empty social layouts) so they appear on canvas
         const emptyFolders = buildFoldersFromSaved([]);
         loadKeyRef.current = loadKey;
@@ -621,18 +626,21 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       }
 
       try {
-        // Base names we already have from photos (preview) - don't duplicate from originals
-        const photosBaseNames = new Set(photosList.map((f) => f.name.replace(/\.[^.]+$/, '').toLowerCase()));
-        const originalsOnly = originalsList.filter(
-          (f) => !photosBaseNames.has(f.name.replace(/\.[^.]+$/, '').toLowerCase())
-        );
+        // Determine bucket names based on session mode
+        const isSession = !!sessionId;
+        const photoBucket = isSession ? 'collab-photos' : 'photos';
+        const storageBase = isSession ? sessionId : user.id;
 
-        // Combined list: all from photos, plus originals-only files (no preview)
-        type FileEntry = { name: string; bucket: 'photos' | 'originals' };
-        const validFiles: FileEntry[] = [
-          ...photosList.map((f) => ({ name: f.name, bucket: 'photos' as const })),
-          ...originalsOnly.map((f) => ({ name: f.name, bucket: 'originals' as const })),
-        ];
+        // Single bucket for both - exclude DNG files from grid display (only show previews)
+        // DNG originals are only needed when editing, not for grid display
+        const filteredPhotosList = photosList.filter(f => !f.name.toLowerCase().endsWith('.dng'));
+
+        // Combined list - all non-DNG files from single bucket
+        type FileEntry = { name: string; bucket: 'photos' | 'collab-photos' };
+        const validFiles: FileEntry[] = filteredPhotosList.map((f) => ({ 
+          name: f.name, 
+          bucket: photoBucket as 'photos' | 'collab-photos'
+        }));
 
         if (photosError) return;
 
@@ -653,12 +661,13 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
         // Load all images; signed URLs cached 55 min (URLs valid 1 hr) to reduce API calls
         const SIGNED_URL_STALE_MS = 55 * 60 * 1000;
         const loadOne = async (file: FileEntry, i: number): Promise<CanvasImage | null> => {
-          const storagePath = `${user.id}/${file.name}`;
+          const storagePath = `${storageBase}/${file.name}`;
           const bucket = file.bucket;
 
           // Always use thumbnail for grid display to minimize egress.
           // The /api/thumbnail endpoint generates + caches thumbs on-demand server-side.
-          const isRawFile = isDNG(file.name) && file.bucket === 'originals';
+          // DNG files are filtered out in the list, so this check is for safety
+          const isRawFile = isDNG(file.name);
 
           let imageUrl: string;
           try {
@@ -893,9 +902,9 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
           const batchFiles = validFiles.slice(start, sliceEnd);
 
           // Prefetch thumbnail URLs via batch API (reduces HTTP round-trips)
+          // DNG files are already filtered out in validFiles
           const batchItems = batchFiles
-            .filter((f) => !(isDNG(f.name) && f.bucket === 'originals'))
-            .map((f) => ({ bucket: f.bucket, path: `${user.id}/${f.name}` }));
+            .map((f) => ({ bucket: f.bucket, path: `${storageBase}/${f.name}` }));
           if (batchItems.length > 0) {
             try {
               const batchRes = await fetch('/api/thumbnail-batch', {
@@ -1127,7 +1136,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
     handleFileUpload, processFilesWithFolder, addFilesToExistingFolder,
     handleAddPhotosToFolder, handleFolderFileSelect, handleDrop, handleDragOver,
     pendingFilesRef, folderFileInputRef, skipNextPhotosLoadRef,
-  } = useUpload({ user, saveToHistory, resolveOverlapsAndReflow });
+  } = useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessionId });
 
   // Undo: only last photo edit (sliders, curves). Does not restore deleted photos or change placement.
   const handleUndo = useCallback(() => {
@@ -1677,7 +1686,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       }
       if (user) {
         skipNextPhotosLoadRef.current = true;
-        queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
+        queryClient.invalidateQueries({ queryKey: ['user-photos', user.id, sessionId] });
       }
     }
 
@@ -2807,6 +2816,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
               body: JSON.stringify({
                 ...payload,
                 userId: user.id,
+                sessionId,
               }),
             });
             if (!res.ok) {
@@ -2827,18 +2837,24 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
       // Delete folder from Supabase
       if (user) {
         try {
-          await supabase
-            .from('photo_folders')
+          const folderTable = sessionId ? 'collab_folders' : 'photo_folders';
+          const query = supabase
+            .from(folderTable)
             .delete()
-            .eq('id', folder.id)
-            .eq('user_id', user.id);
+            .eq('id', folder.id);
+          
+          if (sessionId) {
+            await query.eq('session_id', sessionId);
+          } else {
+            await query.eq('user_id', user.id);
+          }
         } catch (error) {
           console.error('Failed to delete folder:', error);
         }
       }
 
       setFolders((prev) => prev.filter(f => f.id !== folder.id));
-      if (user) queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
+      if (user) queryClient.invalidateQueries({ queryKey: ['user-photos', user.id, sessionId] });
       saveToHistory();
     } finally {
       setDeleteFolderProgress(null);
@@ -2865,7 +2881,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             const res = await fetch('/api/delete-photo', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ ...payload, userId: user.id }),
+              body: JSON.stringify({ ...payload, userId: user.id, sessionId }),
             });
             if (!res.ok) {
               const data = await res.json();
@@ -2875,7 +2891,7 @@ export function CanvasEditor({ onPhotosLoadStateChange }: CanvasEditorProps = {}
             console.error('Error deleting photo:', err);
           }
         }
-        queryClient.invalidateQueries({ queryKey: ['user-photos', user.id] });
+        queryClient.invalidateQueries({ queryKey: ['user-photos', user.id, sessionId] });
       }
       setImages((prev) => prev.filter((img) => !photoIds.includes(img.id)));
       setSelectedIds((prev) => prev.filter((id) => !photoIds.includes(id)));

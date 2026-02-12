@@ -38,8 +38,8 @@ export async function loadLibRaw(): Promise<void> {
 // Thumbnail max dimension for egress reduction (load small thumbs in grid, full-res on export)
 export const THUMB_MAX_DIM = 1200;
 
-/** Create a thumbnail blob from a file (max 800px) for low-egress grid display */
-export async function createThumbnailBlob(file: File, maxDim = THUMB_MAX_DIM): Promise<Blob> {
+/** Create a thumbnail blob from a file or blob (max 800px) for low-egress grid display */
+export async function createThumbnailBlob(file: File | Blob, maxDim = THUMB_MAX_DIM): Promise<Blob> {
   return new Promise((resolve, reject) => {
     const img = new window.Image();
     const url = URL.createObjectURL(file);
@@ -48,7 +48,7 @@ export async function createThumbnailBlob(file: File, maxDim = THUMB_MAX_DIM): P
       const w = img.naturalWidth;
       const h = img.naturalHeight;
       if (w <= maxDim && h <= maxDim) {
-        file.arrayBuffer().then((buf) => resolve(new Blob([buf], { type: file.type }))).catch(reject);
+        file.arrayBuffer().then((buf) => resolve(new Blob([buf], { type: 'image/jpeg' }))).catch(reject);
         return;
       }
       const scale = maxDim / Math.max(w, h);
