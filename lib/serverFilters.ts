@@ -10,84 +10,13 @@ import {
   type SplitToning, type ColorGrading, type ColorCalibration,
   type EditValues,
 } from '@/lib/types';
+import { buildLUT } from './filters/core/lut';
+import { hslToRgb, clamp8 } from './filters/core/color';
 
 export type { EditValues };
 
-// Helper: Clamp value to 0-255
-const clamp = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v);
-
-// Helper: Build lookup table from curve points (identity = no change when default two points)
-function buildLUT(points: CurvePoint[]): Uint8Array {
-  const lut = new Uint8Array(256);
-  if (points.length === 2) {
-    const sorted = [...points].sort((a, b) => a.x - b.x);
-    if (sorted[0].x === 0 && sorted[0].y === 0 && sorted[1].x === 255 && sorted[1].y === 255) {
-      for (let i = 0; i < 256; i++) lut[i] = i;
-      return lut;
-    }
-  }
-  const sorted = [...points].sort((a, b) => a.x - b.x);
-
-  const interpolate = (x: number): number => {
-    if (sorted.length === 0) return x;
-    if (sorted.length === 1) return sorted[0].y;
-    if (x <= sorted[0].x) return sorted[0].y;
-    if (x >= sorted[sorted.length - 1].x) return sorted[sorted.length - 1].y;
-
-    let i = 0;
-    while (i < sorted.length - 1 && sorted[i + 1].x < x) i++;
-
-    const p0 = sorted[Math.max(0, i - 1)];
-    const p1 = sorted[i];
-    const p2 = sorted[Math.min(sorted.length - 1, i + 1)];
-    const p3 = sorted[Math.min(sorted.length - 1, i + 2)];
-
-    const t = (x - p1.x) / (p2.x - p1.x || 1);
-    const t2 = t * t;
-    const t3 = t2 * t;
-
-    const y = 0.5 * (
-      (2 * p1.y) +
-      (-p0.y + p2.y) * t +
-      (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
-      (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
-    );
-
-    return Math.max(0, Math.min(255, Math.round(y)));
-  };
-
-  for (let i = 0; i < 256; i++) {
-    lut[i] = interpolate(i);
-  }
-
-  return lut;
-}
-
-// Helper: HSL to RGB conversion
-function hslToRgb(h: number, s: number, l: number): [number, number, number] {
-  if (s === 0) {
-    const val = l * 255;
-    return [val, val, val];
-  }
-
-  const hue2rgb = (p: number, q: number, t: number): number => {
-    if (t < 0) t += 1;
-    if (t > 1) t -= 1;
-    if (t < 1/6) return p + (q - p) * 6 * t;
-    if (t < 1/2) return q;
-    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
-    return p;
-  };
-
-  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-  const p = 2 * l - q;
-
-  return [
-    hue2rgb(p, q, h + 1/3) * 255,
-    hue2rgb(p, q, h) * 255,
-    hue2rgb(p, q, h - 1/3) * 255
-  ];
-}
+// Use shared clamp8 from color core
+const clamp = clamp8;
 
 /**
  * Apply all edit values to a raw RGB buffer

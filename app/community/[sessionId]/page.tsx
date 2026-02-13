@@ -61,6 +61,9 @@ const USER_COLORS = [
   '#EC4899', '#06B6D4', '#84CC16', '#F97316'
 ];
 
+// Module-level initialization tracking to prevent re-fetching on tab switch
+const initializedSessions = new Set<string>();
+
 export default function CollaborativeCanvasPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
@@ -81,7 +84,6 @@ export default function CollaborativeCanvasPage() {
   const realtimeChannel = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const presenceChannel = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const dbChangesChannel = useRef<ReturnType<typeof supabase.channel> | null>(null);
-  const isInitialized = useRef(false);
   const isFetching = useRef(false);
 
   useEffect(() => {
@@ -91,7 +93,7 @@ export default function CollaborativeCanvasPage() {
   }, [user, loading, router]);
 
   const fetchAuthorization = useCallback(async () => {
-    if (!user || !sessionId || isFetching.current || isInitialized.current) return;
+    if (!user || !sessionId || isFetching.current || initializedSessions.has(sessionId)) return;
     
     try {
       isFetching.current = true;
@@ -144,7 +146,7 @@ export default function CollaborativeCanvasPage() {
         if (result.requests) setPendingRequests(result.requests);
       }
 
-      isInitialized.current = true;
+      initializedSessions.add(sessionId);
     } catch (err) {
       console.error('Auth error:', err);
       setError('Failed to authorize');
@@ -159,7 +161,7 @@ export default function CollaborativeCanvasPage() {
     
     return () => {
       cleanupRealtime();
-      isInitialized.current = false;
+      // Don't reset isInitialized.current - we want to prevent re-fetching on tab switch
     };
   }, [fetchAuthorization]);
 

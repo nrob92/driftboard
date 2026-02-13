@@ -1,27 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import sharp from 'sharp';
 import { createClient } from '@supabase/supabase-js';
+import { isRawPath, getThumbPath, generateThumbnail } from '@/lib/utils/thumbnail';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-const THUMB_MAX_DIM = 1200;
 const BATCH_CONCURRENCY = 4;
-
-const RAW_EXTENSIONS = ['.dng', '.raw', '.cr2', '.nef', '.arw'];
-function isRawPath(path: string): boolean {
-  const lower = path.toLowerCase();
-  return RAW_EXTENSIONS.some((ext) => lower.endsWith(ext));
-}
-
-function getThumbPath(path: string): string {
-  const lastSlash = path.lastIndexOf('/');
-  return lastSlash < 0
-    ? `thumbs/${path}`
-    : path.slice(0, lastSlash + 1) + 'thumbs/' + path.slice(lastSlash + 1);
-}
 
 async function processOneThumb(
   bucket: string,
@@ -53,10 +39,7 @@ async function processOneThumb(
 
     let thumbBuffer: Buffer;
     try {
-      thumbBuffer = await sharp(sourceBuffer)
-        .resize(THUMB_MAX_DIM, THUMB_MAX_DIM, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 95 })
-        .toBuffer();
+      thumbBuffer = await generateThumbnail(sourceBuffer);
     } catch {
       return { bucket, path, error: 'Failed to resize' };
     }

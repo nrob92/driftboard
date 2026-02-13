@@ -6,6 +6,7 @@
 
 import Konva from 'konva';
 import type { CurvePoint, ChannelCurves, ColorHSL, SplitToning, ColorGrading, ColorCalibration, CanvasImage } from '@/lib/types';
+import { buildLUT, isCurvesModified } from './core';
 
 // Custom brightness filter that multiplies instead of adds (prevents black screens)
 // Uses pre-computed LUT for maximum performance
@@ -273,54 +274,8 @@ export const createGrainFilter = (grain: number) => {
   };
 };
 
-// Build a lookup table from curve points (identity = no change when default two points)
-export const buildLUT = (points: CurvePoint[]): Uint8Array => {
-  const lut = new Uint8Array(256);
-  if (points.length === 2) {
-    const sorted = [...points].sort((a, b) => a.x - b.x);
-    if (sorted[0].x === 0 && sorted[0].y === 0 && sorted[1].x === 255 && sorted[1].y === 255) {
-      for (let i = 0; i < 256; i++) lut[i] = i;
-      return lut;
-    }
-  }
-  const sorted = [...points].sort((a, b) => a.x - b.x);
-
-  // Interpolation function using Catmull-Rom spline
-  const interpolate = (x: number): number => {
-    if (sorted.length === 0) return x;
-    if (sorted.length === 1) return sorted[0].y;
-    if (x <= sorted[0].x) return sorted[0].y;
-    if (x >= sorted[sorted.length - 1].x) return sorted[sorted.length - 1].y;
-
-    let i = 0;
-    while (i < sorted.length - 1 && sorted[i + 1].x < x) i++;
-
-    const p0 = sorted[Math.max(0, i - 1)];
-    const p1 = sorted[i];
-    const p2 = sorted[Math.min(sorted.length - 1, i + 1)];
-    const p3 = sorted[Math.min(sorted.length - 1, i + 2)];
-
-    const t = (x - p1.x) / (p2.x - p1.x || 1);
-    const t2 = t * t;
-    const t3 = t2 * t;
-
-    const y = 0.5 * (
-      (2 * p1.y) +
-      (-p0.y + p2.y) * t +
-      (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
-      (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
-    );
-
-    return Math.max(0, Math.min(255, Math.round(y)));
-  };
-
-  // Build lookup table
-  for (let i = 0; i < 256; i++) {
-    lut[i] = interpolate(i);
-  }
-
-  return lut;
-};
+// Re-export buildLUT for backward compatibility
+export { buildLUT } from './core';
 
 // Curve strength: 1 = full effect, lower = gentler (blend with original)
 const CURVES_STRENGTH = 0.6;

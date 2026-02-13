@@ -1,13 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import sharp from 'sharp';
 import { createClient } from '@supabase/supabase-js';
+import { isRawPath, getThumbPath, generateThumbnail } from '@/lib/utils/thumbnail';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
-
-const THUMB_MAX_DIM = 1200;
 
 /**
  * On-demand thumbnail generator.
@@ -16,7 +14,7 @@ const THUMB_MAX_DIM = 1200;
  *   uploads the thumb, and returns its signed URL.
  *
  * This avoids sending full-resolution images to the client for grid display.
- * Egress cost: ~50-100 KB per thumbnail vs 5-10 MB per full-res image.
+ * Egress cost: ~30-60 KB per thumbnail vs 5-10 MB per full-res image.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -31,16 +29,11 @@ export async function POST(request: NextRequest) {
 
     // DNG/RAW files can't be resized with Sharp — the client should use the
     // preview JPG in the photos bucket instead (uploaded during DNG upload flow)
-    const pathLower = path.toLowerCase();
-    if (pathLower.endsWith('.dng') || pathLower.endsWith('.raw') || pathLower.endsWith('.cr2') || pathLower.endsWith('.nef') || pathLower.endsWith('.arw')) {
+    if (isRawPath(path)) {
       return NextResponse.json({ error: 'RAW files not supported for thumbnails' }, { status: 400 });
     }
 
-    // Compute thumb path: user_id/filename.jpg -> user_id/thumbs/filename.jpg
-    const lastSlash = path.lastIndexOf('/');
-    const thumbPath = lastSlash < 0
-      ? `thumbs/${path}`
-      : path.slice(0, lastSlash + 1) + 'thumbs/' + path.slice(lastSlash + 1);
+    const thumbPath = getThumbPath(path);
 
     // Check if thumb already exists by trying to create a signed URL
     const { data: existingUrl, error: existingError } = await supabase.storage
@@ -64,13 +57,10 @@ export async function POST(request: NextRequest) {
     const arrayBuffer = await fileData.arrayBuffer();
     const sourceBuffer = Buffer.from(arrayBuffer);
 
-    // Resize with Sharp
+    // Resize with Sharp using shared utility
     let thumbBuffer: Buffer;
     try {
-      thumbBuffer = await sharp(sourceBuffer)
-        .resize(THUMB_MAX_DIM, THUMB_MAX_DIM, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 95 })
-        .toBuffer();
+      thumbBuffer = await generateThumbnail(sourceBuffer);
     } catch (sharpError) {
       console.error('Thumbnail: Sharp resize failed:', sharpError);
       return NextResponse.json({ error: 'Failed to resize image' }, { status: 500 });

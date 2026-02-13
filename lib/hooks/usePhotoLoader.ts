@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
-import type { CanvasImage, CanvasText, PhotoFolder, ChannelCurves, ColorHSL, SplitToning } from '@/lib/types';
+import type { CanvasImage, CanvasText, PhotoFolder, PhotoEdits } from '@/lib/types';
 import { DEFAULT_CURVES } from '@/lib/types';
 import { useCanvasStore } from '@/lib/stores/canvasStore';
 import {
@@ -12,57 +12,8 @@ import {
 import { isDNG, decodeDNGFromUrl, getThumbStoragePath } from '@/lib/utils/imageUtils';
 import { getCachedImage } from '@/lib/imageCache';
 
-// Edit data that gets saved to Supabase
-export interface PhotoEdits {
-  storage_path: string;
-  user_id: string;
-  folder_id?: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  rotation: number;
-  scale_x: number;
-  scale_y: number;
-  exposure: number;
-  contrast: number;
-  highlights: number;
-  shadows: number;
-  whites: number;
-  blacks: number;
-  texture?: number;
-  temperature: number;
-  vibrance: number;
-  saturation: number;
-  shadow_tint?: number;
-  color_hsl?: ColorHSL;
-  split_toning?: SplitToning;
-  clarity: number;
-  dehaze: number;
-  vignette: number;
-  grain: number;
-  grain_size?: number;
-  grain_roughness?: number;
-  curves: ChannelCurves;
-  brightness: number;
-  hue: number;
-  blur: number;
-  filters: string[];
-  original_storage_path?: string;
-  is_raw?: boolean;
-  original_width?: number;
-  original_height?: number;
-  taken_at?: string | null;
-  camera_make?: string | null;
-  camera_model?: string | null;
-  labels?: string[] | null;
-  // Border
-  border_width?: number | null;
-  border_color?: string | null;
-  // Color grading
-  color_grading?: unknown;
-  color_calibration?: unknown;
-}
+// Re-export PhotoEdits for backward compatibility
+export type { PhotoEdits } from '@/lib/types';
 
 interface UsePhotoLoaderOptions {
   user: User | null;

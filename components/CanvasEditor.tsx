@@ -12,7 +12,7 @@ import { useAuth } from '@/lib/auth';
 import {
   type ChannelCurves, type ColorHSL,
   type SplitToning, type ColorGrading, type ColorCalibration,
-  type CanvasImage, type CanvasText, type PhotoFolder, type Preset,
+  type CanvasImage, type CanvasText, type PhotoFolder, type Preset, type PhotoEdits,
   DEFAULT_CURVES, EDIT_KEYS, cloneEditValue,
 } from '@/lib/types';
 import { useCanvasStore, selectImages, selectSelectedIds, selectFolders, selectStageScale, selectStagePosition, selectDimensions } from '@/lib/stores/canvasStore';
@@ -74,55 +74,7 @@ function getEditSnapshot(img: CanvasImage): Partial<CanvasImage> {
   return out;
 }
 
-// Edit data that gets saved to Supabase
-interface PhotoEdits {
-  storage_path: string;
-  user_id: string;
-  folder_id?: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  rotation: number;
-  scale_x: number;
-  scale_y: number;
-  exposure: number;
-  contrast: number;
-  highlights: number;
-  shadows: number;
-  whites: number;
-  blacks: number;
-  texture?: number;
-  temperature: number;
-  vibrance: number;
-  saturation: number;
-  shadow_tint?: number;
-  color_hsl?: ColorHSL;
-  split_toning?: SplitToning;
-  clarity: number;
-  dehaze: number;
-  vignette: number;
-  grain: number;
-  grain_size?: number;
-  grain_roughness?: number;
-  curves: ChannelCurves;
-  brightness: number;
-  hue: number;
-  blur: number;
-  filters: string[];
-  // DNG/RAW support
-  original_storage_path?: string;
-  is_raw?: boolean;
-  original_width?: number;
-  original_height?: number;
-  // Filter search
-  taken_at?: string | null;
-  camera_make?: string | null;
-  camera_model?: string | null;
-  labels?: string[] | null;
-}
-
-// CanvasText imported from @/lib/types
+// PhotoEdits imported from @/lib/types
 
 
 type CanvasEditorProps = {
@@ -300,7 +252,7 @@ export function CanvasEditor({ onPhotosLoadStateChange, sessionId }: CanvasEdito
   const { user } = useAuth();
 
   // Auto-save hook (handles saveStatus, editSignature, debounced save)
-  const { saveStatus, setSaveStatus, handleSave } = useAutoSave({ user, images, selectedIds });
+  const { saveStatus, setSaveStatus, handleSave } = useAutoSave({ user, images, selectedIds, sessionId });
   // Debounce ref for multi-select preset/paste save
   const multiSelectSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Export hook (handles exportProgress, single/batch export)

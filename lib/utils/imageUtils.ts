@@ -35,10 +35,11 @@ export async function loadLibRaw(): Promise<void> {
   return librawLoading;
 }
 
-// Thumbnail max dimension for egress reduction (load small thumbs in grid, full-res on export)
-export const THUMB_MAX_DIM = 1200;
+// Thumbnail settings - must match server-side lib/utils/thumbnail.ts
+export const THUMB_MAX_DIM = 400;
+export const THUMB_QUALITY = 0.80;
 
-/** Create a thumbnail blob from a file or blob (max 800px) for low-egress grid display */
+/** Create a thumbnail blob from a file or blob for low-egress grid display */
 export async function createThumbnailBlob(file: File | Blob, maxDim = THUMB_MAX_DIM): Promise<Blob> {
   return new Promise((resolve, reject) => {
     const img = new window.Image();
@@ -61,7 +62,7 @@ export async function createThumbnailBlob(file: File | Blob, maxDim = THUMB_MAX_
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, tw, th);
-      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('toBlob failed'))), 'image/jpeg', 0.95);
+      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('toBlob failed'))), 'image/jpeg', THUMB_QUALITY);
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
@@ -112,11 +113,14 @@ export async function resizeImageForEditing(imageSrc: string, maxDim = 1500): Pr
   });
 }
 
-/** Get thumb storage path from full path: user_id/filename.jpg -> user_id/thumbs/filename.jpg */
+// Thumbnail version - must match server-side lib/utils/thumbnail.ts
+export const THUMB_VERSION = 'v2';
+
+/** Get thumb storage path from full path: user_id/filename.jpg -> user_id/thumbs/v2/filename.jpg */
 export function getThumbStoragePath(fullPath: string): string {
   const lastSlash = fullPath.lastIndexOf('/');
-  if (lastSlash < 0) return `thumbs/${fullPath}`;
-  return fullPath.slice(0, lastSlash + 1) + 'thumbs/' + fullPath.slice(lastSlash + 1);
+  if (lastSlash < 0) return `thumbs/${THUMB_VERSION}/${fullPath}`;
+  return fullPath.slice(0, lastSlash + 1) + `thumbs/${THUMB_VERSION}/` + fullPath.slice(lastSlash + 1);
 }
 
 // Preview max dimension for DNG files (best preview: no downscale; use large cap so we keep full res)

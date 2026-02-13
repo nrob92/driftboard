@@ -217,3 +217,58 @@ export interface Preset {
   name: string;
   settings: Partial<CanvasImage>;
 }
+
+// --- Database Types ---
+
+/** Photo edits stored in Supabase photo_edits table */
+export interface PhotoEdits {
+  storage_path: string;
+  user_id: string;
+  folder_id?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+  scale_x: number;
+  scale_y: number;
+  exposure: number;
+  contrast: number;
+  highlights: number;
+  shadows: number;
+  whites: number;
+  blacks: number;
+  texture?: number;
+  temperature: number;
+  vibrance: number;
+  saturation: number;
+  shadow_tint?: number;
+  color_hsl?: ColorHSL;
+  split_toning?: SplitToning;
+  color_grading?: ColorGrading;
+  color_calibration?: ColorCalibration;
+  clarity: number;
+  dehaze: number;
+  vignette: number;
+  grain: number;
+  grain_size?: number;
+  grain_roughness?: number;
+  curves: ChannelCurves;
+  brightness: number;
+  hue: number;
+  blur: number;
+  filters: string[];
+  // DNG/RAW support
+  original_storage_path?: string;
+  is_raw?: boolean;
+  original_width?: number;
+  original_height?: number;
+  // Metadata
+  taken_at?: string | null;
+  camera_make?: string | null;
+  camera_model?: string | null;
+  labels?: string[] | null;
+  // Border
+  border_width?: number | null;
+  border_color?: string | null;
+}

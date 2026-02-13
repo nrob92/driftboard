@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { getThumbPath } from '@/lib/utils/thumbnail';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -36,12 +37,18 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Also delete the thumbnail if it exists
+      // Delete all thumbnail versions (v1, v2, etc.) to clean up old versions
       const lastSlash = storagePath.lastIndexOf('/');
-      const thumbPath = lastSlash < 0
-        ? `thumbs/${storagePath}`
-        : storagePath.slice(0, lastSlash + 1) + 'thumbs/' + storagePath.slice(lastSlash + 1);
+      const basePath = lastSlash < 0 ? '' : storagePath.slice(0, lastSlash + 1);
+      const fileName = lastSlash < 0 ? storagePath : storagePath.slice(lastSlash + 1);
+      
+      // Delete current version thumbnail
+      const thumbPath = getThumbPath(storagePath);
       await supabase.storage.from(bucket).remove([thumbPath]).catch(() => {});
+      
+      // Also delete old v1 thumbnails if they exist
+      const oldThumbPath = basePath + 'thumbs/' + fileName;
+      await supabase.storage.from(bucket).remove([oldThumbPath]).catch(() => {});
     }
 
     // Delete original (DNG) from same bucket if it exists

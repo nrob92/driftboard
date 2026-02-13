@@ -5,7 +5,42 @@ import { Stage, Layer, Image as KonvaImage, Rect, Text, Group } from 'react-konv
 import useImage from 'use-image';
 import Konva from 'konva';
 import { CurvesEditor } from './CurvesEditor';
-import { buildSandboxFilterList } from '@/lib/sandboxFilters';
+import { buildExportFilterList } from '@/lib/filters/clientFilters';
+import type { CanvasImage, ChannelCurves as AppChannelCurves } from '@/lib/types';
+
+// Helper to convert SandboxImage to CanvasImage for filter pipeline
+function toCanvasImage(img: SandboxImage, defaultCurves: AppChannelCurves): CanvasImage {
+  return {
+    id: img.id,
+    x: img.x,
+    y: img.y,
+    width: img.width,
+    height: img.height,
+    src: img.url,
+    folderId: img.folderId,
+    rotation: 0,
+    scaleX: 1,
+    scaleY: 1,
+    exposure: img.exposure ?? 0,
+    contrast: img.contrast ?? 0,
+    highlights: img.highlights ?? 0,
+    shadows: img.shadows ?? 0,
+    whites: img.whites ?? 0,
+    blacks: img.blacks ?? 0,
+    temperature: img.temperature ?? 0,
+    vibrance: img.vibrance ?? 0,
+    saturation: img.saturation ?? 0,
+    clarity: img.clarity ?? 0,
+    dehaze: img.dehaze ?? 0,
+    vignette: img.vignette ?? 0,
+    grain: img.grain ?? 0,
+    curves: (img.curves as AppChannelCurves) ?? defaultCurves,
+    brightness: 0,
+    hue: 0,
+    blur: 0,
+    filters: [],
+  };
+}
 
 const ACCEPT = 'image/jpeg,image/png,image/webp';
 
@@ -280,7 +315,7 @@ function SandboxImageNode({
 }) {
   const nodeRef = useRef<Konva.Image>(null);
   const [image] = useImage(img.url, 'anonymous');
-  const filterList = useMemo(() => buildSandboxFilterList(img), [img]);
+  const filterList = useMemo(() => buildExportFilterList(toCanvasImage(img, DEFAULT_CURVES)), [img]);
   const hasFilters = filterList.length > 0;
 
   useEffect(() => {
