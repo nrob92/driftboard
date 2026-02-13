@@ -78,9 +78,18 @@ export function useCollaboration({
     };
   }, [config, onPhotosUpdate, onFoldersUpdate]);
 
+  // Simple throttle for cursor broadcasts to prevent network spam
+  const lastCursorBroadcast = useRef<number>(0);
+  const CURSOR_THROTTLE_MS = 50; // 20 cursor updates per second max
+
   const broadcastCursor = useCallback(
     (x: number, y: number) => {
       if (!config || !channelRef.current) return;
+
+      const now = Date.now();
+      if (now - lastCursorBroadcast.current < CURSOR_THROTTLE_MS) return;
+      lastCursorBroadcast.current = now;
+
       channelRef.current.send({
         type: "broadcast",
         event: "cursor",
