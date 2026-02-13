@@ -4,9 +4,17 @@
  * Pre-computes LUTs where possible for maximum per-frame performance.
  */
 
-import Konva from 'konva';
-import type { CurvePoint, ChannelCurves, ColorHSL, SplitToning, ColorGrading, ColorCalibration, CanvasImage } from '@/lib/types';
-import { buildLUT, isCurvesModified } from './core';
+import Konva from "konva";
+import type {
+  CurvePoint,
+  ChannelCurves,
+  ColorHSL,
+  SplitToning,
+  ColorGrading,
+  ColorCalibration,
+  CanvasImage,
+} from "@/lib/types";
+import { buildLUT } from "./core";
 
 // Custom brightness filter that multiplies instead of adds (prevents black screens)
 // Uses pre-computed LUT for maximum performance
@@ -51,7 +59,12 @@ export const createExposureFilter = (exposure: number) => {
 };
 
 // Tonal filter for highlights, shadows, whites, blacks
-export const createTonalFilter = (highlights: number, shadows: number, whites: number, blacks: number) => {
+export const createTonalFilter = (
+  highlights: number,
+  shadows: number,
+  whites: number,
+  blacks: number,
+) => {
   const lut = new Uint8ClampedArray(256);
 
   for (let i = 0; i < 256; i++) {
@@ -124,9 +137,11 @@ export const createVibranceFilter = (vibrance: number) => {
     const len = data.length;
 
     for (let i = 0; i < len; i += 4) {
-      const r = data[i], g = data[i + 1], b = data[i + 2];
-      const max = r > g ? (r > b ? r : b) : (g > b ? g : b);
-      const min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+      const r = data[i],
+        g = data[i + 1],
+        b = data[i + 2];
+      const max = r > g ? (r > b ? r : b) : g > b ? g : b;
+      const min = r < g ? (r < b ? r : b) : g < b ? g : b;
 
       if (max === 0) continue;
 
@@ -173,14 +188,18 @@ export const createClarityFilter = (clarity: number) => {
 export const createDehazeFilter = (dehaze: number) => {
   const contrastBoost = 1 + dehaze * 0.5;
   const satBoost = 1 + dehaze * 0.3;
-  const rCoef = 0.299, gCoef = 0.587, bCoef = 0.114;
+  const rCoef = 0.299,
+    gCoef = 0.587,
+    bCoef = 0.114;
 
   return function (imageData: ImageData) {
     const data = imageData.data;
     const len = data.length;
 
     for (let i = 0; i < len; i += 4) {
-      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const r = data[i],
+        g = data[i + 1],
+        b = data[i + 2];
 
       let nr = 128 + (r - 128) * contrastBoost;
       let ng = 128 + (g - 128) * contrastBoost;
@@ -275,7 +294,7 @@ export const createGrainFilter = (grain: number) => {
 };
 
 // Re-export buildLUT for backward compatibility
-export { buildLUT } from './core';
+export { buildLUT } from "./core";
 
 // Curve strength: 1 = full effect, lower = gentler (blend with original)
 const CURVES_STRENGTH = 0.6;
@@ -311,15 +330,24 @@ export const createContrastFilterParam = (konvaContrastValue: number) => {
   return function (imageData: ImageData) {
     const data = imageData.data;
     for (let i = 0; i < data.length; i += 4) {
-      let r = data[i] / 255 - 0.5; r = (r * adjust + 0.5) * 255; data[i] = r < 0 ? 0 : r > 255 ? 255 : r;
-      let g = data[i + 1] / 255 - 0.5; g = (g * adjust + 0.5) * 255; data[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
-      let b = data[i + 2] / 255 - 0.5; b = (b * adjust + 0.5) * 255; data[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
+      let r = data[i] / 255 - 0.5;
+      r = (r * adjust + 0.5) * 255;
+      data[i] = r < 0 ? 0 : r > 255 ? 255 : r;
+      let g = data[i + 1] / 255 - 0.5;
+      g = (g * adjust + 0.5) * 255;
+      data[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
+      let b = data[i + 2] / 255 - 0.5;
+      b = (b * adjust + 0.5) * 255;
+      data[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
     }
   };
 };
 
 // Konva HSV exact formula: 3x3 RGB matrix from v=2^value(), s=2^saturation(), h=hue°; we only set saturation and hue (value=0). Node: saturation = image.saturation*2, hue = image.hue*180.
-export const createHSVFilterParam = (saturationValue: number, hueValue: number) => {
+export const createHSVFilterParam = (
+  saturationValue: number,
+  hueValue: number,
+) => {
   const v = Math.pow(2, 0); // value not set on node
   const s = Math.pow(2, saturationValue);
   const h = Math.abs(hueValue + 360) % 360;
@@ -337,7 +365,9 @@ export const createHSVFilterParam = (saturationValue: number, hueValue: number) 
   return function (imageData: ImageData) {
     const data = imageData.data;
     for (let i = 0; i < data.length; i += 4) {
-      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const r = data[i],
+        g = data[i + 1],
+        b = data[i + 2];
       const nr = rr * r + rg * g + rb * b;
       const ng = gr * r + gg * g + gb * b;
       const nb = br * r + bg * g + bb * b;
@@ -349,33 +379,75 @@ export const createHSVFilterParam = (saturationValue: number, hueValue: number) 
 };
 
 // Build filter list for export - same order and logic as canvas display (no Konva node, no bypass). Omit blur; applied via ctx.filter.
-export function buildExportFilterList(image: CanvasImage): ((imageData: ImageData) => void)[] {
+export function buildExportFilterList(
+  image: CanvasImage,
+): ((imageData: ImageData) => void)[] {
   const list: ((imageData: ImageData) => void)[] = [];
   const isCurvesModified = (): boolean => {
     if (!image.curves) return false;
     const ch = (points: CurvePoint[]) => {
       if (!points || points.length === 0) return false;
       if (points.length > 2) return true;
-      return points.some((p, i) => (i === 0 ? p.x !== 0 || p.y !== 0 : i === points.length - 1 ? p.x !== 255 || p.y !== 255 : true));
+      return points.some((p, i) =>
+        i === 0
+          ? p.x !== 0 || p.y !== 0
+          : i === points.length - 1
+            ? p.x !== 255 || p.y !== 255
+            : true,
+      );
     };
-    return ch(image.curves.rgb) || ch(image.curves.red) || ch(image.curves.green) || ch(image.curves.blue);
+    return (
+      ch(image.curves.rgb) ||
+      ch(image.curves.red) ||
+      ch(image.curves.green) ||
+      ch(image.curves.blue)
+    );
   };
-  if (isCurvesModified() && image.curves) list.push(createCurvesFilter(image.curves));
+  if (isCurvesModified() && image.curves)
+    list.push(createCurvesFilter(image.curves));
   if (image.exposure !== 0) list.push(createExposureFilter(image.exposure));
-  if (image.highlights !== 0 || image.shadows !== 0 || image.whites !== 0 || image.blacks !== 0)
-    list.push(createTonalFilter(image.highlights, image.shadows, image.whites, image.blacks));
+  if (
+    image.highlights !== 0 ||
+    image.shadows !== 0 ||
+    image.whites !== 0 ||
+    image.blacks !== 0
+  )
+    list.push(
+      createTonalFilter(
+        image.highlights,
+        image.shadows,
+        image.whites,
+        image.blacks,
+      ),
+    );
   if (image.clarity !== 0) list.push(createClarityFilter(image.clarity));
-  if (image.brightness !== 0) list.push(createBrightnessFilter(image.brightness));
-  if (image.contrast !== 0) list.push(createContrastFilterParam(image.contrast * 25));
-  if (image.temperature !== 0) list.push(createTemperatureFilter(image.temperature));
-  if (image.saturation !== 0 || image.hue !== 0) list.push(createHSVFilterParam(image.saturation * 2, image.hue * 180));
+  if (image.brightness !== 0)
+    list.push(createBrightnessFilter(image.brightness));
+  if (image.contrast !== 0)
+    list.push(createContrastFilterParam(image.contrast * 25));
+  if (image.temperature !== 0)
+    list.push(createTemperatureFilter(image.temperature));
+  if (image.saturation !== 0 || image.hue !== 0)
+    list.push(createHSVFilterParam(image.saturation * 2, image.hue * 180));
   if (image.vibrance !== 0) list.push(createVibranceFilter(image.vibrance));
-  if (image.colorHSL && Object.values(image.colorHSL).some((a) => a && ((a.hue ?? 0) !== 0 || (a.saturation ?? 0) !== 0 || (a.luminance ?? 0) !== 0)))
+  if (
+    image.colorHSL &&
+    Object.values(image.colorHSL).some(
+      (a) =>
+        a &&
+        ((a.hue ?? 0) !== 0 ||
+          (a.saturation ?? 0) !== 0 ||
+          (a.luminance ?? 0) !== 0),
+    )
+  )
     list.push(createHSLColorFilter(image.colorHSL));
   if (image.splitToning) list.push(createSplitToningFilter(image.splitToning));
-  if (image.shadowTint !== undefined && image.shadowTint !== 0) list.push(createShadowTintFilter(image.shadowTint));
-  if (image.colorGrading) list.push(createColorGradingFilter(image.colorGrading));
-  if (image.colorCalibration) list.push(createColorCalibrationFilter(image.colorCalibration));
+  if (image.shadowTint !== undefined && image.shadowTint !== 0)
+    list.push(createShadowTintFilter(image.shadowTint));
+  if (image.colorGrading)
+    list.push(createColorGradingFilter(image.colorGrading));
+  if (image.colorCalibration)
+    list.push(createColorCalibrationFilter(image.colorCalibration));
   if (image.dehaze !== 0) list.push(createDehazeFilter(image.dehaze));
   if (image.vignette !== 0) list.push(createVignetteFilter(image.vignette));
   if (image.grain !== 0) list.push(createGrainFilter(image.grain));
@@ -384,38 +456,59 @@ export function buildExportFilterList(image: CanvasImage): ((imageData: ImageDat
     const radius = Math.round(image.blur * 20);
     list.push((imageData: ImageData) => {
       const mock = { blurRadius: () => radius };
-      (Konva.Filters.Blur as (this: { blurRadius(): number }, id: ImageData) => void).call(mock, imageData);
+      (
+        Konva.Filters.Blur as (
+          this: { blurRadius(): number },
+          id: ImageData,
+        ) => void
+      ).call(mock, imageData);
     });
   }
-  if (image.filters?.includes('grayscale')) list.push((id: ImageData) => { (Konva.Filters.Grayscale as (id: ImageData) => void)(id); });
-  if (image.filters?.includes('sepia')) list.push((id: ImageData) => { (Konva.Filters.Sepia as (id: ImageData) => void)(id); });
-  if (image.filters?.includes('invert')) list.push((id: ImageData) => { (Konva.Filters.Invert as (id: ImageData) => void)(id); });
+  if (image.filters?.includes("grayscale"))
+    list.push((id: ImageData) => {
+      (Konva.Filters.Grayscale as (id: ImageData) => void)(id);
+    });
+  if (image.filters?.includes("sepia"))
+    list.push((id: ImageData) => {
+      (Konva.Filters.Sepia as (id: ImageData) => void)(id);
+    });
+  if (image.filters?.includes("invert"))
+    list.push((id: ImageData) => {
+      (Konva.Filters.Invert as (id: ImageData) => void)(id);
+    });
   return list;
 }
 
 // Export using the same filter pipeline as the canvas (WYSIWYG). Load image from URL, apply filters, return JPEG blob.
-export async function exportWithCanvasFilters(image: CanvasImage, imageUrl: string): Promise<Blob> {
+export async function exportWithCanvasFilters(
+  image: CanvasImage,
+  imageUrl: string,
+): Promise<Blob> {
   const img = await new Promise<HTMLImageElement>((resolve, reject) => {
     const el = new Image();
-    el.crossOrigin = 'anonymous';
+    el.crossOrigin = "anonymous";
     el.onload = () => resolve(el);
-    el.onerror = () => reject(new Error('Failed to load image'));
+    el.onerror = () => reject(new Error("Failed to load image"));
     el.src = imageUrl;
   });
   const w = img.naturalWidth || img.width;
   const h = img.naturalHeight || img.height;
-  const canvas = document.createElement('canvas');
+  const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Canvas 2D not available');
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas 2D not available");
   ctx.drawImage(img, 0, 0);
   const imageData = ctx.getImageData(0, 0, w, h);
   const filters = buildExportFilterList(image);
   for (const f of filters) f(imageData);
   ctx.putImageData(imageData, 0, 0);
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('toBlob failed'))), 'image/jpeg', 0.95);
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error("toBlob failed"))),
+      "image/jpeg",
+      0.95,
+    );
   });
 }
 
@@ -424,14 +517,14 @@ export async function exportWithCanvasFilters(image: CanvasImage, imageUrl: stri
 export const createHSLColorFilter = (colorHSL: ColorHSL) => {
   // Color center hues (in degrees) - matches Lightroom's HSL panel
   const colorCenters: { name: keyof ColorHSL; center: number }[] = [
-    { name: 'red', center: 0 },
-    { name: 'orange', center: 30 },
-    { name: 'yellow', center: 60 },
-    { name: 'green', center: 120 },
-    { name: 'aqua', center: 180 },
-    { name: 'blue', center: 225 },
-    { name: 'purple', center: 270 },
-    { name: 'magenta', center: 315 },
+    { name: "red", center: 0 },
+    { name: "orange", center: 30 },
+    { name: "yellow", center: 60 },
+    { name: "green", center: 120 },
+    { name: "aqua", center: 180 },
+    { name: "blue", center: 225 },
+    { name: "purple", center: 270 },
+    { name: "magenta", center: 315 },
   ];
 
   // Calculate weight for a color based on hue distance (smooth falloff)
@@ -491,8 +584,8 @@ export const createHSLColorFilter = (colorHSL: ColorHSL) => {
       const b = data[i + 2] / 255;
 
       // Convert RGB to HSL (optimized)
-      const max = r > g ? (r > b ? r : b) : (g > b ? g : b);
-      const min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+      const max = r > g ? (r > b ? r : b) : g > b ? g : b;
+      const min = r < g ? (r < b ? r : b) : g < b ? g : b;
       const l = (max + min) * 0.5;
 
       if (max === min) continue; // Skip grays
@@ -605,7 +698,10 @@ export const createSplitToningFilter = (splitToning: SplitToning) => {
       const isShadow = lum < balanceFactor;
 
       const hue = isShadow ? splitToning.shadowHue : splitToning.highlightHue;
-      const saturation = (isShadow ? splitToning.shadowSaturation : splitToning.highlightSaturation) / 100;
+      const saturation =
+        (isShadow
+          ? splitToning.shadowSaturation
+          : splitToning.highlightSaturation) / 100;
 
       if (saturation > 0) {
         // Convert hue to RGB
@@ -619,7 +715,10 @@ export const createSplitToningFilter = (splitToning: SplitToning) => {
           return p;
         };
 
-        const q = lum < 0.5 ? lum * (1 + saturation) : lum + saturation - lum * saturation;
+        const q =
+          lum < 0.5
+            ? lum * (1 + saturation)
+            : lum + saturation - lum * saturation;
         const p = 2 * lum - q;
 
         const toneR = hue2rgb(p, q, h + 1 / 3);
@@ -627,12 +726,21 @@ export const createSplitToningFilter = (splitToning: SplitToning) => {
         const toneB = hue2rgb(p, q, h - 1 / 3);
 
         // Blend with original based on saturation strength
-        const blend = isShadow ? (1 - lum) : lum; // Stronger effect in shadows or highlights
+        const blend = isShadow ? 1 - lum : lum; // Stronger effect in shadows or highlights
         const blendAmount = saturation * blend;
 
-        data[i] = Math.max(0, Math.min(255, (r * (1 - blendAmount) + toneR * blendAmount) * 255));
-        data[i + 1] = Math.max(0, Math.min(255, (g * (1 - blendAmount) + toneG * blendAmount) * 255));
-        data[i + 2] = Math.max(0, Math.min(255, (b * (1 - blendAmount) + toneB * blendAmount) * 255));
+        data[i] = Math.max(
+          0,
+          Math.min(255, (r * (1 - blendAmount) + toneR * blendAmount) * 255),
+        );
+        data[i + 1] = Math.max(
+          0,
+          Math.min(255, (g * (1 - blendAmount) + toneG * blendAmount) * 255),
+        );
+        data[i + 2] = Math.max(
+          0,
+          Math.min(255, (b * (1 - blendAmount) + toneB * blendAmount) * 255),
+        );
       }
     }
   };
@@ -711,16 +819,26 @@ export const createColorGradingFilter = (colorGrading: ColorGrading) => {
           return p;
         };
 
-        const q = finalLum < 0.5 ? finalLum * (1 + s) : finalLum + s - finalLum * s;
+        const q =
+          finalLum < 0.5 ? finalLum * (1 + s) : finalLum + s - finalLum * s;
         const p = 2 * finalLum - q;
 
         const toneR = hue2rgb(p, q, h + 1 / 3);
         const toneG = hue2rgb(p, q, h);
         const toneB = hue2rgb(p, q, h - 1 / 3);
 
-        data[i] = Math.max(0, Math.min(255, (r * (1 - s * blending) + toneR * s * blending) * 255));
-        data[i + 1] = Math.max(0, Math.min(255, (g * (1 - s * blending) + toneG * s * blending) * 255));
-        data[i + 2] = Math.max(0, Math.min(255, (b * (1 - s * blending) + toneB * s * blending) * 255));
+        data[i] = Math.max(
+          0,
+          Math.min(255, (r * (1 - s * blending) + toneR * s * blending) * 255),
+        );
+        data[i + 1] = Math.max(
+          0,
+          Math.min(255, (g * (1 - s * blending) + toneG * s * blending) * 255),
+        );
+        data[i + 2] = Math.max(
+          0,
+          Math.min(255, (b * (1 - s * blending) + toneB * s * blending) * 255),
+        );
       } else {
         // Just apply luminance changes
         const lumChange = finalLum - lum;
@@ -756,8 +874,14 @@ export const createColorGradingFilter = (colorGrading: ColorGrading) => {
         const toneB = hue2rgb(p, q, h - 1 / 3);
 
         data[i] = Math.max(0, Math.min(255, (r * (1 - s) + toneR * s) * 255));
-        data[i + 1] = Math.max(0, Math.min(255, (g * (1 - s) + toneG * s) * 255));
-        data[i + 2] = Math.max(0, Math.min(255, (b * (1 - s) + toneB * s) * 255));
+        data[i + 1] = Math.max(
+          0,
+          Math.min(255, (g * (1 - s) + toneG * s) * 255),
+        );
+        data[i + 2] = Math.max(
+          0,
+          Math.min(255, (b * (1 - s) + toneB * s) * 255),
+        );
       }
     }
   };
@@ -778,7 +902,8 @@ export const createColorCalibrationFilter = (colorCal: ColorCalibration) => {
       const min = Math.min(r, g, b);
       const delta = max - min;
 
-      if (delta > 0.01) { // Only apply to non-gray pixels
+      if (delta > 0.01) {
+        // Only apply to non-gray pixels
         // Calculate hue (0-360)
         let hue = 0;
         if (max === r) {
@@ -791,19 +916,29 @@ export const createColorCalibrationFilter = (colorCal: ColorCalibration) => {
         hue = (hue * 60 + 360) % 360;
 
         // Determine which primary this pixel belongs to and blend weights
-        const redWeight = hue < 60 || hue > 300 ? 1 - Math.abs((hue < 60 ? hue : hue - 360) - 0) / 60 : 0;
-        const greenWeight = hue >= 60 && hue < 180 ? 1 - Math.abs(hue - 120) / 60 : 0;
-        const blueWeight = hue >= 180 && hue < 300 ? 1 - Math.abs(hue - 240) / 60 : 0;
+        const redWeight =
+          hue < 60 || hue > 300
+            ? 1 - Math.abs((hue < 60 ? hue : hue - 360) - 0) / 60
+            : 0;
+        const greenWeight =
+          hue >= 60 && hue < 180 ? 1 - Math.abs(hue - 120) / 60 : 0;
+        const blueWeight =
+          hue >= 180 && hue < 300 ? 1 - Math.abs(hue - 240) / 60 : 0;
 
         // Apply hue shifts
-        const hueShift = (redWeight * colorCal.redHue +
-          greenWeight * colorCal.greenHue +
-          blueWeight * colorCal.blueHue) / 100 * 30; // Scale to reasonable range
+        const hueShift =
+          ((redWeight * colorCal.redHue +
+            greenWeight * colorCal.greenHue +
+            blueWeight * colorCal.blueHue) /
+            100) *
+          30; // Scale to reasonable range
 
         // Apply saturation adjustments
-        const satShift = (redWeight * colorCal.redSaturation +
-          greenWeight * colorCal.greenSaturation +
-          blueWeight * colorCal.blueSaturation) / 100;
+        const satShift =
+          (redWeight * colorCal.redSaturation +
+            greenWeight * colorCal.greenSaturation +
+            blueWeight * colorCal.blueSaturation) /
+          100;
 
         // Convert to HSL
         const l = (max + min) / 2;
@@ -818,13 +953,34 @@ export const createColorCalibrationFilter = (colorCal: ColorCalibration) => {
         const x = c * (1 - Math.abs(((newHue / 60) % 2) - 1));
         const m = l - c / 2;
 
-        let r1 = 0, g1 = 0, b1 = 0;
-        if (newHue < 60) { r1 = c; g1 = x; b1 = 0; }
-        else if (newHue < 120) { r1 = x; g1 = c; b1 = 0; }
-        else if (newHue < 180) { r1 = 0; g1 = c; b1 = x; }
-        else if (newHue < 240) { r1 = 0; g1 = x; b1 = c; }
-        else if (newHue < 300) { r1 = x; g1 = 0; b1 = c; }
-        else { r1 = c; g1 = 0; b1 = x; }
+        let r1 = 0,
+          g1 = 0,
+          b1 = 0;
+        if (newHue < 60) {
+          r1 = c;
+          g1 = x;
+          b1 = 0;
+        } else if (newHue < 120) {
+          r1 = x;
+          g1 = c;
+          b1 = 0;
+        } else if (newHue < 180) {
+          r1 = 0;
+          g1 = c;
+          b1 = x;
+        } else if (newHue < 240) {
+          r1 = 0;
+          g1 = x;
+          b1 = c;
+        } else if (newHue < 300) {
+          r1 = x;
+          g1 = 0;
+          b1 = c;
+        } else {
+          r1 = c;
+          g1 = 0;
+          b1 = x;
+        }
 
         r = r1 + m;
         g = g1 + m;

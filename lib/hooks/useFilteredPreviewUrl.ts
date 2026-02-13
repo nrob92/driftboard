@@ -4,47 +4,57 @@
  * live edits in the preview (which otherwise would only show the raw source).
  */
 
-'use client';
+"use client";
 
-import { useEffect, useState, useMemo } from 'react';
-import useImage from 'use-image';
-import type { CanvasImage } from '@/lib/types';
-import { getPixiFilterEngine } from '@/lib/filters/pixiFilterEngine';
+import { useEffect, useState, useMemo } from "react";
+import useImage from "use-image";
+import type { CanvasImage } from "@/lib/types";
+import { getPixiFilterEngine } from "@/lib/filters/pixiFilterEngine";
 
 const MAX_PREVIEW_PX = 1024; // Cap preview size for performance on mobile
 
 export function useFilteredPreviewUrl(
   image: CanvasImage | null,
   bypassedTabs: Set<string>,
-  enabled: boolean
+  enabled: boolean,
 ): string | null {
-  const [imgElement, imgStatus] = useImage(image?.src ?? '', 'anonymous');
+  const [imgElement, imgStatus] = useImage(image?.src ?? "", "anonymous");
   const [dataUrl, setDataUrl] = useState<string | null>(null);
 
   const filterSignature = useMemo(() => {
-    if (!image) return '';
+    if (!image) return "";
     return JSON.stringify({
-      exp: image.exposure, con: image.contrast, hi: image.highlights, sh: image.shadows,
-      wh: image.whites, bl: image.blacks, br: image.brightness, cl: image.clarity,
-      temp: image.temperature, vib: image.vibrance, sat: image.saturation, hue: image.hue,
-      dh: image.dehaze, vig: image.vignette, gr: image.grain, blur: image.blur,
-      curv: image.curves, hsl: image.colorHSL, st: image.splitToning,
-      cg: image.colorGrading, cc: image.colorCalibration, stint: image.shadowTint,
-      filt: image.filters, bypass: Array.from(bypassedTabs).sort().join(','),
+      exp: image.exposure,
+      con: image.contrast,
+      hi: image.highlights,
+      sh: image.shadows,
+      wh: image.whites,
+      bl: image.blacks,
+      br: image.brightness,
+      cl: image.clarity,
+      temp: image.temperature,
+      vib: image.vibrance,
+      sat: image.saturation,
+      hue: image.hue,
+      dh: image.dehaze,
+      vig: image.vignette,
+      gr: image.grain,
+      blur: image.blur,
+      curv: image.curves,
+      hsl: image.colorHSL,
+      st: image.splitToning,
+      cg: image.colorGrading,
+      cc: image.colorCalibration,
+      stint: image.shadowTint,
+      filt: image.filters,
+      bypass: Array.from(bypassedTabs).sort().join(","),
     });
-  }, [
-    image?.exposure, image?.contrast, image?.highlights, image?.shadows,
-    image?.whites, image?.blacks, image?.brightness, image?.clarity,
-    image?.temperature, image?.vibrance, image?.saturation, image?.hue,
-    image?.dehaze, image?.vignette, image?.grain, image?.blur,
-    image?.curves, image?.colorHSL, image?.splitToning,
-    image?.colorGrading, image?.colorCalibration, image?.shadowTint,
-    image?.filters, bypassedTabs,
-  ]);
+  }, [image, bypassedTabs]);
 
   useEffect(() => {
-    if (!enabled || !image || !imgElement || imgStatus !== 'loaded') {
-      if (!enabled || !image) setDataUrl(null);
+    // When disabled or no image, the return value will be null
+    // We don't need to clear dataUrl - just let the effect run when conditions are met
+    if (!enabled || !image || !imgElement || imgStatus !== "loaded") {
       return;
     }
 
@@ -59,31 +69,38 @@ export function useFilteredPreviewUrl(
       renderH = Math.round(h * scale);
     }
 
+    let cancelled = false;
     const engine = getPixiFilterEngine();
     engine
       .renderImage(imgElement, image, bypassedTabs, renderW, renderH)
       .then((canvas) => {
-        if (!canvas) return;
-        setDataUrl(canvas.toDataURL('image/jpeg', 0.92));
+        if (cancelled) return;
+        // This setState is in an async callback, which is allowed
+        if (canvas) {
+          setDataUrl(canvas.toDataURL("image/jpeg", 0.92));
+        }
       })
       .catch((e) => {
-        console.warn('[useFilteredPreviewUrl] Render failed:', e);
-        setDataUrl(null);
+        if (cancelled) return;
+        console.warn("[useFilteredPreviewUrl] Render failed:", e);
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, [enabled, image, imgElement, imgStatus, filterSignature, bypassedTabs]);
 
-  // When disabled, clear
-  useEffect(() => {
-    if (!enabled) {
-      setDataUrl(null);
-    }
-  }, [enabled]);
-
-  // Return data URL when we have it, otherwise fall back to original src while loading
-  if (dataUrl) return dataUrl;
-  if (enabled && image && imgStatus === 'loaded') {
-    // Still rendering - show original as fallback so user sees something
-    return image.src;
+  // Derive the return value based on inputs and state
+  // When disabled or no image, always return null
+  if (!enabled || !image) {
+    return null;
   }
-  return enabled && image ? image.src : null;
+
+  // Return the data URL if we have it
+  if (dataUrl) {
+    return dataUrl;
+  }
+
+  // Still loading or rendering - show original as fallback
+  return image.src;
 }

@@ -9,9 +9,9 @@
  *   const blob = await getCachedImage(storagePath, () => fetchSignedUrl(storagePath));
  */
 
-const DB_NAME = 'driftboard-image-cache';
+const DB_NAME = "driftboard-image-cache";
 const DB_VERSION = 1;
-const STORE_NAME = 'images';
+const STORE_NAME = "images";
 const MAX_CACHE_SIZE = 500 * 1024 * 1024; // 500MB
 
 interface CacheEntry {
@@ -32,14 +32,16 @@ function openDB(): Promise<IDBDatabase> {
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
-        const store = db.createObjectStore(STORE_NAME, { keyPath: 'storagePath' });
-        store.createIndex('lastAccessed', 'lastAccessed', { unique: false });
+        const store = db.createObjectStore(STORE_NAME, {
+          keyPath: "storagePath",
+        });
+        store.createIndex("lastAccessed", "lastAccessed", { unique: false });
       }
     };
 
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => {
-      console.warn('IndexedDB open failed:', request.error);
+      console.warn("IndexedDB open failed:", request.error);
       reject(request.error);
     };
   });
@@ -50,7 +52,7 @@ function openDB(): Promise<IDBDatabase> {
 async function getEntry(storagePath: string): Promise<CacheEntry | undefined> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
+    const tx = db.transaction(STORE_NAME, "readonly");
     const store = tx.objectStore(STORE_NAME);
     const request = store.get(storagePath);
     request.onsuccess = () => resolve(request.result as CacheEntry | undefined);
@@ -61,7 +63,7 @@ async function getEntry(storagePath: string): Promise<CacheEntry | undefined> {
 async function putEntry(entry: CacheEntry): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const tx = db.transaction(STORE_NAME, "readwrite");
     const store = tx.objectStore(STORE_NAME);
     store.put(entry);
     tx.oncomplete = () => resolve();
@@ -72,7 +74,7 @@ async function putEntry(entry: CacheEntry): Promise<void> {
 async function touchEntry(storagePath: string): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const tx = db.transaction(STORE_NAME, "readwrite");
     const store = tx.objectStore(STORE_NAME);
     const getReq = store.get(storagePath);
     getReq.onsuccess = () => {
@@ -92,9 +94,9 @@ async function evictLRU(): Promise<void> {
 
   // Get all entries sorted by lastAccessed (ascending = oldest first)
   const entries: CacheEntry[] = await new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
+    const tx = db.transaction(STORE_NAME, "readonly");
     const store = tx.objectStore(STORE_NAME);
-    const index = store.index('lastAccessed');
+    const index = store.index("lastAccessed");
     const request = index.getAll();
     request.onsuccess = () => resolve(request.result as CacheEntry[]);
     request.onerror = () => reject(request.error);
@@ -114,7 +116,7 @@ async function evictLRU(): Promise<void> {
 
   if (toDelete.length > 0) {
     await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const tx = db.transaction(STORE_NAME, "readwrite");
       const store = tx.objectStore(STORE_NAME);
       for (const key of toDelete) {
         store.delete(key);
@@ -134,7 +136,7 @@ async function evictLRU(): Promise<void> {
  */
 export async function getCachedImage(
   storagePath: string,
-  fetcher: () => Promise<Blob>
+  fetcher: () => Promise<Blob>,
 ): Promise<Blob> {
   try {
     // Check cache first
@@ -176,7 +178,7 @@ export async function clearImageCache(): Promise<void> {
   try {
     const db = await openDB();
     await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const tx = db.transaction(STORE_NAME, "readwrite");
       const store = tx.objectStore(STORE_NAME);
       store.clear();
       tx.oncomplete = () => resolve();
@@ -194,7 +196,7 @@ export async function getCacheSize(): Promise<number> {
   try {
     const db = await openDB();
     const entries: CacheEntry[] = await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readonly');
+      const tx = db.transaction(STORE_NAME, "readonly");
       const store = tx.objectStore(STORE_NAME);
       const request = store.getAll();
       request.onsuccess = () => resolve(request.result as CacheEntry[]);

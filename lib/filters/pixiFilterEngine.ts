@@ -17,9 +17,9 @@ import {
   GlProgram,
   ColorMatrixFilter,
   BlurFilter,
-} from 'pixi.js';
-import type { CanvasImage, ChannelCurves, ColorHSL, SplitToning, ColorGrading, ColorCalibration } from '@/lib/types';
-import { buildLUT } from '@/lib/filters/clientFilters';
+} from "pixi.js";
+import type { CanvasImage, ChannelCurves, ColorHSL } from "@/lib/types";
+import { buildLUT } from "@/lib/filters/clientFilters";
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -533,14 +533,14 @@ function buildCurvesLutData(curves: ChannelCurves): Uint8ClampedArray {
 /** Build HSL color LUT data (360x1 RGBA) for GPU texture */
 function buildHSLLutData(colorHSL: ColorHSL): Uint8ClampedArray {
   const colorCenters: { name: keyof ColorHSL; center: number }[] = [
-    { name: 'red', center: 0 },
-    { name: 'orange', center: 30 },
-    { name: 'yellow', center: 60 },
-    { name: 'green', center: 120 },
-    { name: 'aqua', center: 180 },
-    { name: 'blue', center: 225 },
-    { name: 'purple', center: 270 },
-    { name: 'magenta', center: 315 },
+    { name: "red", center: 0 },
+    { name: "orange", center: 30 },
+    { name: "yellow", center: 60 },
+    { name: "green", center: 120 },
+    { name: "aqua", center: 180 },
+    { name: "blue", center: 225 },
+    { name: "purple", center: 270 },
+    { name: "magenta", center: 315 },
   ];
 
   const getColorWeight = (hue360: number, centerHue: number): number => {
@@ -554,7 +554,10 @@ function buildHSLLutData(colorHSL: ColorHSL): Uint8ClampedArray {
   const data = new Uint8ClampedArray(360 * 4);
 
   for (let hue = 0; hue < 360; hue++) {
-    let totalHueAdj = 0, totalSatAdj = 0, totalLumAdj = 0, totalWeight = 0;
+    let totalHueAdj = 0,
+      totalSatAdj = 0,
+      totalLumAdj = 0,
+      totalWeight = 0;
 
     for (const { name, center } of colorCenters) {
       const weight = getColorWeight(hue, center);
@@ -567,7 +570,9 @@ function buildHSLLutData(colorHSL: ColorHSL): Uint8ClampedArray {
       totalWeight += weight;
     }
 
-    let hueAdj = 0, satAdj = 0, lumAdj = 0;
+    let hueAdj = 0,
+      satAdj = 0,
+      lumAdj = 0;
     if (totalWeight > 0) {
       hueAdj = totalHueAdj / totalWeight;
       satAdj = totalSatAdj / totalWeight;
@@ -593,26 +598,29 @@ function computeHSVMatrix(saturation: number, hue: number): Float32Array {
 
   // Column-major for GLSL mat3
   return new Float32Array([
-    0.299 + 0.701 * vsu + 0.167 * vsw,   // col0.x (rr)
-    0.299 - 0.299 * vsu - 0.328 * vsw,   // col0.y (gr)
-    0.299 - 0.3 * vsu + 1.25 * vsw,      // col0.z (br)
+    0.299 + 0.701 * vsu + 0.167 * vsw, // col0.x (rr)
+    0.299 - 0.299 * vsu - 0.328 * vsw, // col0.y (gr)
+    0.299 - 0.3 * vsu + 1.25 * vsw, // col0.z (br)
 
-    0.587 - 0.587 * vsu + 0.33 * vsw,    // col1.x (rg)
-    0.587 + 0.413 * vsu + 0.035 * vsw,   // col1.y (gg)
-    0.587 - 0.586 * vsu - 1.05 * vsw,    // col1.z (bg)
+    0.587 - 0.587 * vsu + 0.33 * vsw, // col1.x (rg)
+    0.587 + 0.413 * vsu + 0.035 * vsw, // col1.y (gg)
+    0.587 - 0.586 * vsu - 1.05 * vsw, // col1.z (bg)
 
-    0.114 - 0.114 * vsu - 0.497 * vsw,   // col2.x (rb)
-    0.114 - 0.114 * vsu + 0.293 * vsw,   // col2.y (gb)
-    0.114 + 0.886 * vsu - 0.2 * vsw,     // col2.z (bb)
+    0.114 - 0.114 * vsu - 0.497 * vsw, // col2.x (rb)
+    0.114 - 0.114 * vsu + 0.293 * vsw, // col2.y (gb)
+    0.114 + 0.886 * vsu - 0.2 * vsw, // col2.z (bb)
   ]);
 }
 
 /** Create a canvas-based texture from raw pixel data */
-function createLutTexture(data: Uint8ClampedArray, width: number): { canvas: HTMLCanvasElement; texture: Texture } {
-  const canvas = document.createElement('canvas');
+function createLutTexture(
+  data: Uint8ClampedArray,
+  width: number,
+): { canvas: HTMLCanvasElement; texture: Texture } {
+  const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = 1;
-  const ctx = canvas.getContext('2d')!;
+  const ctx = canvas.getContext("2d")!;
   const imageData = ctx.createImageData(width, 1);
   imageData.data.set(data);
   ctx.putImageData(imageData, 0, 0);
@@ -651,10 +659,10 @@ export class PixiFilterEngine {
   // LUT texture caching
   private curvesLutCanvas: HTMLCanvasElement | null = null;
   private curvesLutTexture: Texture | null = null;
-  private lastCurvesSig = '';
+  private lastCurvesSig = "";
   private hslLutCanvas: HTMLCanvasElement | null = null;
   private hslLutTexture: Texture | null = null;
-  private lastHSLSig = '';
+  private lastHSLSig = "";
 
   /** Initialize the PixiJS application and create filters. Returns false if GPU unavailable. */
   async init(width: number, height: number): Promise<boolean> {
@@ -673,7 +681,7 @@ export class PixiFilterEngine {
 
   private async _init(width: number, height: number): Promise<boolean> {
     try {
-      if (typeof window === 'undefined') return false;
+      if (typeof window === "undefined") return false;
 
       this.app = new Application();
       await this.app.init({
@@ -682,7 +690,7 @@ export class PixiFilterEngine {
         backgroundAlpha: 0,
         antialias: false,
         resolution: 1,
-        preference: 'webgl',
+        preference: "webgl",
         // Required so we can read back the WebGL canvas into our 2D output (drawImage)
         preserveDrawingBuffer: true,
       });
@@ -691,12 +699,12 @@ export class PixiFilterEngine {
       this.app.ticker.stop();
 
       // Create output canvas for Konva — match actual renderer canvas size (1:1 copy)
-      this.outputCanvas = document.createElement('canvas');
+      this.outputCanvas = document.createElement("canvas");
       const cw = this.app.canvas.width;
       const ch = this.app.canvas.height;
       this.outputCanvas.width = cw;
       this.outputCanvas.height = ch;
-      this.outputCtx = this.outputCanvas.getContext('2d');
+      this.outputCtx = this.outputCanvas.getContext("2d");
 
       // Create sprite (placeholder, will be updated with actual image)
       this.sprite = new Sprite();
@@ -710,7 +718,7 @@ export class PixiFilterEngine {
       this.initialized = true;
       return true;
     } catch (e) {
-      console.error('[PixiFilterEngine] Initialization failed:', e);
+      console.error("[PixiFilterEngine] Initialization failed:", e);
       this.initialized = false;
       return false;
     }
@@ -720,43 +728,55 @@ export class PixiFilterEngine {
   private createFilters(): void {
     // Light filter
     this.lightFilter = new Filter({
-      glProgram: new GlProgram({ vertex: DEFAULT_VERTEX, fragment: LIGHT_FRAG }),
+      glProgram: new GlProgram({
+        vertex: DEFAULT_VERTEX,
+        fragment: LIGHT_FRAG,
+      }),
       resources: {
         lightUniforms: {
-          uBrightness: { value: 0, type: 'f32' },
-          uExposure: { value: 0, type: 'f32' },
-          uHighlights: { value: 0, type: 'f32' },
-          uShadows: { value: 0, type: 'f32' },
-          uWhites: { value: 0, type: 'f32' },
-          uBlacks: { value: 0, type: 'f32' },
-          uClarity: { value: 0, type: 'f32' },
-          uContrast: { value: 0, type: 'f32' },
+          uBrightness: { value: 0, type: "f32" },
+          uExposure: { value: 0, type: "f32" },
+          uHighlights: { value: 0, type: "f32" },
+          uShadows: { value: 0, type: "f32" },
+          uWhites: { value: 0, type: "f32" },
+          uBlacks: { value: 0, type: "f32" },
+          uClarity: { value: 0, type: "f32" },
+          uContrast: { value: 0, type: "f32" },
         },
       },
     });
 
     // Basic color filter
     this.basicColorFilter = new Filter({
-      glProgram: new GlProgram({ vertex: DEFAULT_VERTEX, fragment: BASIC_COLOR_FRAG }),
+      glProgram: new GlProgram({
+        vertex: DEFAULT_VERTEX,
+        fragment: BASIC_COLOR_FRAG,
+      }),
       resources: {
         basicColorUniforms: {
-          uTempFactor: { value: 0, type: 'f32' },
-          uVibrance: { value: 0, type: 'f32' },
-          uHSVMatrix: { value: new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]), type: 'mat3x3<f32>' },
-          uHasHSV: { value: 0, type: 'f32' },
+          uTempFactor: { value: 0, type: "f32" },
+          uVibrance: { value: 0, type: "f32" },
+          uHSVMatrix: {
+            value: new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]),
+            type: "mat3x3<f32>",
+          },
+          uHasHSV: { value: 0, type: "f32" },
         },
       },
     });
 
     // Effects filter
     this.effectsFilter = new Filter({
-      glProgram: new GlProgram({ vertex: DEFAULT_VERTEX, fragment: EFFECTS_FRAG }),
+      glProgram: new GlProgram({
+        vertex: DEFAULT_VERTEX,
+        fragment: EFFECTS_FRAG,
+      }),
       resources: {
         effectsUniforms: {
-          uDehaze: { value: 0, type: 'f32' },
-          uVignette: { value: 0, type: 'f32' },
-          uGrain: { value: 0, type: 'f32' },
-          uGrainSeed: { value: 0, type: 'f32' },
+          uDehaze: { value: 0, type: "f32" },
+          uVignette: { value: 0, type: "f32" },
+          uGrain: { value: 0, type: "f32" },
+          uGrainSeed: { value: 0, type: "f32" },
         },
       },
     });
@@ -780,7 +800,7 @@ export class PixiFilterEngine {
 
     if (this.curvesLutCanvas) {
       // Update existing canvas
-      const ctx = this.curvesLutCanvas.getContext('2d')!;
+      const ctx = this.curvesLutCanvas.getContext("2d")!;
       const imageData = ctx.createImageData(256, 1);
       imageData.data.set(lutData);
       ctx.putImageData(imageData, 0, 0);
@@ -796,11 +816,14 @@ export class PixiFilterEngine {
 
     if (!this.curvesFilter) {
       this.curvesFilter = new Filter({
-        glProgram: new GlProgram({ vertex: DEFAULT_VERTEX, fragment: CURVES_FRAG }),
+        glProgram: new GlProgram({
+          vertex: DEFAULT_VERTEX,
+          fragment: CURVES_FRAG,
+        }),
         resources: {
           uCurvesLut: this.curvesLutTexture!.source,
           curvesUniforms: {
-            uCurvesStrength: { value: CURVES_STRENGTH, type: 'f32' },
+            uCurvesStrength: { value: CURVES_STRENGTH, type: "f32" },
           },
         },
       });
@@ -818,7 +841,7 @@ export class PixiFilterEngine {
     const lutData = buildHSLLutData(colorHSL);
 
     if (this.hslLutCanvas) {
-      const ctx = this.hslLutCanvas.getContext('2d')!;
+      const ctx = this.hslLutCanvas.getContext("2d")!;
       const imageData = ctx.createImageData(360, 1);
       imageData.data.set(lutData);
       ctx.putImageData(imageData, 0, 0);
@@ -838,44 +861,50 @@ export class PixiFilterEngine {
 
     // Create with a placeholder HSL LUT (1x1 mid-gray)
     if (!this.hslLutTexture) {
-      const result = createLutTexture(new Uint8ClampedArray([128, 128, 128, 255]), 1);
+      const result = createLutTexture(
+        new Uint8ClampedArray([128, 128, 128, 255]),
+        1,
+      );
       this.hslLutCanvas = result.canvas;
       this.hslLutTexture = result.texture;
     }
 
     this.advancedColorFilter = new Filter({
-      glProgram: new GlProgram({ vertex: DEFAULT_VERTEX, fragment: ADVANCED_COLOR_FRAG }),
+      glProgram: new GlProgram({
+        vertex: DEFAULT_VERTEX,
+        fragment: ADVANCED_COLOR_FRAG,
+      }),
       resources: {
         uHSLLut: this.hslLutTexture!.source,
         advColorUniforms: {
-          uHasHSL: { value: 0, type: 'f32' },
-          uHasSplitToning: { value: 0, type: 'f32' },
-          uShadowTint: { value: 0, type: 'f32' },
-          uHasGrading: { value: 0, type: 'f32' },
-          uHasCalibration: { value: 0, type: 'f32' },
+          uHasHSL: { value: 0, type: "f32" },
+          uHasSplitToning: { value: 0, type: "f32" },
+          uShadowTint: { value: 0, type: "f32" },
+          uHasGrading: { value: 0, type: "f32" },
+          uHasCalibration: { value: 0, type: "f32" },
           // Split toning
-          uSplitShadowHue: { value: 0, type: 'f32' },
-          uSplitShadowSat: { value: 0, type: 'f32' },
-          uSplitHighlightHue: { value: 0, type: 'f32' },
-          uSplitHighlightSat: { value: 0, type: 'f32' },
-          uSplitBalance: { value: 0, type: 'f32' },
+          uSplitShadowHue: { value: 0, type: "f32" },
+          uSplitShadowSat: { value: 0, type: "f32" },
+          uSplitHighlightHue: { value: 0, type: "f32" },
+          uSplitHighlightSat: { value: 0, type: "f32" },
+          uSplitBalance: { value: 0, type: "f32" },
           // Color grading
-          uGradeShadowLum: { value: 0, type: 'f32' },
-          uGradeMidtoneLum: { value: 0, type: 'f32' },
-          uGradeHighlightLum: { value: 0, type: 'f32' },
-          uGradeMidtoneHue: { value: 0, type: 'f32' },
-          uGradeMidtoneSat: { value: 0, type: 'f32' },
-          uGradeGlobalHue: { value: 0, type: 'f32' },
-          uGradeGlobalSat: { value: 0, type: 'f32' },
-          uGradeGlobalLum: { value: 0, type: 'f32' },
-          uGradeBlending: { value: 0, type: 'f32' },
+          uGradeShadowLum: { value: 0, type: "f32" },
+          uGradeMidtoneLum: { value: 0, type: "f32" },
+          uGradeHighlightLum: { value: 0, type: "f32" },
+          uGradeMidtoneHue: { value: 0, type: "f32" },
+          uGradeMidtoneSat: { value: 0, type: "f32" },
+          uGradeGlobalHue: { value: 0, type: "f32" },
+          uGradeGlobalSat: { value: 0, type: "f32" },
+          uGradeGlobalLum: { value: 0, type: "f32" },
+          uGradeBlending: { value: 0, type: "f32" },
           // Color calibration
-          uCalRedHue: { value: 0, type: 'f32' },
-          uCalRedSat: { value: 0, type: 'f32' },
-          uCalGreenHue: { value: 0, type: 'f32' },
-          uCalGreenSat: { value: 0, type: 'f32' },
-          uCalBlueHue: { value: 0, type: 'f32' },
-          uCalBlueSat: { value: 0, type: 'f32' },
+          uCalRedHue: { value: 0, type: "f32" },
+          uCalRedSat: { value: 0, type: "f32" },
+          uCalGreenHue: { value: 0, type: "f32" },
+          uCalGreenSat: { value: 0, type: "f32" },
+          uCalBlueHue: { value: 0, type: "f32" },
+          uCalBlueSat: { value: 0, type: "f32" },
         },
       },
     });
@@ -924,7 +953,9 @@ export class PixiFilterEngine {
     // Acquire render lock — wait for any in-progress render to finish
     let releaseLock: () => void;
     const prevLock = this.renderLock;
-    this.renderLock = new Promise<void>((resolve) => { releaseLock = resolve; });
+    this.renderLock = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
     await prevLock;
 
     try {
@@ -938,10 +969,10 @@ export class PixiFilterEngine {
       if (!canvas) return null;
 
       // Clone so each image owns its own canvas
-      const cloned = document.createElement('canvas');
+      const cloned = document.createElement("canvas");
       cloned.width = canvas.width;
       cloned.height = canvas.height;
-      const ctx = cloned.getContext('2d');
+      const ctx = cloned.getContext("2d");
       if (!ctx) return null;
       ctx.drawImage(canvas, 0, 0);
       return cloned;
@@ -957,10 +988,14 @@ export class PixiFilterEngine {
     displayWidth: number,
     displayHeight: number,
   ): HTMLCanvasElement | null {
-    if (!this.app || !this.sprite || !this.outputCanvas || !this.outputCtx) return null;
+    if (!this.app || !this.sprite || !this.outputCanvas || !this.outputCtx)
+      return null;
 
     // Resize if needed
-    if (displayWidth !== this.currentWidth || displayHeight !== this.currentHeight) {
+    if (
+      displayWidth !== this.currentWidth ||
+      displayHeight !== this.currentHeight
+    ) {
       this.resize(displayWidth, displayHeight);
     }
 
@@ -968,10 +1003,10 @@ export class PixiFilterEngine {
     this.sprite.width = displayWidth;
     this.sprite.height = displayHeight;
 
-    const bypassCurves = bypassedTabs.has('curves');
-    const bypassLight = bypassedTabs.has('light');
-    const bypassColor = bypassedTabs.has('color');
-    const bypassEffects = bypassedTabs.has('effects');
+    const bypassCurves = bypassedTabs.has("curves");
+    const bypassLight = bypassedTabs.has("light");
+    const bypassColor = bypassedTabs.has("color");
+    const bypassEffects = bypassedTabs.has("effects");
 
     // Build filter array (only include active filters)
     const filters: Filter[] = [];
@@ -1029,15 +1064,28 @@ export class PixiFilterEngine {
     const sh = this.app.canvas.height;
     this.outputCtx.clearRect(0, 0, sw, sh);
     this.outputCtx.imageSmoothingEnabled = false;
-    this.outputCtx.drawImage(this.app.canvas, 0, 0, sw, sh, 0, 0, this.outputCanvas.width, this.outputCanvas.height);
+    this.outputCtx.drawImage(
+      this.app.canvas,
+      0,
+      0,
+      sw,
+      sh,
+      0,
+      0,
+      this.outputCanvas.width,
+      this.outputCanvas.height,
+    );
 
     return this.outputCanvas;
   }
 
   /** Export at full resolution using GPU filters (mutex-protected) */
-  async exportFiltered(image: CanvasImage, fullResImg: HTMLImageElement): Promise<Blob> {
+  async exportFiltered(
+    image: CanvasImage,
+    fullResImg: HTMLImageElement,
+  ): Promise<Blob> {
     if (!this.app || !this.sprite) {
-      throw new Error('PixiFilterEngine not initialized');
+      throw new Error("PixiFilterEngine not initialized");
     }
 
     const w = fullResImg.naturalWidth || fullResImg.width;
@@ -1046,7 +1094,9 @@ export class PixiFilterEngine {
     // Acquire render lock
     let releaseLock: () => void;
     const prevLock = this.renderLock;
-    this.renderLock = new Promise<void>((resolve) => { releaseLock = resolve; });
+    this.renderLock = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
     await prevLock;
 
     try {
@@ -1061,8 +1111,8 @@ export class PixiFilterEngine {
       // Get blob from output canvas
       const blob = await new Promise<Blob>((resolve, reject) => {
         this.outputCanvas!.toBlob(
-          (b) => (b ? resolve(b) : reject(new Error('toBlob failed'))),
-          'image/jpeg',
+          (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
+          "image/jpeg",
           0.95,
         );
       });
@@ -1076,7 +1126,9 @@ export class PixiFilterEngine {
   // ---- Uniform Update Methods ----
 
   private updateLightUniforms(image: CanvasImage): void {
-    const u = this.lightFilter!.resources.lightUniforms as { uniforms: Record<string, number> };
+    const u = this.lightFilter!.resources.lightUniforms as {
+      uniforms: Record<string, number>;
+    };
     u.uniforms.uBrightness = image.brightness;
     u.uniforms.uExposure = image.exposure;
     u.uniforms.uHighlights = image.highlights;
@@ -1088,7 +1140,9 @@ export class PixiFilterEngine {
   }
 
   private updateBasicColorUniforms(image: CanvasImage): void {
-    const u = this.basicColorFilter!.resources.basicColorUniforms as { uniforms: Record<string, number | Float32Array> };
+    const u = this.basicColorFilter!.resources.basicColorUniforms as {
+      uniforms: Record<string, number | Float32Array>;
+    };
     u.uniforms.uTempFactor = image.temperature * 30;
     u.uniforms.uVibrance = image.vibrance;
 
@@ -1101,7 +1155,8 @@ export class PixiFilterEngine {
   }
 
   private updateAdvancedColorUniforms(image: CanvasImage): void {
-    const u = this.advancedColorFilter!.resources.advColorUniforms as AdvancedColorUniforms;
+    const u = this.advancedColorFilter!.resources
+      .advColorUniforms as AdvancedColorUniforms;
 
     // HSL Color
     if (image.colorHSL && this.hasActiveHSL(image.colorHSL)) {
@@ -1159,7 +1214,9 @@ export class PixiFilterEngine {
   }
 
   private updateEffectsUniforms(image: CanvasImage): void {
-    const u = this.effectsFilter!.resources.effectsUniforms as { uniforms: Record<string, number> };
+    const u = this.effectsFilter!.resources.effectsUniforms as {
+      uniforms: Record<string, number>;
+    };
     u.uniforms.uDehaze = image.dehaze;
     u.uniforms.uVignette = image.vignette;
     u.uniforms.uGrain = image.grain;
@@ -1168,9 +1225,10 @@ export class PixiFilterEngine {
 
   private updateLegacyFilter(image: CanvasImage): void {
     this.legacyFilter!.reset();
-    if (image.filters.includes('grayscale')) this.legacyFilter!.greyscale(1, true);
-    if (image.filters.includes('sepia')) this.legacyFilter!.sepia(true);
-    if (image.filters.includes('invert')) this.legacyFilter!.negative(true);
+    if (image.filters.includes("grayscale"))
+      this.legacyFilter!.greyscale(1, true);
+    if (image.filters.includes("sepia")) this.legacyFilter!.sepia(true);
+    if (image.filters.includes("invert")) this.legacyFilter!.negative(true);
   }
 
   // ---- Active State Checks ----
@@ -1180,34 +1238,61 @@ export class PixiFilterEngine {
     const ch = (points: { x: number; y: number }[]) => {
       if (!points || points.length === 0) return false;
       if (points.length > 2) return true;
-      return points.some((p, i) => (i === 0 ? p.x !== 0 || p.y !== 0 : i === points.length - 1 ? p.x !== 255 || p.y !== 255 : true));
+      return points.some((p, i) =>
+        i === 0
+          ? p.x !== 0 || p.y !== 0
+          : i === points.length - 1
+            ? p.x !== 255 || p.y !== 255
+            : true,
+      );
     };
-    return ch(image.curves.rgb) || ch(image.curves.red) || ch(image.curves.green) || ch(image.curves.blue);
+    return (
+      ch(image.curves.rgb) ||
+      ch(image.curves.red) ||
+      ch(image.curves.green) ||
+      ch(image.curves.blue)
+    );
   }
 
   private isLightActive(image: CanvasImage): boolean {
-    return image.brightness !== 0 || image.exposure !== 0 ||
-           image.highlights !== 0 || image.shadows !== 0 ||
-           image.whites !== 0 || image.blacks !== 0 ||
-           image.clarity !== 0 || image.contrast !== 0;
+    return (
+      image.brightness !== 0 ||
+      image.exposure !== 0 ||
+      image.highlights !== 0 ||
+      image.shadows !== 0 ||
+      image.whites !== 0 ||
+      image.blacks !== 0 ||
+      image.clarity !== 0 ||
+      image.contrast !== 0
+    );
   }
 
   private isBasicColorActive(image: CanvasImage): boolean {
-    return image.temperature !== 0 || image.vibrance !== 0 ||
-           image.saturation !== 0 || image.hue !== 0;
+    return (
+      image.temperature !== 0 ||
+      image.vibrance !== 0 ||
+      image.saturation !== 0 ||
+      image.hue !== 0
+    );
   }
 
   private isAdvancedColorActive(image: CanvasImage): boolean {
-    return (image.colorHSL !== undefined && this.hasActiveHSL(image.colorHSL!)) ||
-           image.splitToning !== undefined ||
-           (image.shadowTint !== undefined && image.shadowTint !== 0) ||
-           image.colorGrading !== undefined ||
-           image.colorCalibration !== undefined;
+    return (
+      (image.colorHSL !== undefined && this.hasActiveHSL(image.colorHSL!)) ||
+      image.splitToning !== undefined ||
+      (image.shadowTint !== undefined && image.shadowTint !== 0) ||
+      image.colorGrading !== undefined ||
+      image.colorCalibration !== undefined
+    );
   }
 
   private hasActiveHSL(colorHSL: ColorHSL): boolean {
     return Object.values(colorHSL).some(
-      (adj) => adj && ((adj.hue ?? 0) !== 0 || (adj.saturation ?? 0) !== 0 || (adj.luminance ?? 0) !== 0)
+      (adj) =>
+        adj &&
+        ((adj.hue ?? 0) !== 0 ||
+          (adj.saturation ?? 0) !== 0 ||
+          (adj.luminance ?? 0) !== 0),
     );
   }
 
@@ -1216,16 +1301,25 @@ export class PixiFilterEngine {
   }
 
   private isLegacyActive(image: CanvasImage): boolean {
-    return image.filters?.includes('grayscale') ||
-           image.filters?.includes('sepia') ||
-           image.filters?.includes('invert') || false;
+    return (
+      image.filters?.includes("grayscale") ||
+      image.filters?.includes("sepia") ||
+      image.filters?.includes("invert") ||
+      false
+    );
   }
 
   /** Check if ANY filters are active for this image */
   hasActiveFilters(image: CanvasImage): boolean {
-    return this.isLightActive(image) || this.isBasicColorActive(image) ||
-           this.isAdvancedColorActive(image) || this.isEffectsActive(image) ||
-           this.isCurvesActive(image) || image.blur > 0 || this.isLegacyActive(image);
+    return (
+      this.isLightActive(image) ||
+      this.isBasicColorActive(image) ||
+      this.isAdvancedColorActive(image) ||
+      this.isEffectsActive(image) ||
+      this.isCurvesActive(image) ||
+      image.blur > 0 ||
+      this.isLegacyActive(image)
+    );
   }
 
   /** Cleanup */

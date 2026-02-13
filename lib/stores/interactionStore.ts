@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { create } from "zustand";
 
 interface InteractionState {
   isDragging: boolean;
@@ -34,7 +34,7 @@ interface InteractionState {
   setSelectedFolderId: (v: string | null) => void;
   setLastTouchDistance: (v: number | null) => void;
   setLastTouchCenter: (v: { x: number; y: number } | null) => void;
-  setDragGhostPosition: (v: InteractionState['dragGhostPosition']) => void;
+  setDragGhostPosition: (v: InteractionState["dragGhostPosition"]) => void;
 }
 
 export const useInteractionStore = create<InteractionState>()((set) => ({
@@ -57,7 +57,8 @@ export const useInteractionStore = create<InteractionState>()((set) => ({
   setSliderSettledWhileDragging: (v) => set({ sliderSettledWhileDragging: v }),
   setIsSpacePressed: (v) => set({ isSpacePressed: v }),
   setDragHoveredFolderId: (v) => set({ dragHoveredFolderId: v }),
-  setDragSourceFolderBorderHovered: (v) => set({ dragSourceFolderBorderHovered: v }),
+  setDragSourceFolderBorderHovered: (v) =>
+    set({ dragSourceFolderBorderHovered: v }),
   setDragBorderBlink: (v) => set({ dragBorderBlink: v }),
   setHoveredFolderBorder: (v) => set({ hoveredFolderBorder: v }),
   setResizingFolderId: (v) => set({ resizingFolderId: v }),
@@ -69,6 +70,9 @@ export const useInteractionStore = create<InteractionState>()((set) => ({
 
 // Selectors
 export const selectIsDragging = (state: InteractionState) => state.isDragging;
-export const selectIsAdjustingSliders = (state: InteractionState) => state.isAdjustingSliders;
-export const selectIsSpacePressed = (state: InteractionState) => state.isSpacePressed;
-export const selectSelectedFolderId = (state: InteractionState) => state.selectedFolderId;
+export const selectIsAdjustingSliders = (state: InteractionState) =>
+  state.isAdjustingSliders;
+export const selectIsSpacePressed = (state: InteractionState) =>
+  state.isSpacePressed;
+export const selectSelectedFolderId = (state: InteractionState) =>
+  state.selectedFolderId;

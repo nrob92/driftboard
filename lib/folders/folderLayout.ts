@@ -1,31 +1,36 @@
-import type { CanvasImage, PhotoFolder } from '@/lib/types';
+import type { CanvasImage, PhotoFolder } from "@/lib/types";
 
 // ── Social Layout Constants ──────────────────────────────────────────────
 export const SOCIAL_LAYOUT_ASPECT = { w: 4, h: 5 };
 export const SOCIAL_LAYOUT_PAGE_WIDTH = 400; // canvas units per page
 export const SOCIAL_LAYOUT_MAX_PAGES = 10;
-export const DEFAULT_SOCIAL_LAYOUT_BG = '#1a1a1a';
+export const DEFAULT_SOCIAL_LAYOUT_BG = "#1a1a1a";
 
 export function isSocialLayout(folder: PhotoFolder): boolean {
-  return folder.type === 'social_layout';
+  return folder.type === "social_layout";
 }
 
-export function getSocialLayoutDimensions(): { pageWidth: number; pageHeight: number; contentHeight: number } {
+export function getSocialLayoutDimensions(): {
+  pageWidth: number;
+  pageHeight: number;
+  contentHeight: number;
+} {
   const pageWidth = SOCIAL_LAYOUT_PAGE_WIDTH;
-  const pageHeight = (pageWidth * SOCIAL_LAYOUT_ASPECT.h) / SOCIAL_LAYOUT_ASPECT.w;
+  const pageHeight =
+    (pageWidth * SOCIAL_LAYOUT_ASPECT.h) / SOCIAL_LAYOUT_ASPECT.w;
   return { pageWidth, pageHeight, contentHeight: pageHeight };
 }
 
 // ── Folder Colors ────────────────────────────────────────────────────────
 export const FOLDER_COLORS = [
-  '#3ECF8E', // Green
-  '#74c0fc', // Blue
-  '#ff9f43', // Orange
-  '#ff6b6b', // Red
-  '#a78bfa', // Purple
-  '#f472b6', // Pink
-  '#fbbf24', // Yellow
-  '#34d399', // Teal
+  "#3ECF8E", // Green
+  "#74c0fc", // Blue
+  "#ff9f43", // Orange
+  "#ff6b6b", // Red
+  "#a78bfa", // Purple
+  "#f472b6", // Pink
+  "#fbbf24", // Yellow
+  "#34d399", // Teal
 ];
 
 export function hexToRgba(hex: string, a: number): string {
@@ -38,10 +43,10 @@ export function hexToRgba(hex: string, a: number): string {
 // ── Grid Configuration ───────────────────────────────────────────────────
 // Uniform grid: all images scale to same height, 12px gap everywhere
 export const GRID_CONFIG = {
-  imageMaxSize: 360,   // Max width for images
+  imageMaxSize: 360, // Max width for images
   imageMaxHeight: 240, // Uniform row height (3:2 landscape at 360w)
   imageGap: 12,
-  folderPadding: 12,   // Same as imageGap for uniform spacing
+  folderPadding: 12, // Same as imageGap for uniform spacing
   // Default width so 4 columns fit (folderPadding*2 + 4*(imageMaxSize+imageGap) - imageGap)
   defaultFolderWidth: 12 * 2 + 4 * (360 + 12) - 12,
   minFolderWidth: 400,
@@ -57,7 +62,9 @@ export const LAYOUT_IMPORT_MAX_HEIGHT = 450; // Import max (original); display c
 
 // Get display size for an image scaled to uniform row height
 // All images display at imageMaxHeight tall; width scales proportionally, capped to imageMaxSize
-export const getImageDisplaySize = (img: CanvasImage): { w: number; h: number } => {
+export const getImageDisplaySize = (
+  img: CanvasImage,
+): { w: number; h: number } => {
   const { imageMaxSize, imageMaxHeight } = GRID_CONFIG;
   const origW = img.width * img.scaleX;
   const origH = img.height * img.scaleY;
@@ -73,15 +80,15 @@ export const getImageDisplaySize = (img: CanvasImage): { w: number; h: number } 
 
 // Calculate columns based on folder width
 export const calculateColsFromWidth = (folderWidth: number): number => {
-  const availableWidth = folderWidth - (GRID_CONFIG.folderPadding * 2);
+  const availableWidth = folderWidth - GRID_CONFIG.folderPadding * 2;
   const cols = Math.floor((availableWidth + GRID_CONFIG.imageGap) / CELL_SIZE);
   return Math.max(1, cols);
 };
 
 // Determine layout mode based on folder width
-export const getFolderLayoutMode = (folderWidth: number): 'grid' | 'stack' => {
+export const getFolderLayoutMode = (folderWidth: number): "grid" | "stack" => {
   const cols = calculateColsFromWidth(folderWidth);
-  return cols === 1 ? 'stack' : 'grid';
+  return cols === 1 ? "stack" : "grid";
 };
 
 // Reflow images within a folder based on its width (uniform row height)
@@ -90,7 +97,7 @@ export const reflowImagesInFolder = (
   folderImages: CanvasImage[],
   folderX: number,
   folderY: number,
-  folderWidth: number
+  folderWidth: number,
 ): CanvasImage[] => {
   const layoutMode = getFolderLayoutMode(folderWidth);
   const { folderPadding, imageMaxSize, imageGap, imageMaxHeight } = GRID_CONFIG;
@@ -98,13 +105,17 @@ export const reflowImagesInFolder = (
   const contentStartX = folderX + folderPadding;
   const contentStartY = folderY + 30 + folderPadding;
 
-  if (layoutMode === 'stack') {
+  if (layoutMode === "stack") {
     return folderImages.map((img, index) => {
       const { w } = getImageDisplaySize(img);
-      const availableWidth = folderWidth - (2 * folderPadding);
+      const availableWidth = folderWidth - 2 * folderPadding;
       const cellOffsetX = (availableWidth - w) / 2;
       const yOffset = index * (imageMaxHeight + imageGap);
-      return { ...img, x: contentStartX + cellOffsetX, y: contentStartY + yOffset };
+      return {
+        ...img,
+        x: contentStartX + cellOffsetX,
+        y: contentStartY + yOffset,
+      };
     });
   }
 
@@ -127,7 +138,10 @@ export const reflowImagesInFolder = (
 // Calculate folder bounding box (including label)
 export const getFolderBounds = (folder: PhotoFolder, imageCount: number) => {
   if (isSocialLayout(folder)) {
-    const n = Math.max(1, Math.min(SOCIAL_LAYOUT_MAX_PAGES, folder.pageCount ?? 1));
+    const n = Math.max(
+      1,
+      Math.min(SOCIAL_LAYOUT_MAX_PAGES, folder.pageCount ?? 1),
+    );
     const { pageHeight } = getSocialLayoutDimensions();
     const width = n * SOCIAL_LAYOUT_PAGE_WIDTH;
     const height = 30 + pageHeight; // 30px label
@@ -144,12 +158,16 @@ export const getFolderBounds = (folder: PhotoFolder, imageCount: number) => {
   const layoutMode = getFolderLayoutMode(folder.width);
   let contentHeight;
 
-  if (layoutMode === 'stack') {
-    contentHeight = imageCount * CELL_HEIGHT - GRID_CONFIG.imageGap + (GRID_CONFIG.folderPadding * 2);
+  if (layoutMode === "stack") {
+    contentHeight =
+      imageCount * CELL_HEIGHT -
+      GRID_CONFIG.imageGap +
+      GRID_CONFIG.folderPadding * 2;
   } else {
     const cols = calculateColsFromWidth(folder.width);
     const rows = Math.ceil(imageCount / cols) || 1;
-    contentHeight = rows * CELL_HEIGHT - GRID_CONFIG.imageGap + (GRID_CONFIG.folderPadding * 2);
+    contentHeight =
+      rows * CELL_HEIGHT - GRID_CONFIG.imageGap + GRID_CONFIG.folderPadding * 2;
   }
 
   const calculatedHeight = 30 + Math.max(contentHeight, 100);
@@ -166,7 +184,10 @@ export const getFolderBounds = (folder: PhotoFolder, imageCount: number) => {
 };
 
 // Get folder border/content height (below label) for rendering
-export const getFolderBorderHeight = (folder: PhotoFolder, imageCount: number): number => {
+export const getFolderBorderHeight = (
+  folder: PhotoFolder,
+  imageCount: number,
+): number => {
   if (isSocialLayout(folder)) {
     const { pageHeight } = getSocialLayoutDimensions();
     return pageHeight;
@@ -179,12 +200,16 @@ export const getFolderBorderHeight = (folder: PhotoFolder, imageCount: number): 
   const layoutMode = getFolderLayoutMode(folder.width);
   let contentHeight;
 
-  if (layoutMode === 'stack') {
-    contentHeight = imageCount * CELL_HEIGHT - GRID_CONFIG.imageGap + (GRID_CONFIG.folderPadding * 2);
+  if (layoutMode === "stack") {
+    contentHeight =
+      imageCount * CELL_HEIGHT -
+      GRID_CONFIG.imageGap +
+      GRID_CONFIG.folderPadding * 2;
   } else {
     const cols = calculateColsFromWidth(folder.width);
     const rows = Math.ceil(imageCount / cols) || 1;
-    contentHeight = rows * CELL_HEIGHT - GRID_CONFIG.imageGap + (GRID_CONFIG.folderPadding * 2);
+    contentHeight =
+      rows * CELL_HEIGHT - GRID_CONFIG.imageGap + GRID_CONFIG.folderPadding * 2;
   }
 
   return Math.max(contentHeight, 100);
@@ -197,14 +222,38 @@ export function distanceToRectBorder(
   left: number,
   top: number,
   width: number,
-  height: number
+  height: number,
 ): number {
   const right = left + width;
   const bottom = top + height;
-  const distToLeft = py >= top && py <= bottom ? Math.abs(px - left) : Math.min(Math.hypot(px - left, py - top), Math.hypot(px - left, py - bottom));
-  const distToRight = py >= top && py <= bottom ? Math.abs(px - right) : Math.min(Math.hypot(px - right, py - top), Math.hypot(px - right, py - bottom));
-  const distToTop = px >= left && px <= right ? Math.abs(py - top) : Math.min(Math.hypot(px - left, py - top), Math.hypot(px - right, py - top));
-  const distToBottom = px >= left && px <= right ? Math.abs(py - bottom) : Math.min(Math.hypot(px - left, py - bottom), Math.hypot(px - right, py - bottom));
+  const distToLeft =
+    py >= top && py <= bottom
+      ? Math.abs(px - left)
+      : Math.min(
+          Math.hypot(px - left, py - top),
+          Math.hypot(px - left, py - bottom),
+        );
+  const distToRight =
+    py >= top && py <= bottom
+      ? Math.abs(px - right)
+      : Math.min(
+          Math.hypot(px - right, py - top),
+          Math.hypot(px - right, py - bottom),
+        );
+  const distToTop =
+    px >= left && px <= right
+      ? Math.abs(py - top)
+      : Math.min(
+          Math.hypot(px - left, py - top),
+          Math.hypot(px - right, py - top),
+        );
+  const distToBottom =
+    px >= left && px <= right
+      ? Math.abs(py - bottom)
+      : Math.min(
+          Math.hypot(px - left, py - bottom),
+          Math.hypot(px - right, py - bottom),
+        );
   return Math.min(distToLeft, distToRight, distToTop, distToBottom);
 }
 
@@ -223,7 +272,7 @@ export const getImageCellPositions = (
   folderImages: CanvasImage[],
   folderX: number,
   folderY: number,
-  currentWidth: number
+  currentWidth: number,
 ): ImageCellPosition[] => {
   const cols = calculateColsFromWidth(currentWidth);
   const contentStartX = folderX + GRID_CONFIG.folderPadding;
@@ -253,7 +302,7 @@ export interface MinimumSize {
 // Calculate minimum folder size to fit all images
 export const calculateMinimumFolderSize = (
   imageCount: number,
-  proposedWidth: number
+  proposedWidth: number,
 ): MinimumSize => {
   if (imageCount === 0) {
     return {
@@ -264,8 +313,11 @@ export const calculateMinimumFolderSize = (
 
   const layoutMode = getFolderLayoutMode(proposedWidth);
 
-  if (layoutMode === 'stack') {
-    const contentHeight = imageCount * CELL_HEIGHT - GRID_CONFIG.imageGap + (2 * GRID_CONFIG.folderPadding);
+  if (layoutMode === "stack") {
+    const contentHeight =
+      imageCount * CELL_HEIGHT -
+      GRID_CONFIG.imageGap +
+      2 * GRID_CONFIG.folderPadding;
     return {
       width: GRID_CONFIG.minFolderWidth,
       height: 30 + Math.max(contentHeight, 100),
@@ -274,7 +326,8 @@ export const calculateMinimumFolderSize = (
 
   const cols = calculateColsFromWidth(proposedWidth);
   const rows = Math.ceil(imageCount / cols) || 1;
-  const contentHeight = rows * CELL_HEIGHT - GRID_CONFIG.imageGap + (2 * GRID_CONFIG.folderPadding);
+  const contentHeight =
+    rows * CELL_HEIGHT - GRID_CONFIG.imageGap + 2 * GRID_CONFIG.folderPadding;
 
   return {
     width: proposedWidth,
@@ -298,7 +351,7 @@ export const smartRepackImages = (
   currentPositions: ImageCellPosition[],
   oldWidth: number,
   newWidth: number,
-  newHeight?: number
+  newHeight?: number,
 ): CellAssignment[] => {
   const newCols = calculateColsFromWidth(newWidth);
 
@@ -306,8 +359,12 @@ export const smartRepackImages = (
   let newMaxRows = Infinity;
   if (newHeight != null) {
     const contentHeight = newHeight - 30; // Subtract label height
-    const availableContentHeight = contentHeight - (2 * GRID_CONFIG.folderPadding);
-    newMaxRows = Math.max(1, Math.floor((availableContentHeight + GRID_CONFIG.imageGap) / CELL_HEIGHT));
+    const availableContentHeight =
+      contentHeight - 2 * GRID_CONFIG.folderPadding;
+    newMaxRows = Math.max(
+      1,
+      Math.floor((availableContentHeight + GRID_CONFIG.imageGap) / CELL_HEIGHT),
+    );
   }
 
   // Build a map of current cell assignments
@@ -335,7 +392,9 @@ export const smartRepackImages = (
   });
 
   // Build set of occupied cells (using "row,col" string keys)
-  const occupiedCells = new Set(keptImages.map(img => `${img.row},${img.col}`));
+  const occupiedCells = new Set(
+    keptImages.map((img) => `${img.row},${img.col}`),
+  );
 
   // Second pass: Find new positions for relocated images
   const relocatedImages: CellAssignment[] = [];
@@ -363,8 +422,11 @@ export const smartRepackImages = (
       const startCol = Math.min(originalPos.col, newCols - 1);
 
       // Spiral outward from starting position
-      outerLoop:
-      for (let radius = 0; radius < Math.max(newMaxRows, newCols) * 2; radius++) {
+      outerLoop: for (
+        let radius = 0;
+        radius < Math.max(newMaxRows, newCols) * 2;
+        radius++
+      ) {
         for (let dr = -radius; dr <= radius; dr++) {
           for (let dc = -radius; dc <= radius; dc++) {
             if (Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue;
@@ -372,7 +434,12 @@ export const smartRepackImages = (
             const checkRow = startRow + dr;
             const checkCol = startCol + dc;
 
-            if (checkRow >= 0 && checkRow < newMaxRows && checkCol >= 0 && checkCol < newCols) {
+            if (
+              checkRow >= 0 &&
+              checkRow < newMaxRows &&
+              checkCol >= 0 &&
+              checkCol < newCols
+            ) {
               const key = `${checkRow},${checkCol}`;
               if (!occupiedCells.has(key)) {
                 foundRow = checkRow;
@@ -401,7 +468,7 @@ export const positionImagesInCells = (
   cellAssignments: CellAssignment[],
   folderX: number,
   folderY: number,
-  folderWidth: number
+  folderWidth: number,
 ): CanvasImage[] => {
   const { folderPadding, imageMaxSize } = GRID_CONFIG;
   const layoutMode = getFolderLayoutMode(folderWidth);
@@ -418,11 +485,15 @@ export const positionImagesInCells = (
 
     const { w } = getImageDisplaySize(img);
 
-    if (layoutMode === 'stack') {
-      const availableWidth = folderWidth - (2 * folderPadding);
+    if (layoutMode === "stack") {
+      const availableWidth = folderWidth - 2 * folderPadding;
       const cellOffsetX = (availableWidth - w) / 2;
       const yOffset = assignment.row * CELL_HEIGHT;
-      return { ...img, x: contentStartX + cellOffsetX, y: contentStartY + yOffset };
+      return {
+        ...img,
+        x: contentStartX + cellOffsetX,
+        y: contentStartY + yOffset,
+      };
     }
 
     const cellOffsetX = (imageMaxSize - w) / 2;
@@ -439,9 +510,9 @@ export const positionImagesInCells = (
 /** Get folder images sorted by imageIds order (O(1) Map lookup per image) */
 export const getFolderImagesSorted = (
   allImages: CanvasImage[],
-  imageIds: string[]
+  imageIds: string[],
 ): CanvasImage[] => {
-  const imageMap = new Map(allImages.map(img => [img.id, img]));
+  const imageMap = new Map(allImages.map((img) => [img.id, img]));
   const result: CanvasImage[] = [];
   for (const id of imageIds) {
     const img = imageMap.get(id);
@@ -456,7 +527,7 @@ export const getFolderImagesSorted = (
 export const rectsOverlap = (
   a: { x: number; y: number; right: number; bottom: number },
   b: { x: number; y: number; right: number; bottom: number },
-  gap: number
+  gap: number,
 ): boolean => {
   return !(
     a.right + gap <= b.x ||
@@ -470,7 +541,7 @@ export const rectsOverlap = (
 export const resolveFolderOverlaps = (
   folders: PhotoFolder[],
   images: CanvasImage[],
-  changedFolderId?: string
+  changedFolderId?: string,
 ): PhotoFolder[] => {
   if (folders.length < 2) return folders;
 
@@ -486,12 +557,16 @@ export const resolveFolderOverlaps = (
 
     for (let i = 0; i < updated.length; i++) {
       const folderA = updated[i];
-      const imageCountA = images.filter((img) => folderA.imageIds.includes(img.id)).length;
+      const imageCountA = images.filter((img) =>
+        folderA.imageIds.includes(img.id),
+      ).length;
       const boundsA = getFolderBounds(folderA, imageCountA);
 
       for (let j = i + 1; j < updated.length; j++) {
         const folderB = updated[j];
-        const imageCountB = images.filter((img) => folderB.imageIds.includes(img.id)).length;
+        const imageCountB = images.filter((img) =>
+          folderB.imageIds.includes(img.id),
+        ).length;
         const boundsB = getFolderBounds(folderB, imageCountB);
 
         if (rectsOverlap(boundsA, boundsB, folderGap)) {

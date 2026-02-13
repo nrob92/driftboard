@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import type { CanvasImage } from '@/lib/types';
+import { useMemo } from "react";
+import type { CanvasImage } from "@/lib/types";
 
 /**
  * Viewport culling: Only render ImageNode components whose bounding boxes
@@ -21,23 +21,24 @@ export function useViewportCulling(
   stageScale: number,
   viewportWidth: number,
   viewportHeight: number,
-  padding = 200
+  padding = 200,
 ): Set<string> {
   return useMemo(() => {
     // Convert viewport bounds to canvas (world) coordinates
     // Stage position is the offset of the stage origin from the top-left of the screen
     // To get canvas coords: canvasX = (screenX - stagePosition.x) / stageScale
-    const worldLeft = (-stagePosition.x / stageScale) - padding;
-    const worldTop = (-stagePosition.y / stageScale) - padding;
-    const worldRight = ((viewportWidth - stagePosition.x) / stageScale) + padding;
-    const worldBottom = ((viewportHeight - stagePosition.y) / stageScale) + padding;
+    const worldLeft = -stagePosition.x / stageScale - padding;
+    const worldTop = -stagePosition.y / stageScale - padding;
+    const worldRight = (viewportWidth - stagePosition.x) / stageScale + padding;
+    const worldBottom =
+      (viewportHeight - stagePosition.y) / stageScale + padding;
 
     const visible = new Set<string>();
 
     for (const img of images) {
       // Image bounding box in canvas coordinates
-      const imgRight = img.x + (img.width * img.scaleX);
-      const imgBottom = img.y + (img.height * img.scaleY);
+      const imgRight = img.x + img.width * img.scaleX;
+      const imgBottom = img.y + img.height * img.scaleY;
 
       // AABB intersection test
       if (
@@ -51,5 +52,12 @@ export function useViewportCulling(
     }
 
     return visible;
-  }, [images, stagePosition, stageScale, viewportWidth, viewportHeight, padding]);
+  }, [
+    images,
+    stagePosition,
+    stageScale,
+    viewportWidth,
+    viewportHeight,
+    padding,
+  ]);
 }

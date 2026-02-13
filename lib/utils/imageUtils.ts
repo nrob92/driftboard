@@ -1,5 +1,5 @@
 // DNG support - runtime script loading to avoid bundler issues
-export const isDNG = (name: string) => name.toLowerCase().endsWith('.dng');
+export const isDNG = (name: string) => name.toLowerCase().endsWith(".dng");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let LibRawClass: any = null;
@@ -10,8 +10,8 @@ export async function loadLibRaw(): Promise<void> {
   if (librawLoading) return librawLoading;
 
   librawLoading = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.type = 'module';
+    const script = document.createElement("script");
+    script.type = "module";
     script.textContent = `
       import LibRaw from '/libraw/index.js';
       window.__LibRaw = LibRaw;
@@ -21,15 +21,15 @@ export async function loadLibRaw(): Promise<void> {
     const handler = () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       LibRawClass = (window as any).__LibRaw;
-      window.removeEventListener('libraw-loaded', handler);
+      window.removeEventListener("libraw-loaded", handler);
       resolve();
     };
 
-    window.addEventListener('libraw-loaded', handler);
+    window.addEventListener("libraw-loaded", handler);
     document.head.appendChild(script);
 
     // Timeout after 10 seconds
-    setTimeout(() => reject(new Error('LibRaw load timeout')), 10000);
+    setTimeout(() => reject(new Error("LibRaw load timeout")), 10000);
   });
 
   return librawLoading;
@@ -37,10 +37,13 @@ export async function loadLibRaw(): Promise<void> {
 
 // Thumbnail settings - must match server-side lib/utils/thumbnail.ts
 export const THUMB_MAX_DIM = 400;
-export const THUMB_QUALITY = 0.80;
+export const THUMB_QUALITY = 0.8;
 
 /** Create a thumbnail blob from a file or blob for low-egress grid display */
-export async function createThumbnailBlob(file: File | Blob, maxDim = THUMB_MAX_DIM): Promise<Blob> {
+export async function createThumbnailBlob(
+  file: File | Blob,
+  maxDim = THUMB_MAX_DIM,
+): Promise<Blob> {
   return new Promise((resolve, reject) => {
     const img = new window.Image();
     const url = URL.createObjectURL(file);
@@ -49,24 +52,31 @@ export async function createThumbnailBlob(file: File | Blob, maxDim = THUMB_MAX_
       const w = img.naturalWidth;
       const h = img.naturalHeight;
       if (w <= maxDim && h <= maxDim) {
-        file.arrayBuffer().then((buf) => resolve(new Blob([buf], { type: 'image/jpeg' }))).catch(reject);
+        file
+          .arrayBuffer()
+          .then((buf) => resolve(new Blob([buf], { type: "image/jpeg" })))
+          .catch(reject);
         return;
       }
       const scale = maxDim / Math.max(w, h);
       const tw = Math.round(w * scale);
       const th = Math.round(h * scale);
-      const canvas = document.createElement('canvas');
+      const canvas = document.createElement("canvas");
       canvas.width = tw;
       canvas.height = th;
-      const ctx = canvas.getContext('2d', { willReadFrequently: false })!;
+      const ctx = canvas.getContext("2d", { willReadFrequently: false })!;
       ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
+      ctx.imageSmoothingQuality = "high";
       ctx.drawImage(img, 0, 0, tw, th);
-      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('toBlob failed'))), 'image/jpeg', THUMB_QUALITY);
+      canvas.toBlob(
+        (blob) => (blob ? resolve(blob) : reject(new Error("toBlob failed"))),
+        "image/jpeg",
+        THUMB_QUALITY,
+      );
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
-      reject(new Error('Image load failed'));
+      reject(new Error("Image load failed"));
     };
     img.src = url;
   });
@@ -77,10 +87,13 @@ export async function createThumbnailBlob(file: File | Blob, maxDim = THUMB_MAX_
  * For 24MP+ images, resize to max 1500px for BLAZING FAST editing
  * Returns data URL of resized image or original if small enough
  */
-export async function resizeImageForEditing(imageSrc: string, maxDim = 1500): Promise<{ src: string; width: number; height: number }> {
+export async function resizeImageForEditing(
+  imageSrc: string,
+  maxDim = 1500,
+): Promise<{ src: string; width: number; height: number }> {
   return new Promise((resolve, reject) => {
     const img = new window.Image();
-    img.crossOrigin = 'anonymous';
+    img.crossOrigin = "anonymous";
     img.onload = () => {
       const w = img.naturalWidth;
       const h = img.naturalHeight;
@@ -96,38 +109,47 @@ export async function resizeImageForEditing(imageSrc: string, maxDim = 1500): Pr
       const newW = Math.round(w * scale);
       const newH = Math.round(h * scale);
 
-      const canvas = document.createElement('canvas');
+      const canvas = document.createElement("canvas");
       canvas.width = newW;
       canvas.height = newH;
-      const ctx = canvas.getContext('2d', { willReadFrequently: false })!;
+      const ctx = canvas.getContext("2d", { willReadFrequently: false })!;
       ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
+      ctx.imageSmoothingQuality = "high";
       ctx.drawImage(img, 0, 0, newW, newH);
 
-      const resizedSrc = canvas.toDataURL('image/jpeg', 0.92);
-      console.log(`Resized image from ${w}x${h} to ${newW}x${newH} for editing`);
+      const resizedSrc = canvas.toDataURL("image/jpeg", 0.92);
+      console.log(
+        `Resized image from ${w}x${h} to ${newW}x${newH} for editing`,
+      );
       resolve({ src: resizedSrc, width: newW, height: newH });
     };
-    img.onerror = () => reject(new Error('Image load failed'));
+    img.onerror = () => reject(new Error("Image load failed"));
     img.src = imageSrc;
   });
 }
 
 // Thumbnail version - must match server-side lib/utils/thumbnail.ts
-export const THUMB_VERSION = 'v2';
+export const THUMB_VERSION = "v2";
 
 /** Get thumb storage path from full path: user_id/filename.jpg -> user_id/thumbs/v2/filename.jpg */
 export function getThumbStoragePath(fullPath: string): string {
-  const lastSlash = fullPath.lastIndexOf('/');
+  const lastSlash = fullPath.lastIndexOf("/");
   if (lastSlash < 0) return `thumbs/${THUMB_VERSION}/${fullPath}`;
-  return fullPath.slice(0, lastSlash + 1) + `thumbs/${THUMB_VERSION}/` + fullPath.slice(lastSlash + 1);
+  return (
+    fullPath.slice(0, lastSlash + 1) +
+    `thumbs/${THUMB_VERSION}/` +
+    fullPath.slice(lastSlash + 1)
+  );
 }
 
 // Preview max dimension for DNG files (best preview: no downscale; use large cap so we keep full res)
 const DNG_PREVIEW_MAX_SIZE = 99999;
 
 // Decode DNG using runtime-loaded LibRaw (bypasses bundler)
-export const decodeDNG = async (buffer: ArrayBuffer, forPreview = true): Promise<{ dataUrl: string; width: number; height: number }> => {
+export const decodeDNG = async (
+  buffer: ArrayBuffer,
+  forPreview = true,
+): Promise<{ dataUrl: string; width: number; height: number }> => {
   await loadLibRaw();
 
   const raw = new LibRawClass();
@@ -152,34 +174,48 @@ export const decodeDNG = async (buffer: ArrayBuffer, forPreview = true): Promise
     rgba[i * 4 + 3] = 255;
   }
 
-  let canvas = document.createElement('canvas');
+  let canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
   ctx.putImageData(new ImageData(rgba, width, height), 0, 0);
 
   let finalWidth = width;
   let finalHeight = height;
 
-  if (forPreview && (width > DNG_PREVIEW_MAX_SIZE || height > DNG_PREVIEW_MAX_SIZE)) {
-    const scale = Math.min(DNG_PREVIEW_MAX_SIZE / width, DNG_PREVIEW_MAX_SIZE / height);
+  if (
+    forPreview &&
+    (width > DNG_PREVIEW_MAX_SIZE || height > DNG_PREVIEW_MAX_SIZE)
+  ) {
+    const scale = Math.min(
+      DNG_PREVIEW_MAX_SIZE / width,
+      DNG_PREVIEW_MAX_SIZE / height,
+    );
     finalWidth = Math.round(width * scale);
     finalHeight = Math.round(height * scale);
 
-    const resizedCanvas = document.createElement('canvas');
+    const resizedCanvas = document.createElement("canvas");
     resizedCanvas.width = finalWidth;
     resizedCanvas.height = finalHeight;
-    const resizedCtx = resizedCanvas.getContext('2d', { willReadFrequently: true })!;
+    const resizedCtx = resizedCanvas.getContext("2d", {
+      willReadFrequently: true,
+    })!;
     resizedCtx.imageSmoothingEnabled = true;
-    resizedCtx.imageSmoothingQuality = 'high';
+    resizedCtx.imageSmoothingQuality = "high";
     resizedCtx.drawImage(canvas, 0, 0, finalWidth, finalHeight);
     canvas = resizedCanvas;
   }
 
-  return { dataUrl: canvas.toDataURL('image/jpeg', 0.98), width: finalWidth, height: finalHeight };
+  return {
+    dataUrl: canvas.toDataURL("image/jpeg", 0.98),
+    width: finalWidth,
+    height: finalHeight,
+  };
 };
 
-export const decodeDNGFromUrl = async (url: string): Promise<{ dataUrl: string; width: number; height: number }> => {
+export const decodeDNGFromUrl = async (
+  url: string,
+): Promise<{ dataUrl: string; width: number; height: number }> => {
   const response = await fetch(url);
   const buffer = await response.arrayBuffer();
   return decodeDNG(buffer);

@@ -1,10 +1,15 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-import { isRawPath, getThumbPath, generateThumbnail } from '@/lib/utils/thumbnail';
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
+import {
+  isRawPath,
+  getThumbPath,
+  generateThumbnail,
+} from "@/lib/utils/thumbnail";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
 );
 
 /**
@@ -21,16 +26,26 @@ export async function POST(request: NextRequest) {
     const { bucket, path } = await request.json();
 
     if (!bucket || !path) {
-      return NextResponse.json({ error: 'Missing bucket or path' }, { status: 400 });
+      return NextResponse.json(
+        { error: "Missing bucket or path" },
+        { status: 400 },
+      );
     }
-    if (bucket !== 'photos' && bucket !== 'originals' && bucket !== 'collab-photos') {
-      return NextResponse.json({ error: 'Invalid bucket' }, { status: 400 });
+    if (
+      bucket !== "photos" &&
+      bucket !== "originals" &&
+      bucket !== "collab-photos"
+    ) {
+      return NextResponse.json({ error: "Invalid bucket" }, { status: 400 });
     }
 
     // DNG/RAW files can't be resized with Sharp — the client should use the
     // preview JPG in the photos bucket instead (uploaded during DNG upload flow)
     if (isRawPath(path)) {
-      return NextResponse.json({ error: 'RAW files not supported for thumbnails' }, { status: 400 });
+      return NextResponse.json(
+        { error: "RAW files not supported for thumbnails" },
+        { status: 400 },
+      );
     }
 
     const thumbPath = getThumbPath(path);
@@ -41,7 +56,10 @@ export async function POST(request: NextRequest) {
       .createSignedUrl(thumbPath, 3600);
 
     if (!existingError && existingUrl?.signedUrl) {
-      return NextResponse.json({ signedUrl: existingUrl.signedUrl, cached: true });
+      return NextResponse.json({
+        signedUrl: existingUrl.signedUrl,
+        cached: true,
+      });
     }
 
     // Thumb doesn't exist — generate it server-side
@@ -50,8 +68,11 @@ export async function POST(request: NextRequest) {
       .download(path);
 
     if (downloadError || !fileData) {
-      console.error('Thumbnail: failed to download source:', downloadError);
-      return NextResponse.json({ error: 'Failed to download source image' }, { status: 404 });
+      console.error("Thumbnail: failed to download source:", downloadError);
+      return NextResponse.json(
+        { error: "Failed to download source image" },
+        { status: 404 },
+      );
     }
 
     const arrayBuffer = await fileData.arrayBuffer();
@@ -62,26 +83,29 @@ export async function POST(request: NextRequest) {
     try {
       thumbBuffer = await generateThumbnail(sourceBuffer);
     } catch (sharpError) {
-      console.error('Thumbnail: Sharp resize failed:', sharpError);
-      return NextResponse.json({ error: 'Failed to resize image' }, { status: 500 });
+      console.error("Thumbnail: Sharp resize failed:", sharpError);
+      return NextResponse.json(
+        { error: "Failed to resize image" },
+        { status: 500 },
+      );
     }
 
     // Upload thumb to the same bucket at the thumbs/ path
     const { error: uploadError } = await supabase.storage
       .from(bucket)
       .upload(thumbPath, thumbBuffer, {
-        contentType: 'image/jpeg',
-        cacheControl: '86400',
+        contentType: "image/jpeg",
+        cacheControl: "86400",
         upsert: true,
       });
 
     if (uploadError) {
-      console.error('Thumbnail: upload failed:', uploadError);
+      console.error("Thumbnail: upload failed:", uploadError);
       // Still serve the resized image directly even if storage upload fails
       return new NextResponse(new Uint8Array(thumbBuffer), {
         headers: {
-          'Content-Type': 'image/jpeg',
-          'Cache-Control': 'public, max-age=86400',
+          "Content-Type": "image/jpeg",
+          "Cache-Control": "public, max-age=86400",
         },
       });
     }
@@ -95,15 +119,18 @@ export async function POST(request: NextRequest) {
       // Fallback: serve the buffer directly
       return new NextResponse(new Uint8Array(thumbBuffer), {
         headers: {
-          'Content-Type': 'image/jpeg',
-          'Cache-Control': 'public, max-age=86400',
+          "Content-Type": "image/jpeg",
+          "Cache-Control": "public, max-age=86400",
         },
       });
     }
 
     return NextResponse.json({ signedUrl: newUrl.signedUrl, cached: false });
   } catch (error) {
-    console.error('Thumbnail API error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    console.error("Thumbnail API error:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 },
+    );
   }
 }

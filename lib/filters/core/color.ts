@@ -6,13 +6,17 @@
 /**
  * Convert HSL (Hue, Saturation, Lightness) to RGB.
  * All inputs and outputs are in 0-255 range for direct pixel manipulation.
- * 
+ *
  * @param h - Hue (0-360 degrees, normalized to 0-1 internally)
  * @param s - Saturation (0-1)
  * @param l - Lightness (0-1)
  * @returns [r, g, b] tuple with values 0-255
  */
-export function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+export function hslToRgb(
+  h: number,
+  s: number,
+  l: number,
+): [number, number, number] {
   if (s === 0) {
     const val = l * 255;
     return [val, val, val];
@@ -21,9 +25,9 @@ export function hslToRgb(h: number, s: number, l: number): [number, number, numb
   const hue2rgb = (p: number, q: number, t: number): number => {
     if (t < 0) t += 1;
     if (t > 1) t -= 1;
-    if (t < 1/6) return p + (q - p) * 6 * t;
-    if (t < 1/2) return q;
-    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
     return p;
   };
 
@@ -31,21 +35,25 @@ export function hslToRgb(h: number, s: number, l: number): [number, number, numb
   const p = 2 * l - q;
 
   return [
-    hue2rgb(p, q, h + 1/3) * 255,
+    hue2rgb(p, q, h + 1 / 3) * 255,
     hue2rgb(p, q, h) * 255,
-    hue2rgb(p, q, h - 1/3) * 255
+    hue2rgb(p, q, h - 1 / 3) * 255,
   ];
 }
 
 /**
  * Convert RGB to HSL.
- * 
+ *
  * @param r - Red (0-255)
  * @param g - Green (0-255)
  * @param b - Blue (0-255)
  * @returns { h, s, l } where h is 0-360, s and l are 0-1
  */
-export function rgbToHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
+export function rgbToHsl(
+  r: number,
+  g: number,
+  b: number,
+): { h: number; s: number; l: number } {
   r /= 255;
   g /= 255;
   b /= 255;
@@ -78,13 +86,17 @@ export function rgbToHsl(r: number, g: number, b: number): { h: number; s: numbe
 
 /**
  * Convert RGB to HSV/HSB.
- * 
+ *
  * @param r - Red (0-255)
  * @param g - Green (0-255)
  * @param b - Blue (0-255)
  * @returns { h, s, v } where h is 0-360, s and v are 0-1
  */
-export function rgbToHsv(r: number, g: number, b: number): { h: number; s: number; v: number } {
+export function rgbToHsv(
+  r: number,
+  g: number,
+  b: number,
+): { h: number; s: number; v: number } {
   r /= 255;
   g /= 255;
   b /= 255;
@@ -115,14 +127,18 @@ export function rgbToHsv(r: number, g: number, b: number): { h: number; s: numbe
 
 /**
  * Convert HSV to RGB.
- * 
+ *
  * @param h - Hue (0-360)
  * @param s - Saturation (0-1)
  * @param v - Value (0-1)
  * @returns [r, g, b] tuple with values 0-255
  */
-export function hsvToRgb(h: number, s: number, v: number): [number, number, number] {
-  h = ((h % 360) + 360) % 360 / 360; // Normalize to 0-1
+export function hsvToRgb(
+  h: number,
+  s: number,
+  v: number,
+): [number, number, number] {
+  h = (((h % 360) + 360) % 360) / 360; // Normalize to 0-1
 
   const i = Math.floor(h * 6);
   const f = h * 6 - i;
@@ -133,12 +149,36 @@ export function hsvToRgb(h: number, s: number, v: number): [number, number, numb
   let r: number, g: number, b: number;
 
   switch (i % 6) {
-    case 0: r = v; g = t; b = p; break;
-    case 1: r = q; g = v; b = p; break;
-    case 2: r = p; g = v; b = t; break;
-    case 3: r = p; g = q; b = v; break;
-    case 4: r = t; g = p; b = v; break;
-    default: r = v; g = p; b = q; break;
+    case 0:
+      r = v;
+      g = t;
+      b = p;
+      break;
+    case 1:
+      r = q;
+      g = v;
+      b = p;
+      break;
+    case 2:
+      r = p;
+      g = v;
+      b = t;
+      break;
+    case 3:
+      r = p;
+      g = q;
+      b = v;
+      break;
+    case 4:
+      r = t;
+      g = p;
+      b = v;
+      break;
+    default:
+      r = v;
+      g = p;
+      b = q;
+      break;
   }
 
   return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];

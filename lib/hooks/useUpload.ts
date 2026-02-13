@@ -1,23 +1,34 @@
-import { useCallback, useRef } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import type { User } from '@supabase/supabase-js';
-import exifr from 'exifr';
-import { supabase } from '@/lib/supabase';
-import type { CanvasImage, PhotoFolder } from '@/lib/types';
-import { DEFAULT_CURVES } from '@/lib/types';
-import { useCanvasStore, selectImages, selectFolders } from '@/lib/stores/canvasStore';
-import { useUIStore } from '@/lib/stores/uiStore';
+import { useCallback, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import type { User } from "@supabase/supabase-js";
+import exifr from "exifr";
+import { supabase } from "@/lib/supabase";
+import type { CanvasImage, PhotoFolder } from "@/lib/types";
+import { DEFAULT_CURVES } from "@/lib/types";
+import { useCanvasStore } from "@/lib/stores/canvasStore";
+import { useUIStore } from "@/lib/stores/uiStore";
 import {
-  FOLDER_COLORS, GRID_CONFIG, CELL_SIZE, CELL_HEIGHT,
-  LAYOUT_IMPORT_MAX_WIDTH, LAYOUT_IMPORT_MAX_HEIGHT,
+  FOLDER_COLORS,
+  GRID_CONFIG,
+  CELL_SIZE,
+  CELL_HEIGHT,
+  LAYOUT_IMPORT_MAX_WIDTH,
+  LAYOUT_IMPORT_MAX_HEIGHT,
   SOCIAL_LAYOUT_PAGE_WIDTH,
-  isSocialLayout, getSocialLayoutDimensions,
-  calculateColsFromWidth, getFolderBorderHeight, calculateMinimumFolderSize,
+  isSocialLayout,
+  getSocialLayoutDimensions,
+  calculateColsFromWidth,
+  getFolderBorderHeight,
+  calculateMinimumFolderSize,
   reflowImagesInFolder,
-} from '@/lib/folders/folderLayout';
+} from "@/lib/folders/folderLayout";
 import {
-  isDNG, decodeDNG, createThumbnailBlob, getThumbStoragePath, resizeImageForEditing,
-} from '@/lib/utils/imageUtils';
+  isDNG,
+  decodeDNG,
+  createThumbnailBlob,
+  getThumbStoragePath,
+  resizeImageForEditing,
+} from "@/lib/utils/imageUtils";
 
 interface UseUploadOptions {
   user: User | null;
@@ -31,62 +42,83 @@ interface UseUploadOptions {
   sessionId?: string;
 }
 
-export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessionId }: UseUploadOptions) {
+export function useUpload({
+  user,
+  saveToHistory,
+  resolveOverlapsAndReflow,
+  sessionId,
+}: UseUploadOptions) {
   const queryClient = useQueryClient();
   const pendingFilesRef = useRef<File[]>([]);
   const folderFileInputRef = useRef<HTMLInputElement>(null);
   const skipNextPhotosLoadRef = useRef(false);
 
   // When label-photo API returns labels, update the image in state so filter search works without refresh
-  const updateImageLabels = useCallback((storagePath: string, labels: string[]) => {
-    useCanvasStore.getState().setImages((prev) =>
-      prev.map((img) =>
-        img.storagePath === storagePath || img.originalStoragePath === storagePath
-          ? { ...img, labels }
-          : img
-      )
-    );
-  }, []);
+  const updateImageLabels = useCallback(
+    (storagePath: string, labels: string[]) => {
+      useCanvasStore
+        .getState()
+        .setImages((prev) =>
+          prev.map((img) =>
+            img.storagePath === storagePath ||
+            img.originalStoragePath === storagePath
+              ? { ...img, labels }
+              : img,
+          ),
+        );
+    },
+    [],
+  );
 
   // Handle file upload - uploads to Supabase Storage
   // Show folder name prompt when uploading
-  const handleFileUpload = useCallback(
-    (files: FileList | null) => {
-      console.log('handleFileUpload called with files:', files, 'length:', files?.length);
+  const handleFileUpload = useCallback((files: FileList | null) => {
+    console.log(
+      "handleFileUpload called with files:",
+      files,
+      "length:",
+      files?.length,
+    );
 
-      if (!files || files.length === 0) {
-        console.log('No files provided');
-        return;
-      }
+    if (!files || files.length === 0) {
+      console.log("No files provided");
+      return;
+    }
 
-      // Validate and COPY files into an array (FileList becomes empty when input is reset)
-      const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/x-adobe-dng'];
-      const validFiles = Array.from(files).filter(f => validTypes.includes(f.type) || f.name.toLowerCase().endsWith('.dng'));
+    // Validate and COPY files into an array (FileList becomes empty when input is reset)
+    const validTypes = [
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "image/x-adobe-dng",
+    ];
+    const validFiles = Array.from(files).filter(
+      (f) =>
+        validTypes.includes(f.type) || f.name.toLowerCase().endsWith(".dng"),
+    );
 
-      console.log('Valid files:', validFiles.length);
+    console.log("Valid files:", validFiles.length);
 
-      if (validFiles.length === 0) {
-        alert('Please upload JPEG, PNG, WebP, or DNG files only.');
-        return;
-      }
+    if (validFiles.length === 0) {
+      alert("Please upload JPEG, PNG, WebP, or DNG files only.");
+      return;
+    }
 
-      // Store COPY of files in ref (not the live FileList reference)
-      pendingFilesRef.current = validFiles;
-      console.log('Stored in ref:', pendingFilesRef.current);
-      const uiActions = useUIStore.getState();
-      uiActions.setPendingFileCount(validFiles.length);
-      uiActions.setNewFolderName('');
-      uiActions.setShowFolderPrompt(true);
-    },
-    []
-  );
+    // Store COPY of files in ref (not the live FileList reference)
+    pendingFilesRef.current = validFiles;
+    console.log("Stored in ref:", pendingFilesRef.current);
+    const uiActions = useUIStore.getState();
+    uiActions.setPendingFileCount(validFiles.length);
+    uiActions.setNewFolderName("");
+    uiActions.setShowFolderPrompt(true);
+  }, []);
 
   // Process files after folder name is entered
   const processFilesWithFolder = useCallback(
     async (folderName: string) => {
       const files = pendingFilesRef.current;
       if (!files || files.length === 0) {
-        console.log('No pending files in ref');
+        console.log("No pending files in ref");
         return;
       }
 
@@ -98,17 +130,23 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
 
       // Check for duplicate folder name
       const isDuplicate = folders.some(
-        f => f.name.toLowerCase() === folderName.toLowerCase()
+        (f) => f.name.toLowerCase() === folderName.toLowerCase(),
       );
 
       if (isDuplicate) {
-        uiActions.setFolderNameError('A folder with this name already exists');
+        uiActions.setFolderNameError("A folder with this name already exists");
         return;
       }
 
-      console.log('Processing files with folder:', folderName, 'Files:', files.length, files);
+      console.log(
+        "Processing files with folder:",
+        folderName,
+        "Files:",
+        files.length,
+        files,
+      );
 
-      uiActions.setFolderNameError('');
+      uiActions.setFolderNameError("");
       uiActions.setShowFolderPrompt(false);
       uiActions.setIsUploading(true);
 
@@ -118,11 +156,12 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
       const folderX = 100;
       const folderY = 100 + existingFolderCount * 500; // Stack folders vertically
 
-      console.log('Folder position:', folderX, folderY);
+      console.log("Folder position:", folderX, folderY);
 
       // Create the folder (we'll add images to state as each is ready so the UI updates progressively)
       const folderId = `folder-${Date.now()}`;
-      const folderColor = FOLDER_COLORS[existingFolderCount % FOLDER_COLORS.length];
+      const folderColor =
+        FOLDER_COLORS[existingFolderCount % FOLDER_COLORS.length];
       const newImages: CanvasImage[] = [];
       let accumulatedImages: CanvasImage[] = [...images];
 
@@ -130,20 +169,22 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
       let imageIndex = 0;
 
       // files is already an array of validated files
-      console.log('Files to process:', files.length);
+      console.log("Files to process:", files.length);
 
       for (const file of files) {
         // Files are already validated, no need to check again
 
         try {
-          console.log('Processing file:', file.name);
+          console.log("Processing file:", file.name);
 
           // Extract EXIF metadata (client-side) for filter search
           let takenAt: string | undefined;
           let cameraMake: string | undefined;
           let cameraModel: string | undefined;
           try {
-            const exif = await exifr.parse(file, { pick: ['DateTimeOriginal', 'Make', 'Model'] });
+            const exif = await exifr.parse(file, {
+              pick: ["DateTimeOriginal", "Make", "Model"],
+            });
             if (exif?.DateTimeOriginal) {
               const d = exif.DateTimeOriginal;
               takenAt = d instanceof Date ? d.toISOString() : String(d);
@@ -155,28 +196,31 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
           }
 
           // Generate unique filename with user folder or session folder
-          const fileExt = file.name.split('.').pop();
+          const fileExt = file.name.split(".").pop();
           const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
-          const bucket = sessionId ? 'collab-photos' : 'photos';
-          const filePath = sessionId ? `${sessionId}/${fileName}` : (user ? `${user.id}/${fileName}` : `anonymous/${fileName}`);
+          const bucket = sessionId ? "collab-photos" : "photos";
+          const filePath = sessionId
+            ? `${sessionId}/${fileName}`
+            : user
+              ? `${user.id}/${fileName}`
+              : `anonymous/${fileName}`;
 
           const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-          let imageSrc = '';
+          let imageSrc = "";
           let photosUploadSucceeded = false;
           let thumbnailPath: string | undefined;
 
           // Skip direct upload for DNG files - they go through the API which creates JPG previews
           if (!isDNG(file.name) && supabaseUrl && user) {
             console.log(`Uploading to ${bucket}:`, filePath);
-            const { data: uploadData, error: uploadError } = await supabase.storage
-              .from(bucket)
-              .upload(filePath, file, {
-                cacheControl: '3600',
+            const { data: uploadData, error: uploadError } =
+              await supabase.storage.from(bucket).upload(filePath, file, {
+                cacheControl: "3600",
                 upsert: false,
               });
 
             if (uploadError) {
-              console.error('Upload error:', uploadError.message);
+              console.error("Upload error:", uploadError.message);
               // Fallback to base64
               const reader = new FileReader();
               imageSrc = await new Promise<string>((resolve) => {
@@ -185,28 +229,33 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
               });
             } else {
               photosUploadSucceeded = true;
-              console.log('Upload successful:', uploadData);
+              console.log("Upload successful:", uploadData);
               const { data: urlData } = supabase.storage
                 .from(bucket)
                 .getPublicUrl(filePath);
               imageSrc = urlData.publicUrl;
-              console.log('Public URL:', imageSrc);
+              console.log("Public URL:", imageSrc);
               // Set thumbnail path for regular images
               thumbnailPath = getThumbStoragePath(filePath);
               // Upload thumbnail in background (reduces egress when loading grid)
-              createThumbnailBlob(file).then((thumbBlob) => {
-                const thumbPath = getThumbStoragePath(filePath);
-                supabase.storage.from(bucket).upload(thumbPath, thumbBlob, {
-                  contentType: 'image/jpeg',
-                  cacheControl: '86400',
-                  upsert: true,
-                }).then(({ error }) => {
-                  if (error) console.warn('Thumb upload failed:', error);
-                });
-              }).catch(() => {});
+              createThumbnailBlob(file)
+                .then((thumbBlob) => {
+                  const thumbPath = getThumbStoragePath(filePath);
+                  supabase.storage
+                    .from(bucket)
+                    .upload(thumbPath, thumbBlob, {
+                      contentType: "image/jpeg",
+                      cacheControl: "86400",
+                      upsert: true,
+                    })
+                    .then(({ error }) => {
+                      if (error) console.warn("Thumb upload failed:", error);
+                    });
+                })
+                .catch(() => {});
             }
           } else if (!isDNG(file.name)) {
-            console.log('Using base64 (no Supabase or not logged in)');
+            console.log("Using base64 (no Supabase or not logged in)");
             const reader = new FileReader();
             imageSrc = await new Promise<string>((resolve) => {
               reader.onload = (e) => resolve(e.target?.result as string);
@@ -215,7 +264,7 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
           }
 
           // Load image to get dimensions
-          console.log('Loading image to get dimensions...');
+          console.log("Loading image to get dimensions...");
           let width: number;
           let height: number;
           let dngBuffer: ArrayBuffer | undefined;
@@ -229,18 +278,18 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
 
           // Check if file is DNG - use server-side processing for better performance
           if (isDNG(file.name) && user) {
-            console.log('Processing DNG file via server:', file.name);
+            console.log("Processing DNG file via server:", file.name);
             isRaw = true;
 
             try {
               // Upload to server API for processing
               const formData = new FormData();
-              formData.append('file', file);
-              formData.append('userId', user.id);
-              if (sessionId) formData.append('sessionId', sessionId);
+              formData.append("file", file);
+              formData.append("userId", user.id);
+              if (sessionId) formData.append("sessionId", sessionId);
 
-              const response = await fetch('/api/upload-dng', {
-                method: 'POST',
+              const response = await fetch("/api/upload-dng", {
+                method: "POST",
                 body: formData,
               });
 
@@ -254,10 +303,21 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
                   imageSrc = result.previewUrl;
                   width = result.width;
                   height = result.height;
-                  console.log('DNG processed via server:', width, 'x', height, 'original:', originalWidth, 'x', originalHeight);
+                  console.log(
+                    "DNG processed via server:",
+                    width,
+                    "x",
+                    height,
+                    "original:",
+                    originalWidth,
+                    "x",
+                    originalHeight,
+                  );
                 } else {
                   // Original saved to originals; no server preview — decode client-side and upload preview
-                  console.log('DNG saved to originals, decoding preview client-side');
+                  console.log(
+                    "DNG saved to originals, decoding preview client-side",
+                  );
                   const buffer = await file.arrayBuffer();
                   dngBuffer = buffer;
                   const decoded = await decodeDNG(buffer, true);
@@ -267,46 +327,74 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
 
                   // Upload client-decoded preview to photos bucket (background, don't block display)
                   const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
-                  const previewFilePath = sessionId ? `${sessionId}/${previewFileName}` : `${user.id}/${previewFileName}`;
-                  const previewBucket = sessionId ? 'collab-photos' : 'photos';
+                  const previewFilePath = sessionId
+                    ? `${sessionId}/${previewFileName}`
+                    : `${user.id}/${previewFileName}`;
+                  const previewBucket = sessionId ? "collab-photos" : "photos";
                   previewStoragePath = previewFilePath; // Set optimistically for immediate use
-                  
+
                   // Also generate thumbnail path
                   const thumbFilePath = getThumbStoragePath(previewFilePath);
                   thumbnailPath = thumbFilePath;
-                  
-                  fetch(decoded.dataUrl).then(r => r.blob()).then(previewBlob => {
-                    supabase.storage.from(previewBucket).upload(previewFilePath, previewBlob, {
-                      contentType: 'image/jpeg',
-                      cacheControl: '3600',
-                    }).then(({ error }) => {
-                      if (error) {
-                        console.error('Failed to upload preview:', error);
-                        previewStoragePath = undefined;
-                        thumbnailPath = undefined;
-                      } else {
-                        console.log('Uploaded client-decoded preview:', previewFilePath);
-                        // Generate and upload thumbnail
-                        createThumbnailBlob(previewBlob).then(thumbBlob => {
-                          supabase.storage.from(previewBucket).upload(thumbFilePath, thumbBlob, {
-                            contentType: 'image/jpeg',
-                            cacheControl: '86400',
-                            upsert: true,
-                          }).then(({ error: thumbError }) => {
-                            if (thumbError) {
-                              console.warn('Thumbnail upload failed:', thumbError);
-                            } else {
-                              console.log('Uploaded thumbnail:', thumbFilePath);
-                            }
-                          });
-                        }).catch(err => console.warn('Thumbnail generation failed:', err));
-                      }
+
+                  fetch(decoded.dataUrl)
+                    .then((r) => r.blob())
+                    .then((previewBlob) => {
+                      supabase.storage
+                        .from(previewBucket)
+                        .upload(previewFilePath, previewBlob, {
+                          contentType: "image/jpeg",
+                          cacheControl: "3600",
+                        })
+                        .then(({ error }) => {
+                          if (error) {
+                            console.error("Failed to upload preview:", error);
+                            previewStoragePath = undefined;
+                            thumbnailPath = undefined;
+                          } else {
+                            console.log(
+                              "Uploaded client-decoded preview:",
+                              previewFilePath,
+                            );
+                            // Generate and upload thumbnail
+                            createThumbnailBlob(previewBlob)
+                              .then((thumbBlob) => {
+                                supabase.storage
+                                  .from(previewBucket)
+                                  .upload(thumbFilePath, thumbBlob, {
+                                    contentType: "image/jpeg",
+                                    cacheControl: "86400",
+                                    upsert: true,
+                                  })
+                                  .then(({ error: thumbError }) => {
+                                    if (thumbError) {
+                                      console.warn(
+                                        "Thumbnail upload failed:",
+                                        thumbError,
+                                      );
+                                    } else {
+                                      console.log(
+                                        "Uploaded thumbnail:",
+                                        thumbFilePath,
+                                      );
+                                    }
+                                  });
+                              })
+                              .catch((err) =>
+                                console.warn(
+                                  "Thumbnail generation failed:",
+                                  err,
+                                ),
+                              );
+                          }
+                        });
                     });
-                  });
                 }
               } else {
                 // Fallback to client-side decoding
-                console.warn('Server DNG processing failed, falling back to client-side');
+                console.warn(
+                  "Server DNG processing failed, falling back to client-side",
+                );
                 const buffer = await file.arrayBuffer();
                 dngBuffer = buffer;
                 const decoded = await decodeDNG(buffer, true);
@@ -314,48 +402,74 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
                 width = decoded.width;
                 height = decoded.height;
 
-                  // Upload client-decoded preview to photos bucket (background, don't block display)
-                  const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
-                  const previewFilePath = sessionId ? `${sessionId}/${previewFileName}` : `${user.id}/${previewFileName}`;
-                  const previewBucket = sessionId ? 'collab-photos' : 'photos';
-                  previewStoragePath = previewFilePath; // Set optimistically for immediate use
-                  
-                  // Also generate thumbnail path
-                  const thumbFilePath = getThumbStoragePath(previewFilePath);
-                  thumbnailPath = thumbFilePath;
-                  
-                  fetch(decoded.dataUrl).then(r => r.blob()).then(previewBlob => {
-                    supabase.storage.from(previewBucket).upload(previewFilePath, previewBlob, {
-                      contentType: 'image/jpeg',
-                      cacheControl: '3600',
-                    }).then(({ error }) => {
-                      if (error) {
-                        console.error('Failed to upload preview:', error);
-                        previewStoragePath = undefined;
-                        thumbnailPath = undefined;
-                      } else {
-                        console.log('Uploaded client-decoded preview:', previewFilePath);
-                        // Generate and upload thumbnail
-                        createThumbnailBlob(previewBlob).then(thumbBlob => {
-                          supabase.storage.from(previewBucket).upload(thumbFilePath, thumbBlob, {
-                            contentType: 'image/jpeg',
-                            cacheControl: '86400',
-                            upsert: true,
-                          }).then(({ error: thumbError }) => {
-                            if (thumbError) {
-                              console.warn('Thumbnail upload failed:', thumbError);
-                            } else {
-                              console.log('Uploaded thumbnail:', thumbFilePath);
-                            }
-                          });
-                        }).catch(err => console.warn('Thumbnail generation failed:', err));
-                      }
-                    });
+                // Upload client-decoded preview to photos bucket (background, don't block display)
+                const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
+                const previewFilePath = sessionId
+                  ? `${sessionId}/${previewFileName}`
+                  : `${user.id}/${previewFileName}`;
+                const previewBucket = sessionId ? "collab-photos" : "photos";
+                previewStoragePath = previewFilePath; // Set optimistically for immediate use
+
+                // Also generate thumbnail path
+                const thumbFilePath = getThumbStoragePath(previewFilePath);
+                thumbnailPath = thumbFilePath;
+
+                fetch(decoded.dataUrl)
+                  .then((r) => r.blob())
+                  .then((previewBlob) => {
+                    supabase.storage
+                      .from(previewBucket)
+                      .upload(previewFilePath, previewBlob, {
+                        contentType: "image/jpeg",
+                        cacheControl: "3600",
+                      })
+                      .then(({ error }) => {
+                        if (error) {
+                          console.error("Failed to upload preview:", error);
+                          previewStoragePath = undefined;
+                          thumbnailPath = undefined;
+                        } else {
+                          console.log(
+                            "Uploaded client-decoded preview:",
+                            previewFilePath,
+                          );
+                          // Generate and upload thumbnail
+                          createThumbnailBlob(previewBlob)
+                            .then((thumbBlob) => {
+                              supabase.storage
+                                .from(previewBucket)
+                                .upload(thumbFilePath, thumbBlob, {
+                                  contentType: "image/jpeg",
+                                  cacheControl: "86400",
+                                  upsert: true,
+                                })
+                                .then(({ error: thumbError }) => {
+                                  if (thumbError) {
+                                    console.warn(
+                                      "Thumbnail upload failed:",
+                                      thumbError,
+                                    );
+                                  } else {
+                                    console.log(
+                                      "Uploaded thumbnail:",
+                                      thumbFilePath,
+                                    );
+                                  }
+                                });
+                            })
+                            .catch((err) =>
+                              console.warn("Thumbnail generation failed:", err),
+                            );
+                        }
+                      });
                   });
               }
             } catch (apiError) {
               // Fallback to client-side decoding
-              console.warn('Server DNG API error, falling back to client-side:', apiError);
+              console.warn(
+                "Server DNG API error, falling back to client-side:",
+                apiError,
+              );
               const buffer = await file.arrayBuffer();
               dngBuffer = buffer;
               const decoded = await decodeDNG(buffer, true);
@@ -363,81 +477,111 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
               width = decoded.width;
               height = decoded.height;
 
-                  // Upload client-decoded preview to photos bucket (background, don't block display)
-                  const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
-                  const previewFilePath = sessionId ? `${sessionId}/${previewFileName}` : `${user.id}/${previewFileName}`;
-                  const previewBucket = sessionId ? 'collab-photos' : 'photos';
-                  previewStoragePath = previewFilePath; // Set optimistically for immediate use
-                  
-                  // Also generate thumbnail path
-                  const thumbFilePath = getThumbStoragePath(previewFilePath);
-                  thumbnailPath = thumbFilePath;
-                  
-                  fetch(decoded.dataUrl).then(r => r.blob()).then(previewBlob => {
-                    supabase.storage.from(previewBucket).upload(previewFilePath, previewBlob, {
-                      contentType: 'image/jpeg',
-                      cacheControl: '3600',
-                    }).then(({ error }) => {
+              // Upload client-decoded preview to photos bucket (background, don't block display)
+              const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
+              const previewFilePath = sessionId
+                ? `${sessionId}/${previewFileName}`
+                : `${user.id}/${previewFileName}`;
+              const previewBucket = sessionId ? "collab-photos" : "photos";
+              previewStoragePath = previewFilePath; // Set optimistically for immediate use
+
+              // Also generate thumbnail path
+              const thumbFilePath = getThumbStoragePath(previewFilePath);
+              thumbnailPath = thumbFilePath;
+
+              fetch(decoded.dataUrl)
+                .then((r) => r.blob())
+                .then((previewBlob) => {
+                  supabase.storage
+                    .from(previewBucket)
+                    .upload(previewFilePath, previewBlob, {
+                      contentType: "image/jpeg",
+                      cacheControl: "3600",
+                    })
+                    .then(({ error }) => {
                       if (error) {
-                        console.error('Failed to upload preview:', error);
+                        console.error("Failed to upload preview:", error);
                         previewStoragePath = undefined;
                         thumbnailPath = undefined;
                       } else {
-                        console.log('Uploaded client-decoded preview:', previewFilePath);
+                        console.log(
+                          "Uploaded client-decoded preview:",
+                          previewFilePath,
+                        );
                         // Generate and upload thumbnail
-                        createThumbnailBlob(previewBlob).then(thumbBlob => {
-                          supabase.storage.from(previewBucket).upload(thumbFilePath, thumbBlob, {
-                            contentType: 'image/jpeg',
-                            cacheControl: '86400',
-                            upsert: true,
-                          }).then(({ error: thumbError }) => {
-                            if (thumbError) {
-                              console.warn('Thumbnail upload failed:', thumbError);
-                            } else {
-                              console.log('Uploaded thumbnail:', thumbFilePath);
-                            }
-                          });
-                        }).catch(err => console.warn('Thumbnail generation failed:', err));
+                        createThumbnailBlob(previewBlob)
+                          .then((thumbBlob) => {
+                            supabase.storage
+                              .from(previewBucket)
+                              .upload(thumbFilePath, thumbBlob, {
+                                contentType: "image/jpeg",
+                                cacheControl: "86400",
+                                upsert: true,
+                              })
+                              .then(({ error: thumbError }) => {
+                                if (thumbError) {
+                                  console.warn(
+                                    "Thumbnail upload failed:",
+                                    thumbError,
+                                  );
+                                } else {
+                                  console.log(
+                                    "Uploaded thumbnail:",
+                                    thumbFilePath,
+                                  );
+                                }
+                              });
+                          })
+                          .catch((err) =>
+                            console.warn("Thumbnail generation failed:", err),
+                          );
                       }
                     });
-                  });
+                });
             }
           } else if (isDNG(file.name)) {
             // Client-side fallback for DNG when not logged in
-            console.log('Decoding DNG file (client-side preview):', file.name);
+            console.log("Decoding DNG file (client-side preview):", file.name);
             const buffer = await file.arrayBuffer();
             dngBuffer = buffer;
             const decoded = await decodeDNG(buffer, true);
             imageSrc = decoded.dataUrl;
             width = decoded.width;
             height = decoded.height;
-            console.log('DNG preview decoded:', width, 'x', height);
+            console.log("DNG preview decoded:", width, "x", height);
           } else {
             // Regular image - resize for editing if needed (Lightroom-style smart preview)
-            console.log('Loading and potentially resizing image for editing...');
+            console.log(
+              "Loading and potentially resizing image for editing...",
+            );
             const resized = await resizeImageForEditing(imageSrc, 1500);
             imageSrc = resized.src; // Use resized version for editing
             width = resized.width;
             height = resized.height;
-            console.log('Image ready for editing:', width, 'x', height);
+            console.log("Image ready for editing:", width, "x", height);
           }
 
           // UNIVERSAL RESIZE: Ensure ALL images (including DNG previews) are resized for editing
           // This catches any images that went through DNG decoding or server preview paths
           if (width > 1500 || height > 1500) {
-            console.log('Resizing large image/DNG preview for editing:', width, 'x', height);
+            console.log(
+              "Resizing large image/DNG preview for editing:",
+              width,
+              "x",
+              height,
+            );
             const resized = await resizeImageForEditing(imageSrc, 1500);
             imageSrc = resized.src;
             width = resized.width;
             height = resized.height;
-            console.log('Resized to:', width, 'x', height);
+            console.log("Resized to:", width, "x", height);
           }
 
           // Keep original source for quality; only scale display size to fit layout bounds
           const layoutScale = Math.min(
             LAYOUT_IMPORT_MAX_WIDTH / width,
             LAYOUT_IMPORT_MAX_HEIGHT / height,
-            1
+            1,
           );
           width = Math.round(width * layoutScale);
           height = Math.round(height * layoutScale);
@@ -451,13 +595,17 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
           const contentStartX = folderX + GRID_CONFIG.folderPadding;
           const contentStartY = folderY + 30 + GRID_CONFIG.folderPadding;
           // Compute display width for centering (image will be scaled to uniform row height)
-          const fitScale = Math.min(GRID_CONFIG.imageMaxSize / width, GRID_CONFIG.imageMaxHeight / height, 1);
+          const fitScale = Math.min(
+            GRID_CONFIG.imageMaxSize / width,
+            GRID_CONFIG.imageMaxHeight / height,
+            1,
+          );
           const displayW = width * fitScale;
           const cellOffsetX = (GRID_CONFIG.imageMaxSize - displayW) / 2;
           const x = contentStartX + col * CELL_SIZE + Math.max(0, cellOffsetX);
           const y = contentStartY + row * CELL_HEIGHT;
 
-          console.log('Image position:', x, y, 'Size:', width, height);
+          console.log("Image position:", x, y, "Size:", width, height);
 
           // Use actual photos upload success so DNG with client-side preview still gets photos path (load matches by listing photos)
           const imageId = `img-${Date.now()}-${Math.random()}`;
@@ -469,7 +617,9 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
             width,
             height,
             src: imageSrc,
-            storagePath: previewStoragePath || (photosUploadSucceeded ? filePath : undefined),
+            storagePath:
+              previewStoragePath ||
+              (photosUploadSucceeded ? filePath : undefined),
             folderId: folderId, // Link to folder
             rotation: 0,
             scaleX: 1,
@@ -515,12 +665,22 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
             x: folderX,
             y: folderY,
             width: GRID_CONFIG.defaultFolderWidth,
-            imageIds: newImages.map(img => img.id),
+            imageIds: newImages.map((img) => img.id),
             color: folderColor,
-            height: 30 + getFolderBorderHeight(
-              { id: folderId, name: folderName, x: folderX, y: folderY, width: GRID_CONFIG.defaultFolderWidth, imageIds: newImages.map(img => img.id), color: folderColor },
-              newImages.length
-            ),
+            height:
+              30 +
+              getFolderBorderHeight(
+                {
+                  id: folderId,
+                  name: folderName,
+                  x: folderX,
+                  y: folderY,
+                  width: GRID_CONFIG.defaultFolderWidth,
+                  imageIds: newImages.map((img) => img.id),
+                  color: folderColor,
+                },
+                newImages.length,
+              ),
           };
           setImages(accumulatedImages);
           setFolders((prev) => {
@@ -528,48 +688,63 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
             return [...without, folderWithImages];
           });
         } catch (error) {
-          console.error('Error processing file:', file.name, error);
+          console.error("Error processing file:", file.name, error);
         }
       }
 
-      console.log('Processed images:', newImages.length);
+      console.log("Processed images:", newImages.length);
 
-        // Final overlap resolution and save (folder already in state with all images)
-        if (newImages.length > 0) {
-          const newFolder: PhotoFolder = {
-            id: folderId,
-            name: folderName,
-            x: folderX,
-            y: folderY,
-            width: GRID_CONFIG.defaultFolderWidth,
-            imageIds: newImages.map(img => img.id),
-            color: folderColor,
-            height: 30 + getFolderBorderHeight(
-              { id: folderId, name: folderName, x: folderX, y: folderY, width: GRID_CONFIG.defaultFolderWidth, imageIds: newImages.map(img => img.id), color: folderColor },
-              newImages.length
+      // Final overlap resolution and save (folder already in state with all images)
+      if (newImages.length > 0) {
+        const newFolder: PhotoFolder = {
+          id: folderId,
+          name: folderName,
+          x: folderX,
+          y: folderY,
+          width: GRID_CONFIG.defaultFolderWidth,
+          imageIds: newImages.map((img) => img.id),
+          color: folderColor,
+          height:
+            30 +
+            getFolderBorderHeight(
+              {
+                id: folderId,
+                name: folderName,
+                x: folderX,
+                y: folderY,
+                width: GRID_CONFIG.defaultFolderWidth,
+                imageIds: newImages.map((img) => img.id),
+                color: folderColor,
+              },
+              newImages.length,
             ),
-          };
+        };
 
         const allImages = [...images, ...newImages];
-        const allFolders = [...folders.filter((f) => f.id !== folderId), newFolder];
-        const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
-          allFolders,
-          allImages,
-          folderId
-        );
+        const allFolders = [
+          ...folders.filter((f) => f.id !== folderId),
+          newFolder,
+        ];
+        const { folders: resolvedFolders, images: resolvedImages } =
+          resolveOverlapsAndReflow(allFolders, allImages, folderId);
 
         setImages(resolvedImages);
         setFolders(resolvedFolders);
 
         // Save folder and photo_edits to Supabase after reflow (so x,y match what's on canvas)
         if (user) {
-          const resolvedFolder = resolvedFolders.find(f => f.id === folderId);
+          const resolvedFolder = resolvedFolders.find((f) => f.id === folderId);
           if (resolvedFolder) {
-            const folderTable = sessionId ? 'collab_folders' : 'photo_folders';
-            const folderWidth = Math.round(resolvedFolder.width ?? GRID_CONFIG.defaultFolderWidth);
+            const folderTable = sessionId ? "collab_folders" : "photo_folders";
+            const folderWidth = Math.round(
+              resolvedFolder.width ?? GRID_CONFIG.defaultFolderWidth,
+            );
             // Calculate height if not set - based on image count
-            const imageCount = resolvedFolder.imageIds?.length ?? newImages.length;
-            const folderHeight = resolvedFolder.height ?? (30 + getFolderBorderHeight(resolvedFolder, imageCount));
+            const imageCount =
+              resolvedFolder.imageIds?.length ?? newImages.length;
+            const folderHeight =
+              resolvedFolder.height ??
+              30 + getFolderBorderHeight(resolvedFolder, imageCount);
             const { error: folderError } = await supabase
               .from(folderTable)
               .upsert({
@@ -583,14 +758,16 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
                 height: Math.round(folderHeight),
                 color: folderColor,
               });
-            if (folderError) console.error('Error saving folder:', folderError);
+            if (folderError) console.error("Error saving folder:", folderError);
           }
 
           const imagesToSave = resolvedImages.filter(
-            img => (img.storagePath || img.originalStoragePath) && newImages.some(n => n.id === img.id)
+            (img) =>
+              (img.storagePath || img.originalStoragePath) &&
+              newImages.some((n) => n.id === img.id),
           );
           if (imagesToSave.length > 0) {
-            const editsToSave = imagesToSave.map(img => ({
+            const editsToSave = imagesToSave.map((img) => ({
               storage_path: img.storagePath || img.originalStoragePath!,
               user_id: user.id,
               ...(sessionId ? { session_id: sessionId } : {}),
@@ -630,7 +807,9 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
               filters: img.filters,
               original_storage_path: img.originalStoragePath ?? null,
               // Only save thumbnail_path for sessions (collab_photos has this column)
-              ...(sessionId ? { thumbnail_path: img.thumbnailPath ?? null } : {}),
+              ...(sessionId
+                ? { thumbnail_path: img.thumbnailPath ?? null }
+                : {}),
               is_raw: img.isRaw ?? false,
               original_width: img.originalWidth ?? null,
               original_height: img.originalHeight ?? null,
@@ -641,12 +820,15 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
               border_width: img.borderWidth ?? null,
               border_color: img.borderColor ?? null,
             }));
-            const photoTable = sessionId ? 'collab_photos' : 'photo_edits';
-            const conflictOn = sessionId ? 'storage_path,session_id' : 'storage_path,user_id';
+            const photoTable = sessionId ? "collab_photos" : "photo_edits";
+            const conflictOn = sessionId
+              ? "storage_path,session_id"
+              : "storage_path,user_id";
             const { error: editsError } = await supabase
               .from(photoTable)
               .upsert(editsToSave, { onConflict: conflictOn });
-            if (editsError) console.error('Error saving photo edits:', editsError);
+            if (editsError)
+              console.error("Error saving photo edits:", editsError);
           }
         }
 
@@ -654,96 +836,118 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
         // This avoids redundant network requests since we already have the data locally
         // Note: Query key must match CanvasEditor's queryKey: ['user-photos', userId, sessionId]
         if (user) {
-          const queryKey = sessionId 
-            ? ['user-photos', user.id, sessionId] 
-            : ['user-photos', user.id];
-          queryClient.setQueryData(queryKey, (old: {
-            savedEdits: unknown[];
-            savedFolders: unknown[];
-            photosFiles: unknown[];
-            originalsFiles: unknown[];
-          } | undefined) => {
-            const resolvedFolder = resolvedFolders.find(f => f.id === folderId);
-            const newFolderData = {
-              id: folderId,
-              user_id: user.id,
-              ...(sessionId ? { session_id: sessionId } : {}),
-              name: folderName,
-              x: Math.round(resolvedFolder?.x ?? folderX),
-              y: Math.round(resolvedFolder?.y ?? folderY),
-              width: Math.round(resolvedFolder?.width ?? GRID_CONFIG.defaultFolderWidth),
-              height: resolvedFolder?.height,
-              color: folderColor,
-            };
-            const newEditsData = resolvedImages
-              .filter(img => (img.storagePath || img.originalStoragePath) && newImages.some(n => n.id === img.id))
-              .map(img => ({
-                storage_path: img.storagePath || img.originalStoragePath,
+          const queryKey = sessionId
+            ? ["user-photos", user.id, sessionId]
+            : ["user-photos", user.id];
+          queryClient.setQueryData(
+            queryKey,
+            (
+              old:
+                | {
+                    savedEdits: unknown[];
+                    savedFolders: unknown[];
+                    photosFiles: unknown[];
+                    originalsFiles: unknown[];
+                  }
+                | undefined,
+            ) => {
+              const resolvedFolder = resolvedFolders.find(
+                (f) => f.id === folderId,
+              );
+              const newFolderData = {
+                id: folderId,
                 user_id: user.id,
                 ...(sessionId ? { session_id: sessionId } : {}),
-                folder_id: folderId,
-                x: Math.round(img.x),
-                y: Math.round(img.y),
-                width: Math.round(img.width),
-                height: Math.round(img.height),
-                rotation: img.rotation,
-                scale_x: img.scaleX,
-                scale_y: img.scaleY,
-                exposure: img.exposure,
-                contrast: img.contrast,
-                highlights: img.highlights,
-                shadows: img.shadows,
-                whites: img.whites,
-                blacks: img.blacks,
-                texture: img.texture ?? 0,
-                temperature: img.temperature,
-                vibrance: img.vibrance,
-                saturation: img.saturation,
-                shadow_tint: img.shadowTint ?? 0,
-                color_hsl: img.colorHSL ?? null,
-                split_toning: img.splitToning ?? null,
-                color_grading: img.colorGrading ?? null,
-                color_calibration: img.colorCalibration ?? null,
-                clarity: img.clarity,
-                dehaze: img.dehaze,
-                vignette: img.vignette,
-                grain: img.grain,
-                grain_size: img.grainSize ?? 0,
-                grain_roughness: img.grainRoughness ?? 0,
-                curves: img.curves,
-                brightness: img.brightness,
-                hue: img.hue,
-                blur: img.blur,
-                filters: img.filters,
-                original_storage_path: img.originalStoragePath ?? null,
-                is_raw: img.isRaw ?? false,
-                original_width: img.originalWidth ?? null,
-                original_height: img.originalHeight ?? null,
-                taken_at: img.takenAt ?? null,
-                camera_make: img.cameraMake ?? null,
-                camera_model: img.cameraModel ?? null,
-                labels: img.labels ?? null,
-                border_width: img.borderWidth ?? null,
-                border_color: img.borderColor ?? null,
-              }));
+                name: folderName,
+                x: Math.round(resolvedFolder?.x ?? folderX),
+                y: Math.round(resolvedFolder?.y ?? folderY),
+                width: Math.round(
+                  resolvedFolder?.width ?? GRID_CONFIG.defaultFolderWidth,
+                ),
+                height: resolvedFolder?.height,
+                color: folderColor,
+              };
+              const newEditsData = resolvedImages
+                .filter(
+                  (img) =>
+                    (img.storagePath || img.originalStoragePath) &&
+                    newImages.some((n) => n.id === img.id),
+                )
+                .map((img) => ({
+                  storage_path: img.storagePath || img.originalStoragePath,
+                  user_id: user.id,
+                  ...(sessionId ? { session_id: sessionId } : {}),
+                  folder_id: folderId,
+                  x: Math.round(img.x),
+                  y: Math.round(img.y),
+                  width: Math.round(img.width),
+                  height: Math.round(img.height),
+                  rotation: img.rotation,
+                  scale_x: img.scaleX,
+                  scale_y: img.scaleY,
+                  exposure: img.exposure,
+                  contrast: img.contrast,
+                  highlights: img.highlights,
+                  shadows: img.shadows,
+                  whites: img.whites,
+                  blacks: img.blacks,
+                  texture: img.texture ?? 0,
+                  temperature: img.temperature,
+                  vibrance: img.vibrance,
+                  saturation: img.saturation,
+                  shadow_tint: img.shadowTint ?? 0,
+                  color_hsl: img.colorHSL ?? null,
+                  split_toning: img.splitToning ?? null,
+                  color_grading: img.colorGrading ?? null,
+                  color_calibration: img.colorCalibration ?? null,
+                  clarity: img.clarity,
+                  dehaze: img.dehaze,
+                  vignette: img.vignette,
+                  grain: img.grain,
+                  grain_size: img.grainSize ?? 0,
+                  grain_roughness: img.grainRoughness ?? 0,
+                  curves: img.curves,
+                  brightness: img.brightness,
+                  hue: img.hue,
+                  blur: img.blur,
+                  filters: img.filters,
+                  original_storage_path: img.originalStoragePath ?? null,
+                  is_raw: img.isRaw ?? false,
+                  original_width: img.originalWidth ?? null,
+                  original_height: img.originalHeight ?? null,
+                  taken_at: img.takenAt ?? null,
+                  camera_make: img.cameraMake ?? null,
+                  camera_model: img.cameraModel ?? null,
+                  labels: img.labels ?? null,
+                  border_width: img.borderWidth ?? null,
+                  border_color: img.borderColor ?? null,
+                }));
 
-            return {
-              savedEdits: [...(old?.savedEdits ?? []), ...newEditsData],
-              savedFolders: [...(old?.savedFolders ?? []), newFolderData],
-              photosFiles: old?.photosFiles ?? [],
-              originalsFiles: old?.originalsFiles ?? [],
-            };
-          });
+              return {
+                savedEdits: [...(old?.savedEdits ?? []), ...newEditsData],
+                savedFolders: [...(old?.savedFolders ?? []), newFolderData],
+                photosFiles: old?.photosFiles ?? [],
+                originalsFiles: old?.originalsFiles ?? [],
+              };
+            },
+          );
         }
         setTimeout(() => saveToHistory(), 100);
       } else {
-        console.log('No images were processed successfully');
+        console.log("No images were processed successfully");
       }
 
       pendingFilesRef.current = [];
       uiActions.setIsUploading(false);
     },
-            [user, saveToHistory, resolveOverlapsAndReflow, queryClient, updateImageLabels, sessionId]
+    [
+      user,
+      saveToHistory,
+      resolveOverlapsAndReflow,
+      queryClient,
+      updateImageLabels,
+      sessionId,
+    ],
   );
 
   // Add files to an existing folder
@@ -758,7 +962,7 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
       const setFolders = useCanvasStore.getState().setFolders;
       const uiActions = useUIStore.getState();
 
-      const targetFolder = folders.find(f => f.id === folderId);
+      const targetFolder = folders.find((f) => f.id === folderId);
       if (!targetFolder) return;
 
       uiActions.setShowFolderPrompt(false);
@@ -779,7 +983,9 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
           let cameraMake: string | undefined;
           let cameraModel: string | undefined;
           try {
-            const exif = await exifr.parse(file, { pick: ['DateTimeOriginal', 'Make', 'Model'] });
+            const exif = await exifr.parse(file, {
+              pick: ["DateTimeOriginal", "Make", "Model"],
+            });
             if (exif?.DateTimeOriginal) {
               const d = exif.DateTimeOriginal;
               takenAt = d instanceof Date ? d.toISOString() : String(d);
@@ -790,13 +996,17 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
             // ignore EXIF errors
           }
 
-          const fileExt = file.name.split('.').pop();
+          const fileExt = file.name.split(".").pop();
           const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
-          const bucket = sessionId ? 'collab-photos' : 'photos';
-          const filePath = sessionId ? `${sessionId}/${fileName}` : (user ? `${user.id}/${fileName}` : `anonymous/${fileName}`);
+          const bucket = sessionId ? "collab-photos" : "photos";
+          const filePath = sessionId
+            ? `${sessionId}/${fileName}`
+            : user
+              ? `${user.id}/${fileName}`
+              : `anonymous/${fileName}`;
 
           const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-          let imageSrc = '';
+          let imageSrc = "";
           let photosUploadSucceeded = false;
           let storagePath: string | undefined;
           let originalStoragePath: string | undefined;
@@ -809,11 +1019,11 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
           if (isDNG(file.name) && user) {
             try {
               const formData = new FormData();
-              formData.append('file', file);
-              formData.append('userId', user.id);
-              if (sessionId) formData.append('sessionId', sessionId);
-              const response = await fetch('/api/upload-dng', {
-                method: 'POST',
+              formData.append("file", file);
+              formData.append("userId", user.id);
+              if (sessionId) formData.append("sessionId", sessionId);
+              const response = await fetch("/api/upload-dng", {
+                method: "POST",
                 body: formData,
               });
               if (response.ok) {
@@ -832,19 +1042,26 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
                   const decoded = await decodeDNG(buffer, true);
                   imageSrc = decoded.dataUrl;
                   const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
-                  const previewFilePath = sessionId ? `${sessionId}/${previewFileName}` : `${user.id}/${previewFileName}`;
+                  const previewFilePath = sessionId
+                    ? `${sessionId}/${previewFileName}`
+                    : `${user.id}/${previewFileName}`;
                   storagePath = previewFilePath; // Set optimistically for immediate use
-                  fetch(decoded.dataUrl).then(r => r.blob()).then(previewBlob => {
-                    supabase.storage.from(bucket).upload(previewFilePath, previewBlob, {
-                      contentType: 'image/jpeg',
-                      cacheControl: '3600',
-                    }).then(({ error }) => {
-                      if (!error) {
-                        storagePath = previewFilePath;
-                        photosUploadSucceeded = true;
-                      }
+                  fetch(decoded.dataUrl)
+                    .then((r) => r.blob())
+                    .then((previewBlob) => {
+                      supabase.storage
+                        .from(bucket)
+                        .upload(previewFilePath, previewBlob, {
+                          contentType: "image/jpeg",
+                          cacheControl: "3600",
+                        })
+                        .then(({ error }) => {
+                          if (!error) {
+                            storagePath = previewFilePath;
+                            photosUploadSucceeded = true;
+                          }
+                        });
                     });
-                  });
                 }
               }
             } catch {
@@ -854,30 +1071,40 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
               const decoded = await decodeDNG(buffer, true);
               imageSrc = decoded.dataUrl;
               const previewFileName = `${Date.now()}-${Math.random().toString(36).substring(7)}-preview.jpg`;
-              const previewFilePath = sessionId ? `${sessionId}/${previewFileName}` : `${user.id}/${previewFileName}`;
+              const previewFilePath = sessionId
+                ? `${sessionId}/${previewFileName}`
+                : `${user.id}/${previewFileName}`;
               storagePath = previewFilePath; // Set optimistically for immediate use
               photosUploadSucceeded = true;
-              fetch(decoded.dataUrl).then(r => r.blob()).then(previewBlob => {
-                supabase.storage.from(bucket).upload(previewFilePath, previewBlob, {
-                  contentType: 'image/jpeg',
-                  cacheControl: '3600',
-                }).then(({ error }) => {
-                  if (error) {
-                    console.error('Failed to upload preview:', error);
-                    storagePath = undefined; // Clear if upload failed
-                    photosUploadSucceeded = false;
-                  } else {
-                    console.log('Uploaded client-decoded preview:', previewFilePath);
-                  }
+              fetch(decoded.dataUrl)
+                .then((r) => r.blob())
+                .then((previewBlob) => {
+                  supabase.storage
+                    .from(bucket)
+                    .upload(previewFilePath, previewBlob, {
+                      contentType: "image/jpeg",
+                      cacheControl: "3600",
+                    })
+                    .then(({ error }) => {
+                      if (error) {
+                        console.error("Failed to upload preview:", error);
+                        storagePath = undefined; // Clear if upload failed
+                        photosUploadSucceeded = false;
+                      } else {
+                        console.log(
+                          "Uploaded client-decoded preview:",
+                          previewFilePath,
+                        );
+                      }
+                    });
                 });
-              });
               isRaw = true;
             }
           } else if (supabaseUrl && user && !isDNG(file.name)) {
             const { error: uploadError } = await supabase.storage
               .from(bucket)
               .upload(filePath, file, {
-                cacheControl: '3600',
+                cacheControl: "3600",
                 upsert: false,
               });
 
@@ -894,14 +1121,21 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
                 .from(bucket)
                 .getPublicUrl(filePath);
               imageSrc = urlData.publicUrl;
-              createThumbnailBlob(file).then((thumbBlob) => {
-                const thumbPath = getThumbStoragePath(filePath);
-                supabase.storage.from(bucket).upload(thumbPath, thumbBlob, {
-                  contentType: 'image/jpeg',
-                  cacheControl: '86400',
-                  upsert: true,
-                }).then(({ error }) => { if (error) console.warn('Thumb upload failed:', error); });
-              }).catch(() => {});
+              createThumbnailBlob(file)
+                .then((thumbBlob) => {
+                  const thumbPath = getThumbStoragePath(filePath);
+                  supabase.storage
+                    .from(bucket)
+                    .upload(thumbPath, thumbBlob, {
+                      contentType: "image/jpeg",
+                      cacheControl: "86400",
+                      upsert: true,
+                    })
+                    .then(({ error }) => {
+                      if (error) console.warn("Thumb upload failed:", error);
+                    });
+                })
+                .catch(() => {});
             }
           } else {
             const reader = new FileReader();
@@ -915,21 +1149,23 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
           let height: number;
 
           if (isDNG(file.name)) {
-            const dims = await new Promise<{ w: number; h: number }>((resolve) => {
-              const img = new window.Image();
-              img.onload = () => resolve({ w: img.width, h: img.height });
-              img.onerror = () => resolve({ w: 0, h: 0 });
-              img.src = imageSrc;
-            });
+            const dims = await new Promise<{ w: number; h: number }>(
+              (resolve) => {
+                const img = new window.Image();
+                img.onload = () => resolve({ w: img.width, h: img.height });
+                img.onerror = () => resolve({ w: 0, h: 0 });
+                img.src = imageSrc;
+              },
+            );
             width = dims.w;
             height = dims.h;
           } else {
             const img = new window.Image();
-            img.crossOrigin = 'anonymous';
+            img.crossOrigin = "anonymous";
 
             await new Promise<void>((resolve, reject) => {
               img.onload = () => resolve();
-              img.onerror = () => reject(new Error('Failed to load image'));
+              img.onerror = () => reject(new Error("Failed to load image"));
               img.src = imageSrc;
             });
             width = img.width;
@@ -940,7 +1176,7 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
           const layoutScale = Math.min(
             LAYOUT_IMPORT_MAX_WIDTH / width,
             LAYOUT_IMPORT_MAX_HEIGHT / height,
-            1
+            1,
           );
           width = Math.round(width * layoutScale);
           height = Math.round(height * layoutScale);
@@ -961,7 +1197,11 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
             const row = Math.floor(imageIndex / cols);
             const contentStartX = folderX + GRID_CONFIG.folderPadding;
             const contentStartY = folderY + 30 + GRID_CONFIG.folderPadding;
-            const fitScale = Math.min(GRID_CONFIG.imageMaxSize / width, GRID_CONFIG.imageMaxHeight / height, 1);
+            const fitScale = Math.min(
+              GRID_CONFIG.imageMaxSize / width,
+              GRID_CONFIG.imageMaxHeight / height,
+              1,
+            );
             const displayW = width * fitScale;
             const cellOffsetX = (GRID_CONFIG.imageMaxSize - displayW) / 2;
             x = contentStartX + col * CELL_SIZE + Math.max(0, cellOffsetX);
@@ -977,7 +1217,8 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
             width,
             height,
             src: imageSrc,
-            storagePath: storagePath ?? (photosUploadSucceeded ? filePath : undefined),
+            storagePath:
+              storagePath ?? (photosUploadSucceeded ? filePath : undefined),
             folderId: folderId,
             rotation: 0,
             scaleX: 1,
@@ -1013,27 +1254,39 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
           newImages.push(newImage);
           imageIndex++;
         } catch (error) {
-          console.error('Error processing file:', file.name, error);
+          console.error("Error processing file:", file.name, error);
         }
       }
 
       if (newImages.length > 0) {
         const totalImageCount = targetFolder.imageIds.length + newImages.length;
-        const minSize = calculateMinimumFolderSize(totalImageCount, targetFolder.width);
-        const currentHeight = targetFolder.height ?? getFolderBorderHeight(targetFolder, targetFolder.imageIds.length);
-        const needsResize = !isSocialLayout(targetFolder) &&
-          (minSize.width > targetFolder.width || minSize.height > currentHeight);
+        const minSize = calculateMinimumFolderSize(
+          totalImageCount,
+          targetFolder.width,
+        );
+        const currentHeight =
+          targetFolder.height ??
+          getFolderBorderHeight(targetFolder, targetFolder.imageIds.length);
+        const needsResize =
+          !isSocialLayout(targetFolder) &&
+          (minSize.width > targetFolder.width ||
+            minSize.height > currentHeight);
 
         const updatedFolders = folders.map((f) => {
           if (f.id !== folderId) return f;
           if (isSocialLayout(f)) {
-            return { ...f, imageIds: [...f.imageIds, ...newImages.map(img => img.id)] };
+            return {
+              ...f,
+              imageIds: [...f.imageIds, ...newImages.map((img) => img.id)],
+            };
           }
           return {
             ...f,
-            imageIds: [...f.imageIds, ...newImages.map(img => img.id)],
+            imageIds: [...f.imageIds, ...newImages.map((img) => img.id)],
             width: needsResize ? Math.max(f.width, minSize.width) : f.width,
-            height: needsResize ? Math.max(currentHeight, minSize.height) : f.height,
+            height: needsResize
+              ? Math.max(currentHeight, minSize.height)
+              : f.height,
           };
         });
 
@@ -1042,38 +1295,39 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
         // If folder was resized, reflow all images in the folder
         let finalImages = allImages;
         if (needsResize) {
-          const updatedFolder = updatedFolders.find(f => f.id === folderId)!;
-          const allFolderImages = allImages.filter(img => updatedFolder.imageIds.includes(img.id));
+          const updatedFolder = updatedFolders.find((f) => f.id === folderId)!;
+          const allFolderImages = allImages.filter((img) =>
+            updatedFolder.imageIds.includes(img.id),
+          );
           const reflowedImages = isSocialLayout(updatedFolder)
             ? allFolderImages
             : reflowImagesInFolder(
-              allFolderImages,
-              updatedFolder.x,
-              updatedFolder.y,
-              updatedFolder.width
-            );
-          finalImages = allImages.map(img => {
-            const reflowed = reflowedImages.find(r => r.id === img.id);
+                allFolderImages,
+                updatedFolder.x,
+                updatedFolder.y,
+                updatedFolder.width,
+              );
+          finalImages = allImages.map((img) => {
+            const reflowed = reflowedImages.find((r) => r.id === img.id);
             return reflowed ? reflowed : img;
           });
         }
 
         // Resolve any folder overlaps (folder got bigger)
-        const { folders: resolvedFolders, images: resolvedImages } = resolveOverlapsAndReflow(
-          updatedFolders,
-          finalImages,
-          folderId
-        );
+        const { folders: resolvedFolders, images: resolvedImages } =
+          resolveOverlapsAndReflow(updatedFolders, finalImages, folderId);
 
         setFolders(resolvedFolders);
         setImages(resolvedImages);
 
-          // Save photo edits and folder dimensions to Supabase (includes ALL editable fields)
+        // Save photo edits and folder dimensions to Supabase (includes ALL editable fields)
         if (user) {
           // Save new images (canonical key: photos path or originals path)
-          const imagesToSave = newImages.filter(img => img.storagePath || img.originalStoragePath);
+          const imagesToSave = newImages.filter(
+            (img) => img.storagePath || img.originalStoragePath,
+          );
           if (imagesToSave.length > 0) {
-            const editsToSave = imagesToSave.map(img => ({
+            const editsToSave = imagesToSave.map((img) => ({
               storage_path: img.storagePath || img.originalStoragePath!,
               user_id: user.id,
               ...(sessionId ? { session_id: sessionId } : {}),
@@ -1119,7 +1373,9 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
               // DNG/RAW support
               original_storage_path: img.originalStoragePath ?? null,
               // Only save thumbnail_path for sessions (collab_photos has this column)
-              ...(sessionId ? { thumbnail_path: img.thumbnailPath ?? null } : {}),
+              ...(sessionId
+                ? { thumbnail_path: img.thumbnailPath ?? null }
+                : {}),
               is_raw: img.isRaw ?? false,
               original_width: img.originalWidth ?? null,
               original_height: img.originalHeight ?? null,
@@ -1132,30 +1388,39 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
               border_color: img.borderColor ?? null,
             }));
 
-            const photoTable = sessionId ? 'collab_photos' : 'photo_edits';
-            const conflictOn = sessionId ? 'storage_path,session_id' : 'storage_path,user_id';
+            const photoTable = sessionId ? "collab_photos" : "photo_edits";
+            const conflictOn = sessionId
+              ? "storage_path,session_id"
+              : "storage_path,user_id";
             const { error: editsError } = await supabase
               .from(photoTable)
               .upsert(editsToSave, { onConflict: conflictOn });
-            if (editsError) console.error('Error saving photo edits:', editsError);
+            if (editsError)
+              console.error("Error saving photo edits:", editsError);
           }
 
           // Update folder dimensions if they changed
           if (needsResize) {
-            const updatedFolder = resolvedFolders.find(f => f.id === folderId);
+            const updatedFolder = resolvedFolders.find(
+              (f) => f.id === folderId,
+            );
             if (updatedFolder) {
-              const folderTable = sessionId ? 'collab_folders' : 'photo_folders';
+              const folderTable = sessionId
+                ? "collab_folders"
+                : "photo_folders";
               const query = supabase
                 .from(folderTable)
                 .update({
                   width: Math.round(updatedFolder.width),
-                  ...(updatedFolder.height != null && { height: Math.round(updatedFolder.height) }),
+                  ...(updatedFolder.height != null && {
+                    height: Math.round(updatedFolder.height),
+                  }),
                 })
-                .eq('id', folderId);
-                
-              if (sessionId) query.eq('session_id', sessionId);
-              else query.eq('user_id', user.id);
-              
+                .eq("id", folderId);
+
+              if (sessionId) query.eq("session_id", sessionId);
+              else query.eq("user_id", user.id);
+
               await query;
             }
           }
@@ -1163,19 +1428,22 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
           // Update positions of existing images if folder was reflowed (canonical key)
           if (needsResize) {
             const existingFolderImages = resolvedImages.filter(
-              img => img.folderId === folderId && (img.storagePath || img.originalStoragePath) && !newImages.find(n => n.id === img.id)
+              (img) =>
+                img.folderId === folderId &&
+                (img.storagePath || img.originalStoragePath) &&
+                !newImages.find((n) => n.id === img.id),
             );
-            const photoTable = sessionId ? 'collab_photos' : 'photo_edits';
+            const photoTable = sessionId ? "collab_photos" : "photo_edits";
             for (const img of existingFolderImages) {
               const canonicalPath = img.storagePath || img.originalStoragePath!;
               const query = supabase
                 .from(photoTable)
                 .update({ x: Math.round(img.x), y: Math.round(img.y) })
-                .eq('storage_path', canonicalPath);
-                
-              if (sessionId) query.eq('session_id', sessionId);
-              else query.eq('user_id', user.id);
-              
+                .eq("storage_path", canonicalPath);
+
+              if (sessionId) query.eq("session_id", sessionId);
+              else query.eq("user_id", user.id);
+
               await query;
             }
           }
@@ -1184,88 +1452,107 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
         // Update React Query cache directly instead of invalidating to avoid redundant network requests
         // Note: Query key must match CanvasEditor's queryKey: ['user-photos', userId, sessionId]
         if (user) {
-          const queryKey = sessionId 
-            ? ['user-photos', user.id, sessionId] 
-            : ['user-photos', user.id];
-          queryClient.setQueryData(queryKey, (old: {
-            savedEdits: unknown[];
-            savedFolders: unknown[];
-            photosFiles: unknown[];
-            originalsFiles: unknown[];
-          } | undefined) => {
-            const newEditsData = resolvedImages
-              .filter(img => (img.storagePath || img.originalStoragePath) && newImages.some(n => n.id === img.id))
-              .map(img => ({
-                storage_path: img.storagePath || img.originalStoragePath,
-                user_id: user.id,
-                ...(sessionId ? { session_id: sessionId } : {}),
-                folder_id: folderId,
-                x: Math.round(img.x),
-                y: Math.round(img.y),
-                width: Math.round(img.width),
-                height: Math.round(img.height),
-                rotation: img.rotation,
-                scale_x: img.scaleX,
-                scale_y: img.scaleY,
-                exposure: img.exposure,
-                contrast: img.contrast,
-                highlights: img.highlights,
-                shadows: img.shadows,
-                whites: img.whites,
-                blacks: img.blacks,
-                texture: img.texture ?? 0,
-                temperature: img.temperature,
-                vibrance: img.vibrance,
-                saturation: img.saturation,
-                shadow_tint: img.shadowTint ?? 0,
-                color_hsl: img.colorHSL ?? null,
-                split_toning: img.splitToning ?? null,
-                color_grading: img.colorGrading ?? null,
-                color_calibration: img.colorCalibration ?? null,
-                clarity: img.clarity,
-                dehaze: img.dehaze,
-                vignette: img.vignette,
-                grain: img.grain,
-                grain_size: img.grainSize ?? 0,
-                grain_roughness: img.grainRoughness ?? 0,
-                curves: img.curves,
-                brightness: img.brightness,
-                hue: img.hue,
-                blur: img.blur,
-                filters: img.filters,
-                original_storage_path: img.originalStoragePath ?? null,
-                is_raw: img.isRaw ?? false,
-                original_width: img.originalWidth ?? null,
-                original_height: img.originalHeight ?? null,
-                taken_at: img.takenAt ?? null,
-                camera_make: img.cameraMake ?? null,
-                camera_model: img.cameraModel ?? null,
-                labels: img.labels ?? null,
-                border_width: img.borderWidth ?? null,
-                border_color: img.borderColor ?? null,
-              }));
+          const queryKey = sessionId
+            ? ["user-photos", user.id, sessionId]
+            : ["user-photos", user.id];
+          queryClient.setQueryData(
+            queryKey,
+            (
+              old:
+                | {
+                    savedEdits: unknown[];
+                    savedFolders: unknown[];
+                    photosFiles: unknown[];
+                    originalsFiles: unknown[];
+                  }
+                | undefined,
+            ) => {
+              const newEditsData = resolvedImages
+                .filter(
+                  (img) =>
+                    (img.storagePath || img.originalStoragePath) &&
+                    newImages.some((n) => n.id === img.id),
+                )
+                .map((img) => ({
+                  storage_path: img.storagePath || img.originalStoragePath,
+                  user_id: user.id,
+                  ...(sessionId ? { session_id: sessionId } : {}),
+                  folder_id: folderId,
+                  x: Math.round(img.x),
+                  y: Math.round(img.y),
+                  width: Math.round(img.width),
+                  height: Math.round(img.height),
+                  rotation: img.rotation,
+                  scale_x: img.scaleX,
+                  scale_y: img.scaleY,
+                  exposure: img.exposure,
+                  contrast: img.contrast,
+                  highlights: img.highlights,
+                  shadows: img.shadows,
+                  whites: img.whites,
+                  blacks: img.blacks,
+                  texture: img.texture ?? 0,
+                  temperature: img.temperature,
+                  vibrance: img.vibrance,
+                  saturation: img.saturation,
+                  shadow_tint: img.shadowTint ?? 0,
+                  color_hsl: img.colorHSL ?? null,
+                  split_toning: img.splitToning ?? null,
+                  color_grading: img.colorGrading ?? null,
+                  color_calibration: img.colorCalibration ?? null,
+                  clarity: img.clarity,
+                  dehaze: img.dehaze,
+                  vignette: img.vignette,
+                  grain: img.grain,
+                  grain_size: img.grainSize ?? 0,
+                  grain_roughness: img.grainRoughness ?? 0,
+                  curves: img.curves,
+                  brightness: img.brightness,
+                  hue: img.hue,
+                  blur: img.blur,
+                  filters: img.filters,
+                  original_storage_path: img.originalStoragePath ?? null,
+                  is_raw: img.isRaw ?? false,
+                  original_width: img.originalWidth ?? null,
+                  original_height: img.originalHeight ?? null,
+                  taken_at: img.takenAt ?? null,
+                  camera_make: img.cameraMake ?? null,
+                  camera_model: img.cameraModel ?? null,
+                  labels: img.labels ?? null,
+                  border_width: img.borderWidth ?? null,
+                  border_color: img.borderColor ?? null,
+                }));
 
-            // Update folder if it was resized
-            const updatedFolder = resolvedFolders.find(f => f.id === folderId);
-            const updatedFolders = old?.savedFolders ? old.savedFolders.map((f) => {
-              const folder = f as { id: string; width?: number; height?: number };
-              if (folder.id === folderId && updatedFolder) {
-                return {
-                  ...folder,
-                  width: Math.round(updatedFolder.width),
-                  height: updatedFolder.height,
-                };
-              }
-              return folder;
-            }) : [];
+              // Update folder if it was resized
+              const updatedFolder = resolvedFolders.find(
+                (f) => f.id === folderId,
+              );
+              const updatedFolders = old?.savedFolders
+                ? old.savedFolders.map((f) => {
+                    const folder = f as {
+                      id: string;
+                      width?: number;
+                      height?: number;
+                    };
+                    if (folder.id === folderId && updatedFolder) {
+                      return {
+                        ...folder,
+                        width: Math.round(updatedFolder.width),
+                        height: updatedFolder.height,
+                      };
+                    }
+                    return folder;
+                  })
+                : [];
 
-            return {
-              savedEdits: [...(old?.savedEdits ?? []), ...newEditsData],
-              savedFolders: updatedFolders,
-              photosFiles: old?.photosFiles ?? [],
-              originalsFiles: old?.originalsFiles ?? [],
-            };
-          });
+              return {
+                savedEdits: [...(old?.savedEdits ?? []), ...newEditsData],
+                savedFolders: updatedFolders,
+                photosFiles: old?.photosFiles ?? [],
+                originalsFiles: old?.originalsFiles ?? [],
+              };
+            },
+          );
         }
         setTimeout(() => saveToHistory(), 100);
       }
@@ -1273,40 +1560,55 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
       pendingFilesRef.current = [];
       uiActions.setIsUploading(false);
     },
-    [user, saveToHistory, resolveOverlapsAndReflow, queryClient, updateImageLabels, sessionId]
+    [
+      user,
+      saveToHistory,
+      resolveOverlapsAndReflow,
+      queryClient,
+      updateImageLabels,
+      sessionId,
+    ],
   );
 
   // Handle adding photos to a specific folder via plus button
   const handleAddPhotosToFolder = useCallback((folderId: string) => {
-    console.log('handleAddPhotosToFolder called with folderId:', folderId);
+    console.log("handleAddPhotosToFolder called with folderId:", folderId);
     if (folderFileInputRef.current) {
-      folderFileInputRef.current.setAttribute('data-folder-id', folderId);
+      folderFileInputRef.current.setAttribute("data-folder-id", folderId);
       folderFileInputRef.current.click();
-      console.log('File input clicked');
+      console.log("File input clicked");
     } else {
-      console.error('folderFileInputRef.current is null');
+      console.error("folderFileInputRef.current is null");
     }
   }, []);
 
   // Handle file selection for folder plus button
   const handleFolderFileSelect = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const folderId = e.target.getAttribute('data-folder-id');
+      const folderId = e.target.getAttribute("data-folder-id");
       if (!folderId || !e.target.files || e.target.files.length === 0) {
         if (folderFileInputRef.current) {
-          folderFileInputRef.current.value = '';
+          folderFileInputRef.current.value = "";
         }
         return;
       }
 
       // Validate files
-      const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/x-adobe-dng'];
-      const validFiles = Array.from(e.target.files).filter(f => validTypes.includes(f.type) || f.name.toLowerCase().endsWith('.dng'));
+      const validTypes = [
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/x-adobe-dng",
+      ];
+      const validFiles = Array.from(e.target.files).filter(
+        (f) =>
+          validTypes.includes(f.type) || f.name.toLowerCase().endsWith(".dng"),
+      );
 
       if (validFiles.length === 0) {
-        alert('Please upload JPEG, PNG, WebP, or DNG files only.');
+        alert("Please upload JPEG, PNG, WebP, or DNG files only.");
         if (folderFileInputRef.current) {
-          folderFileInputRef.current.value = '';
+          folderFileInputRef.current.value = "";
         }
         return;
       }
@@ -1317,10 +1619,10 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
 
       // Reset input
       if (folderFileInputRef.current) {
-        folderFileInputRef.current.value = '';
+        folderFileInputRef.current.value = "";
       }
     },
-    [addFilesToExistingFolder]
+    [addFilesToExistingFolder],
   );
 
   // Handle drag and drop
@@ -1330,7 +1632,7 @@ export function useUpload({ user, saveToHistory, resolveOverlapsAndReflow, sessi
       const files = e.dataTransfer.files;
       handleFileUpload(files);
     },
-    [handleFileUpload]
+    [handleFileUpload],
   );
 
   const handleDragOver = useCallback((e: React.DragEvent) => {

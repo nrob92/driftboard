@@ -1,6 +1,6 @@
-import { create } from 'zustand';
-import { immer } from 'zustand/middleware/immer';
-import type { CanvasImage, PhotoFolder } from '@/lib/types';
+import { create } from "zustand";
+import { immer } from "zustand/middleware/immer";
+import type { PhotoFolder } from "@/lib/types";
 
 interface FolderPromptState {
   showFolderPrompt: boolean;
@@ -33,7 +33,12 @@ interface CreateSocialLayoutState {
 
 interface ContextMenuState {
   folderContextMenu: { x: number; y: number; folderId: string } | null;
-  imageContextMenu: { x: number; y: number; imageId: string; selectedIds: string[] } | null;
+  imageContextMenu: {
+    x: number;
+    y: number;
+    imageId: string;
+    selectedIds: string[];
+  } | null;
   canvasContextMenu: { x: number; y: number } | null;
 }
 
@@ -46,13 +51,14 @@ interface DeleteConfirmState {
   deleteFolderProgress: { current: number; total: number } | null;
 }
 
-interface UIState extends
-  FolderPromptState,
-  CreateFolderFromSelectionState,
-  CreateEmptyFolderState,
-  CreateSocialLayoutState,
-  ContextMenuState,
-  DeleteConfirmState {
+interface UIState
+  extends
+    FolderPromptState,
+    CreateFolderFromSelectionState,
+    CreateEmptyFolderState,
+    CreateSocialLayoutState,
+    ContextMenuState,
+    DeleteConfirmState {
   // Misc UI
   borderDialogImageId: string | null;
   createPresetFromImageId: string | null;
@@ -60,7 +66,7 @@ interface UIState extends
   applyPresetToSelectionIds: string[] | null;
   exportProgress: { current: number; total: number } | null;
   applyPresetProgress: { current: number; total: number } | null;
-  saveStatus: 'idle' | 'saving' | 'saved' | 'error';
+  saveStatus: "idle" | "saving" | "saved" | "error";
   zoomedImageId: string | null;
   showHeader: boolean;
   photoFilter: {
@@ -92,25 +98,37 @@ interface UIState extends
   setCreateSocialLayoutName: (v: string) => void;
   setCreateSocialLayoutPages: (v: number) => void;
   setCreateSocialLayoutNameError: (v: string) => void;
-  setFolderContextMenu: (v: { x: number; y: number; folderId: string } | null) => void;
-  setImageContextMenu: (v: { x: number; y: number; imageId: string; selectedIds: string[] } | null) => void;
+  setFolderContextMenu: (
+    v: { x: number; y: number; folderId: string } | null,
+  ) => void;
+  setImageContextMenu: (
+    v: { x: number; y: number; imageId: string; selectedIds: string[] } | null,
+  ) => void;
   setCanvasContextMenu: (v: { x: number; y: number } | null) => void;
   setConfirmDeleteFolderOpen: (v: boolean) => void;
   setDeleteFolderDontAskAgain: (v: boolean) => void;
   setDeletingPhotoId: (v: string | null) => void;
   setConfirmDeletePhotoIds: (v: string[] | null) => void;
   setDeletePhotoDontAskAgain: (v: boolean) => void;
-  setDeleteFolderProgress: (v: { current: number; total: number } | null) => void;
+  setDeleteFolderProgress: (
+    v: { current: number; total: number } | null,
+  ) => void;
   setBorderDialogImageId: (v: string | null) => void;
   setCreatePresetFromImageId: (v: string | null) => void;
   setCreatePresetName: (v: string) => void;
   setApplyPresetToSelectionIds: (v: string[] | null) => void;
   setExportProgress: (v: { current: number; total: number } | null) => void;
-  setApplyPresetProgress: (v: { current: number; total: number } | null) => void;
-  setSaveStatus: (v: 'idle' | 'saving' | 'saved' | 'error') => void;
+  setApplyPresetProgress: (
+    v: { current: number; total: number } | null,
+  ) => void;
+  setSaveStatus: (v: "idle" | "saving" | "saved" | "error") => void;
   setZoomedImageId: (v: string | null) => void;
   setShowHeader: (v: boolean) => void;
-  setPhotoFilter: (v: UIState['photoFilter'] | ((prev: UIState['photoFilter']) => UIState['photoFilter'])) => void;
+  setPhotoFilter: (
+    v:
+      | UIState["photoFilter"]
+      | ((prev: UIState["photoFilter"]) => UIState["photoFilter"]),
+  ) => void;
   setIsUploading: (v: boolean) => void;
   setMobileEditFullscreen: (v: boolean) => void;
   setMobileMenuOpen: (v: boolean) => void;
@@ -121,28 +139,28 @@ export const useUIStore = create<UIState>()(
   immer((set) => ({
     // Folder prompt
     showFolderPrompt: false,
-    newFolderName: '',
+    newFolderName: "",
     pendingFileCount: 0,
     editingFolder: null,
-    editingFolderName: '',
+    editingFolderName: "",
     selectedExistingFolderId: null,
-    folderNameError: '',
+    folderNameError: "",
 
     // Create from selection
     createFolderFromSelectionIds: null,
-    createFolderFromSelectionName: '',
-    createFolderFromSelectionNameError: '',
+    createFolderFromSelectionName: "",
+    createFolderFromSelectionNameError: "",
 
     // Create empty folder
     createEmptyFolderOpen: false,
-    createEmptyFolderName: '',
-    createEmptyFolderNameError: '',
+    createEmptyFolderName: "",
+    createEmptyFolderNameError: "",
 
     // Create social layout
     createSocialLayoutOpen: false,
-    createSocialLayoutName: '',
+    createSocialLayoutName: "",
     createSocialLayoutPages: 3,
-    createSocialLayoutNameError: '',
+    createSocialLayoutNameError: "",
 
     // Context menus
     folderContextMenu: null,
@@ -160,11 +178,11 @@ export const useUIStore = create<UIState>()(
     // Misc UI
     borderDialogImageId: null,
     createPresetFromImageId: null,
-    createPresetName: '',
+    createPresetName: "",
     applyPresetToSelectionIds: null,
     exportProgress: null,
     applyPresetProgress: null,
-    saveStatus: 'idle',
+    saveStatus: "idle",
     zoomedImageId: null,
     showHeader: false,
     photoFilter: {},
@@ -180,16 +198,21 @@ export const useUIStore = create<UIState>()(
     setEditingFolderName: (v) => set({ editingFolderName: v }),
     setSelectedExistingFolderId: (v) => set({ selectedExistingFolderId: v }),
     setFolderNameError: (v) => set({ folderNameError: v }),
-    setCreateFolderFromSelectionIds: (v) => set({ createFolderFromSelectionIds: v }),
-    setCreateFolderFromSelectionName: (v) => set({ createFolderFromSelectionName: v }),
-    setCreateFolderFromSelectionNameError: (v) => set({ createFolderFromSelectionNameError: v }),
+    setCreateFolderFromSelectionIds: (v) =>
+      set({ createFolderFromSelectionIds: v }),
+    setCreateFolderFromSelectionName: (v) =>
+      set({ createFolderFromSelectionName: v }),
+    setCreateFolderFromSelectionNameError: (v) =>
+      set({ createFolderFromSelectionNameError: v }),
     setCreateEmptyFolderOpen: (v) => set({ createEmptyFolderOpen: v }),
     setCreateEmptyFolderName: (v) => set({ createEmptyFolderName: v }),
-    setCreateEmptyFolderNameError: (v) => set({ createEmptyFolderNameError: v }),
+    setCreateEmptyFolderNameError: (v) =>
+      set({ createEmptyFolderNameError: v }),
     setCreateSocialLayoutOpen: (v) => set({ createSocialLayoutOpen: v }),
     setCreateSocialLayoutName: (v) => set({ createSocialLayoutName: v }),
     setCreateSocialLayoutPages: (v) => set({ createSocialLayoutPages: v }),
-    setCreateSocialLayoutNameError: (v) => set({ createSocialLayoutNameError: v }),
+    setCreateSocialLayoutNameError: (v) =>
+      set({ createSocialLayoutNameError: v }),
     setFolderContextMenu: (v) => set({ folderContextMenu: v }),
     setImageContextMenu: (v) => set({ imageContextMenu: v }),
     setCanvasContextMenu: (v) => set({ canvasContextMenu: v }),
@@ -208,18 +231,20 @@ export const useUIStore = create<UIState>()(
     setSaveStatus: (v) => set({ saveStatus: v }),
     setZoomedImageId: (v) => set({ zoomedImageId: v }),
     setShowHeader: (v) => set({ showHeader: v }),
-    setPhotoFilter: (v) => set((state) => {
-      state.photoFilter = typeof v === 'function' ? v(state.photoFilter) : v;
-    }),
+    setPhotoFilter: (v) =>
+      set((state) => {
+        state.photoFilter = typeof v === "function" ? v(state.photoFilter) : v;
+      }),
     setIsUploading: (v) => set({ isUploading: v }),
     setMobileEditFullscreen: (v) => set({ mobileEditFullscreen: v }),
     setMobileMenuOpen: (v) => set({ mobileMenuOpen: v }),
-    closeAllMenus: () => set({
-      folderContextMenu: null,
-      imageContextMenu: null,
-      canvasContextMenu: null,
-    }),
-  }))
+    closeAllMenus: () =>
+      set({
+        folderContextMenu: null,
+        imageContextMenu: null,
+        canvasContextMenu: null,
+      }),
+  })),
 );
 
 // Selectors

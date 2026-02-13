@@ -1,9 +1,10 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
 );
 
 // const GEMINI_API_KEY = process.env.GOOGLE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
@@ -12,12 +13,16 @@ const supabase = createClient(
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { storagePath, userId, sessionId } = body as { storagePath?: string; userId?: string; sessionId?: string };
+    const { storagePath, userId, sessionId } = body as {
+      storagePath?: string;
+      userId?: string;
+      sessionId?: string;
+    };
 
     if (!storagePath || !userId) {
       return NextResponse.json(
-        { error: 'Missing storagePath or userId' },
-        { status: 400 }
+        { error: "Missing storagePath or userId" },
+        { status: 400 },
       );
     }
 
@@ -30,27 +35,29 @@ export async function POST(request: NextRequest) {
     // }
 
     // Prefer photos bucket (preview); path usually is userId/filename or sessionId/filename
-    const bucket = storagePath.toLowerCase().endsWith('.dng') 
-      ? 'originals' 
-      : (sessionId ? 'collab-photos' : 'photos');
-      
+    const bucket = storagePath.toLowerCase().endsWith(".dng")
+      ? "originals"
+      : sessionId
+        ? "collab-photos"
+        : "photos";
+
     const { data: signed, error: signError } = await supabase.storage
       .from(bucket)
       .createSignedUrl(storagePath, 300);
 
     if (signError || !signed?.signedUrl) {
-      console.error('label-photo signed URL failed:', signError);
+      console.error("label-photo signed URL failed:", signError);
       return NextResponse.json(
-        { error: 'Failed to get image URL' },
-        { status: 500 }
+        { error: "Failed to get image URL" },
+        { status: 500 },
       );
     }
 
     const imageResponse = await fetch(signed.signedUrl);
     if (!imageResponse.ok) {
       return NextResponse.json(
-        { error: 'Failed to fetch image' },
-        { status: 500 }
+        { error: "Failed to fetch image" },
+        { status: 500 },
       );
     }
 
@@ -111,34 +118,34 @@ export async function POST(request: NextRequest) {
     // Return empty labels for now
     const labels: string[] = [];
 
-    const table = sessionId ? 'collab_photos' : 'photo_edits';
+    const table = sessionId ? "collab_photos" : "photo_edits";
     const query = supabase
       .from(table)
       .update({ labels })
-      .eq('storage_path', storagePath);
-      
+      .eq("storage_path", storagePath);
+
     if (sessionId) {
-      query.eq('session_id', sessionId);
+      query.eq("session_id", sessionId);
     } else {
-      query.eq('user_id', userId);
+      query.eq("user_id", userId);
     }
 
     const { error: updateError } = await query;
 
     if (updateError) {
-      console.error('label-photo update error:', updateError);
+      console.error("label-photo update error:", updateError);
       return NextResponse.json(
-        { error: 'Failed to save labels' },
-        { status: 500 }
+        { error: "Failed to save labels" },
+        { status: 500 },
       );
     }
 
     return NextResponse.json({ labels });
   } catch (error) {
-    console.error('label-photo error:', error);
+    console.error("label-photo error:", error);
     return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
+      { error: "Internal server error" },
+      { status: 500 },
     );
   }
 }

@@ -1,6 +1,6 @@
-'use client';
+"use client";
 
-import React, { useCallback, useRef, useState, useEffect } from 'react';
+import React, { useCallback, useRef, useState, useEffect } from "react";
 
 interface CurvePoint {
   x: number;
@@ -21,26 +21,31 @@ interface CurvesEditorProps {
   isMobile?: boolean;
 }
 
-type Channel = 'rgb' | 'red' | 'green' | 'blue';
+type Channel = "rgb" | "red" | "green" | "blue";
 
 const channelColors: Record<Channel, string> = {
-  rgb: '#ffffff',
-  red: '#ff6b6b',
-  green: '#51cf66',
-  blue: '#74c0fc',
+  rgb: "#ffffff",
+  red: "#ff6b6b",
+  green: "#51cf66",
+  blue: "#74c0fc",
 };
 
 const channelBgColors: Record<Channel, string> = {
-  rgb: '#333',
-  red: '#4a2020',
-  green: '#1a3a1a',
-  blue: '#1a2a4a',
+  rgb: "#333",
+  red: "#4a2020",
+  green: "#1a3a1a",
+  blue: "#1a2a4a",
 };
 
-export function CurvesEditor({ curves, onChange, onClose, isMobile }: CurvesEditorProps) {
+export function CurvesEditor({
+  curves,
+  onChange,
+  onClose,
+  isMobile,
+}: CurvesEditorProps) {
   const canvasSize = isMobile ? 260 : 200;
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [activeChannel, setActiveChannel] = useState<Channel>('rgb');
+  const [activeChannel, setActiveChannel] = useState<Channel>("rgb");
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [localCurves, setLocalCurves] = useState<ChannelCurves>(curves);
 
@@ -48,47 +53,56 @@ export function CurvesEditor({ curves, onChange, onClose, isMobile }: CurvesEdit
   const curveColor = channelColors[activeChannel];
 
   // Interpolate curve using monotone cubic spline (identity = pass-through when default two points)
-  const interpolateCurve = useCallback((pts: CurvePoint[], x: number): number => {
-    if (pts.length === 0) return x;
-    if (pts.length === 1) return pts[0].y;
-    if (pts.length === 2) {
+  const interpolateCurve = useCallback(
+    (pts: CurvePoint[], x: number): number => {
+      if (pts.length === 0) return x;
+      if (pts.length === 1) return pts[0].y;
+      if (pts.length === 2) {
+        const sorted = [...pts].sort((a, b) => a.x - b.x);
+        if (
+          sorted[0].x === 0 &&
+          sorted[0].y === 0 &&
+          sorted[1].x === 255 &&
+          sorted[1].y === 255
+        )
+          return x;
+      }
+
       const sorted = [...pts].sort((a, b) => a.x - b.x);
-      if (sorted[0].x === 0 && sorted[0].y === 0 && sorted[1].x === 255 && sorted[1].y === 255) return x;
-    }
 
-    const sorted = [...pts].sort((a, b) => a.x - b.x);
+      if (x <= sorted[0].x) return sorted[0].y;
+      if (x >= sorted[sorted.length - 1].x) return sorted[sorted.length - 1].y;
 
-    if (x <= sorted[0].x) return sorted[0].y;
-    if (x >= sorted[sorted.length - 1].x) return sorted[sorted.length - 1].y;
+      let i = 0;
+      while (i < sorted.length - 1 && sorted[i + 1].x < x) i++;
 
-    let i = 0;
-    while (i < sorted.length - 1 && sorted[i + 1].x < x) i++;
+      const p0 = sorted[Math.max(0, i - 1)];
+      const p1 = sorted[i];
+      const p2 = sorted[Math.min(sorted.length - 1, i + 1)];
+      const p3 = sorted[Math.min(sorted.length - 1, i + 2)];
 
-    const p0 = sorted[Math.max(0, i - 1)];
-    const p1 = sorted[i];
-    const p2 = sorted[Math.min(sorted.length - 1, i + 1)];
-    const p3 = sorted[Math.min(sorted.length - 1, i + 2)];
+      const t = (x - p1.x) / (p2.x - p1.x || 1);
+      const t2 = t * t;
+      const t3 = t2 * t;
 
-    const t = (x - p1.x) / (p2.x - p1.x || 1);
-    const t2 = t * t;
-    const t3 = t2 * t;
+      const y =
+        0.5 *
+        (2 * p1.y +
+          (-p0.y + p2.y) * t +
+          (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
+          (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3);
 
-    const y = 0.5 * (
-      (2 * p1.y) +
-      (-p0.y + p2.y) * t +
-      (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
-      (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
-    );
-
-    return Math.max(0, Math.min(255, y));
-  }, []);
+      return Math.max(0, Math.min(255, y));
+    },
+    [],
+  );
 
   // Draw the curve
   const drawCurve = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
     const width = canvas.width;
@@ -99,7 +113,8 @@ export function CurvesEditor({ curves, onChange, onClose, isMobile }: CurvesEdit
     ctx.fillRect(0, 0, width, height);
 
     // Grid
-    ctx.strokeStyle = activeChannel === 'rgb' ? '#3a3a3a' : 'rgba(255,255,255,0.1)';
+    ctx.strokeStyle =
+      activeChannel === "rgb" ? "#3a3a3a" : "rgba(255,255,255,0.1)";
     ctx.lineWidth = 1;
     for (let i = 1; i < 4; i++) {
       const pos = (i / 4) * width;
@@ -114,7 +129,8 @@ export function CurvesEditor({ curves, onChange, onClose, isMobile }: CurvesEdit
     }
 
     // Diagonal reference line
-    ctx.strokeStyle = activeChannel === 'rgb' ? '#444' : 'rgba(255,255,255,0.15)';
+    ctx.strokeStyle =
+      activeChannel === "rgb" ? "#444" : "rgba(255,255,255,0.15)";
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
     ctx.moveTo(0, height);
@@ -148,7 +164,7 @@ export function CurvesEditor({ curves, onChange, onClose, isMobile }: CurvesEdit
       // Outer ring
       ctx.beginPath();
       ctx.arc(canvasX, canvasY, 7, 0, Math.PI * 2);
-      ctx.fillStyle = draggingIndex === index ? curveColor : '#1a1a1a';
+      ctx.fillStyle = draggingIndex === index ? curveColor : "#1a1a1a";
       ctx.fill();
       ctx.strokeStyle = curveColor;
       ctx.lineWidth = 2;
@@ -160,7 +176,13 @@ export function CurvesEditor({ curves, onChange, onClose, isMobile }: CurvesEdit
       ctx.fillStyle = curveColor;
       ctx.fill();
     });
-  }, [currentPoints, activeChannel, curveColor, draggingIndex, interpolateCurve]);
+  }, [
+    currentPoints,
+    activeChannel,
+    curveColor,
+    draggingIndex,
+    interpolateCurve,
+  ]);
 
   useEffect(() => {
     drawCurve();
@@ -193,7 +215,7 @@ export function CurvesEditor({ curves, onChange, onClose, isMobile }: CurvesEdit
       setDraggingIndex(pointIndex);
     } else {
       const newPoints = [...currentPoints, { x, y }].sort((a, b) => a.x - b.x);
-      setLocalCurves(prev => ({ ...prev, [activeChannel]: newPoints }));
+      setLocalCurves((prev) => ({ ...prev, [activeChannel]: newPoints }));
       setDraggingIndex(newPoints.findIndex((p) => p.x === x && p.y === y));
     }
   };
@@ -202,9 +224,10 @@ export function CurvesEditor({ curves, onChange, onClose, isMobile }: CurvesEdit
     if (draggingIndex === null) return;
 
     const { x, y } = getCanvasCoords(e);
-    const isEndpoint = draggingIndex === 0 || draggingIndex === currentPoints.length - 1;
+    const isEndpoint =
+      draggingIndex === 0 || draggingIndex === currentPoints.length - 1;
 
-    setLocalCurves(prev => {
+    setLocalCurves((prev) => {
       const newPoints = [...prev[activeChannel]];
       if (isEndpoint) {
         newPoints[draggingIndex] = { ...newPoints[draggingIndex], y };
@@ -234,20 +257,26 @@ export function CurvesEditor({ curves, onChange, onClose, isMobile }: CurvesEdit
 
     if (pointIndex !== -1) {
       const newPoints = currentPoints.filter((_, i) => i !== pointIndex);
-      setLocalCurves(prev => ({ ...prev, [activeChannel]: newPoints }));
+      setLocalCurves((prev) => ({ ...prev, [activeChannel]: newPoints }));
       onChange({ ...localCurves, [activeChannel]: newPoints });
     }
   };
 
   const handleReset = () => {
-    const defaultPoints = [{ x: 0, y: 0 }, { x: 255, y: 255 }];
+    const defaultPoints = [
+      { x: 0, y: 0 },
+      { x: 255, y: 255 },
+    ];
     const newCurves = { ...localCurves, [activeChannel]: defaultPoints };
     setLocalCurves(newCurves);
     onChange(newCurves);
   };
 
   const handleResetAll = () => {
-    const defaultPoints = [{ x: 0, y: 0 }, { x: 255, y: 255 }];
+    const defaultPoints = [
+      { x: 0, y: 0 },
+      { x: 255, y: 255 },
+    ];
     const newCurves = {
       rgb: defaultPoints,
       red: [...defaultPoints],
@@ -281,8 +310,18 @@ export function CurvesEditor({ curves, onChange, onClose, isMobile }: CurvesEdit
               onClick={onClose}
               className="p-1 text-[#888] hover:text-white transition-colors cursor-pointer"
             >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              <svg
+                className="w-3.5 h-3.5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
               </svg>
             </button>
           </div>
@@ -290,20 +329,20 @@ export function CurvesEditor({ curves, onChange, onClose, isMobile }: CurvesEdit
 
         {/* Channel Tabs */}
         <div className="flex gap-0.5 mb-1.5">
-          {(['rgb', 'red', 'green', 'blue'] as Channel[]).map((channel) => (
+          {(["rgb", "red", "green", "blue"] as Channel[]).map((channel) => (
             <button
               key={channel}
               onClick={() => setActiveChannel(channel)}
-              className={`${isMobile ? 'px-3 py-2 text-xs min-h-[44px]' : 'px-1.5 py-0.5 text-[9px]'} font-medium rounded transition-all cursor-pointer ${
+              className={`${isMobile ? "px-3 py-2 text-xs min-h-[44px]" : "px-1.5 py-0.5 text-[9px]"} font-medium rounded transition-all cursor-pointer ${
                 activeChannel === channel
-                  ? channel === 'rgb'
-                    ? 'bg-white/20 text-white'
-                    : channel === 'red'
-                    ? 'bg-red-500/30 text-red-400'
-                    : channel === 'green'
-                    ? 'bg-green-500/30 text-green-400'
-                    : 'bg-blue-500/30 text-blue-400'
-                  : 'bg-[#252525] text-[#666] hover:text-[#999]'
+                  ? channel === "rgb"
+                    ? "bg-white/20 text-white"
+                    : channel === "red"
+                      ? "bg-red-500/30 text-red-400"
+                      : channel === "green"
+                        ? "bg-green-500/30 text-green-400"
+                        : "bg-blue-500/30 text-blue-400"
+                  : "bg-[#252525] text-[#666] hover:text-[#999]"
               }`}
             >
               {channel.toUpperCase()}
@@ -325,12 +364,20 @@ export function CurvesEditor({ curves, onChange, onClose, isMobile }: CurvesEdit
           onDoubleClick={handleDoubleClick}
           onTouchStart={(e) => {
             const touch = e.touches[0];
-            if (touch) handleMouseDown({ clientX: touch.clientX, clientY: touch.clientY } as React.MouseEvent<HTMLCanvasElement>);
+            if (touch)
+              handleMouseDown({
+                clientX: touch.clientX,
+                clientY: touch.clientY,
+              } as React.MouseEvent<HTMLCanvasElement>);
           }}
           onTouchMove={(e) => {
             e.preventDefault();
             const touch = e.touches[0];
-            if (touch) handleMouseMove({ clientX: touch.clientX, clientY: touch.clientY } as React.MouseEvent<HTMLCanvasElement>);
+            if (touch)
+              handleMouseMove({
+                clientX: touch.clientX,
+                clientY: touch.clientY,
+              } as React.MouseEvent<HTMLCanvasElement>);
           }}
           onTouchEnd={() => handleMouseUp()}
         />

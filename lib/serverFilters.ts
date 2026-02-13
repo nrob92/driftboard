@@ -6,12 +6,14 @@
  */
 
 import {
-  type CurvePoint, type ChannelCurves, type ColorHSL,
-  type SplitToning, type ColorGrading, type ColorCalibration,
+  type ColorHSL,
+  type SplitToning,
+  type ColorGrading,
+  type ColorCalibration,
   type EditValues,
-} from '@/lib/types';
-import { buildLUT } from './filters/core/lut';
-import { hslToRgb, clamp8 } from './filters/core/color';
+} from "@/lib/types";
+import { buildLUT } from "./filters/core/lut";
+import { hslToRgb, clamp8 } from "./filters/core/color";
 
 export type { EditValues };
 
@@ -29,7 +31,7 @@ export function applyEdits(
   data: Buffer,
   width: number,
   height: number,
-  edits: EditValues
+  edits: EditValues,
 ): Buffer {
   // Create a copy to work with
   const result = Buffer.from(data);
@@ -74,10 +76,12 @@ export function applyEdits(
   }
 
   // 3. Tonal adjustments (highlights, shadows, whites, blacks)
-  if ((edits.highlights && edits.highlights !== 0) ||
-      (edits.shadows && edits.shadows !== 0) ||
-      (edits.whites && edits.whites !== 0) ||
-      (edits.blacks && edits.blacks !== 0)) {
+  if (
+    (edits.highlights && edits.highlights !== 0) ||
+    (edits.shadows && edits.shadows !== 0) ||
+    (edits.whites && edits.whites !== 0) ||
+    (edits.blacks && edits.blacks !== 0)
+  ) {
     const lut = new Uint8Array(256);
     const highlights = edits.highlights || 0;
     const shadows = edits.shadows || 0;
@@ -116,7 +120,7 @@ export function applyEdits(
   if (edits.temperature && edits.temperature !== 0) {
     const tempFactor = edits.temperature * 30;
     for (let i = 0; i < pixelCount * 3; i += 3) {
-      result[i] = clamp(result[i] + tempFactor);       // R
+      result[i] = clamp(result[i] + tempFactor); // R
       result[i + 2] = clamp(result[i + 2] - tempFactor); // B
     }
   }
@@ -149,7 +153,9 @@ export function applyEdits(
   if (edits.saturation && edits.saturation !== 0) {
     const sat = 1 + edits.saturation;
     for (let i = 0; i < pixelCount * 3; i += 3) {
-      const r = result[i], g = result[i + 1], b = result[i + 2];
+      const r = result[i],
+        g = result[i + 1],
+        b = result[i + 2];
       const gray = 0.299 * r + 0.587 * g + 0.114 * b;
       result[i] = clamp(gray + (r - gray) * sat);
       result[i + 1] = clamp(gray + (g - gray) * sat);
@@ -161,7 +167,9 @@ export function applyEdits(
   if (edits.vibrance && edits.vibrance !== 0) {
     const amt = edits.vibrance * 1.5;
     for (let i = 0; i < pixelCount * 3; i += 3) {
-      const r = result[i], g = result[i + 1], b = result[i + 2];
+      const r = result[i],
+        g = result[i + 1],
+        b = result[i + 2];
       const max = Math.max(r, g, b);
       const min = Math.min(r, g, b);
       if (max === 0) continue;
@@ -202,7 +210,9 @@ export function applyEdits(
     const satBoost = 1 + edits.dehaze * 0.3;
 
     for (let i = 0; i < pixelCount * 3; i += 3) {
-      let r = result[i], g = result[i + 1], b = result[i + 2];
+      let r = result[i],
+        g = result[i + 1],
+        b = result[i + 2];
 
       // Contrast
       r = 128 + (r - 128) * contrastBoost;
@@ -260,16 +270,20 @@ export function applyEdits(
 }
 
 // HSL per-color filter
-function applyHSLColorFilter(data: Buffer, pixelCount: number, colorHSL: ColorHSL): void {
+function applyHSLColorFilter(
+  data: Buffer,
+  pixelCount: number,
+  colorHSL: ColorHSL,
+): void {
   const colorCenters: { name: keyof ColorHSL; center: number }[] = [
-    { name: 'red', center: 0 },
-    { name: 'orange', center: 30 },
-    { name: 'yellow', center: 60 },
-    { name: 'green', center: 120 },
-    { name: 'aqua', center: 180 },
-    { name: 'blue', center: 225 },
-    { name: 'purple', center: 270 },
-    { name: 'magenta', center: 315 },
+    { name: "red", center: 0 },
+    { name: "orange", center: 30 },
+    { name: "yellow", center: 60 },
+    { name: "green", center: 120 },
+    { name: "aqua", center: 180 },
+    { name: "blue", center: 225 },
+    { name: "purple", center: 270 },
+    { name: "magenta", center: 315 },
   ];
 
   const getColorWeight = (hue360: number, centerHue: number): number => {
@@ -286,7 +300,10 @@ function applyHSLColorFilter(data: Buffer, pixelCount: number, colorHSL: ColorHS
   const lumLUT = new Float32Array(360);
 
   for (let hue = 0; hue < 360; hue++) {
-    let totalHueAdj = 0, totalSatAdj = 0, totalLumAdj = 0, totalWeight = 0;
+    let totalHueAdj = 0,
+      totalSatAdj = 0,
+      totalLumAdj = 0,
+      totalWeight = 0;
 
     for (const { name, center } of colorCenters) {
       const weight = getColorWeight(hue, center);
@@ -370,7 +387,11 @@ function applyHSLColorFilter(data: Buffer, pixelCount: number, colorHSL: ColorHS
 }
 
 // Split Toning filter
-function applySplitToning(data: Buffer, pixelCount: number, splitToning: SplitToning): void {
+function applySplitToning(
+  data: Buffer,
+  pixelCount: number,
+  splitToning: SplitToning,
+): void {
   for (let i = 0; i < pixelCount * 3; i += 3) {
     const r = data[i] / 255;
     const g = data[i + 1] / 255;
@@ -381,18 +402,27 @@ function applySplitToning(data: Buffer, pixelCount: number, splitToning: SplitTo
     const isShadow = lum < balanceFactor;
 
     const hue = isShadow ? splitToning.shadowHue : splitToning.highlightHue;
-    const saturation = (isShadow ? splitToning.shadowSaturation : splitToning.highlightSaturation) / 100;
+    const saturation =
+      (isShadow
+        ? splitToning.shadowSaturation
+        : splitToning.highlightSaturation) / 100;
 
     if (saturation > 0) {
       const h = hue / 360;
       const [toneR, toneG, toneB] = hslToRgb(h, saturation, lum);
 
-      const blend = isShadow ? (1 - lum) : lum;
+      const blend = isShadow ? 1 - lum : lum;
       const blendAmount = saturation * blend;
 
-      data[i] = clamp((r * (1 - blendAmount) + toneR / 255 * blendAmount) * 255);
-      data[i + 1] = clamp((g * (1 - blendAmount) + toneG / 255 * blendAmount) * 255);
-      data[i + 2] = clamp((b * (1 - blendAmount) + toneB / 255 * blendAmount) * 255);
+      data[i] = clamp(
+        (r * (1 - blendAmount) + (toneR / 255) * blendAmount) * 255,
+      );
+      data[i + 1] = clamp(
+        (g * (1 - blendAmount) + (toneG / 255) * blendAmount) * 255,
+      );
+      data[i + 2] = clamp(
+        (b * (1 - blendAmount) + (toneB / 255) * blendAmount) * 255,
+      );
     }
   }
 }
@@ -423,7 +453,11 @@ function applyShadowTint(data: Buffer, pixelCount: number, tint: number): void {
 }
 
 // Color Grading filter
-function applyColorGrading(data: Buffer, pixelCount: number, colorGrading: ColorGrading): void {
+function applyColorGrading(
+  data: Buffer,
+  pixelCount: number,
+  colorGrading: ColorGrading,
+): void {
   const blending = colorGrading.blending / 100;
 
   for (let i = 0; i < pixelCount * 3; i += 3) {
@@ -454,20 +488,24 @@ function applyColorGrading(data: Buffer, pixelCount: number, colorGrading: Color
       const s = (colorGrading.midtoneSat / 100) * midtoneWeight;
       const [toneR, toneG, toneB] = hslToRgb(h, s, finalLum);
 
-      r = r * (1 - s * blending) + toneR / 255 * s * blending;
-      g = g * (1 - s * blending) + toneG / 255 * s * blending;
-      b = b * (1 - s * blending) + toneB / 255 * s * blending;
+      r = r * (1 - s * blending) + (toneR / 255) * s * blending;
+      g = g * (1 - s * blending) + (toneG / 255) * s * blending;
+      b = b * (1 - s * blending) + (toneB / 255) * s * blending;
     }
 
     // Apply global color
     if (colorGrading.globalSat > 0) {
       const h = colorGrading.globalHue / 360;
       const s = (colorGrading.globalSat / 100) * blending;
-      const [toneR, toneG, toneB] = hslToRgb(h, s, (0.299 * r + 0.587 * g + 0.114 * b));
+      const [toneR, toneG, toneB] = hslToRgb(
+        h,
+        s,
+        0.299 * r + 0.587 * g + 0.114 * b,
+      );
 
-      r = r * (1 - s) + toneR / 255 * s;
-      g = g * (1 - s) + toneG / 255 * s;
-      b = b * (1 - s) + toneB / 255 * s;
+      r = r * (1 - s) + (toneR / 255) * s;
+      g = g * (1 - s) + (toneG / 255) * s;
+      b = b * (1 - s) + (toneB / 255) * s;
     }
 
     data[i] = clamp(r * 255);
@@ -477,7 +515,11 @@ function applyColorGrading(data: Buffer, pixelCount: number, colorGrading: Color
 }
 
 // Color Calibration filter
-function applyColorCalibration(data: Buffer, pixelCount: number, colorCal: ColorCalibration): void {
+function applyColorCalibration(
+  data: Buffer,
+  pixelCount: number,
+  colorCal: ColorCalibration,
+): void {
   for (let i = 0; i < pixelCount * 3; i += 3) {
     let r = data[i] / 255;
     let g = data[i + 1] / 255;
@@ -498,14 +540,21 @@ function applyColorCalibration(data: Buffer, pixelCount: number, colorCal: Color
       }
       hue = (hue * 60 + 360) % 360;
 
-      const redWeight = hue < 60 || hue > 300 ? 1 - Math.abs((hue < 60 ? hue : hue - 360)) / 60 : 0;
-      const greenWeight = hue >= 60 && hue < 180 ? 1 - Math.abs(hue - 120) / 60 : 0;
-      const blueWeight = hue >= 180 && hue < 300 ? 1 - Math.abs(hue - 240) / 60 : 0;
+      const redWeight =
+        hue < 60 || hue > 300
+          ? 1 - Math.abs(hue < 60 ? hue : hue - 360) / 60
+          : 0;
+      const greenWeight =
+        hue >= 60 && hue < 180 ? 1 - Math.abs(hue - 120) / 60 : 0;
+      const blueWeight =
+        hue >= 180 && hue < 300 ? 1 - Math.abs(hue - 240) / 60 : 0;
 
       // Apply saturation adjustments
-      const satAdj = (redWeight * colorCal.redSaturation +
-                      greenWeight * colorCal.greenSaturation +
-                      blueWeight * colorCal.blueSaturation) / 100;
+      const satAdj =
+        (redWeight * colorCal.redSaturation +
+          greenWeight * colorCal.greenSaturation +
+          blueWeight * colorCal.blueSaturation) /
+        100;
 
       if (satAdj !== 0) {
         const gray = 0.299 * r + 0.587 * g + 0.114 * b;
@@ -523,7 +572,12 @@ function applyColorCalibration(data: Buffer, pixelCount: number, colorCal: Color
 }
 
 // Vignette filter
-function applyVignette(data: Buffer, width: number, height: number, vignette: number): void {
+function applyVignette(
+  data: Buffer,
+  width: number,
+  height: number,
+  vignette: number,
+): void {
   const cx = width * 0.5;
   const cy = height * 0.5;
   const maxDistSq = cx * cx + cy * cy;

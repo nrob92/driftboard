@@ -5,9 +5,15 @@ export function snapToGrid(value: number, gridSize: number): number {
 export function findNearestPhoto(
   x: number,
   y: number,
-  photos: Array<{ id: string; x: number; y: number; width: number; height: number }>,
+  photos: Array<{
+    id: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }>,
   currentId: string,
-  snapDistance: number = 100
+  snapDistance: number = 100,
 ): { x: number; y: number } | null {
   let nearest: { x: number; y: number; distance: number } | null = null;
 

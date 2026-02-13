@@ -1,18 +1,29 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-import { isRawPath, getThumbPath, generateThumbnail } from '@/lib/utils/thumbnail';
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
+import {
+  isRawPath,
+  getThumbPath,
+  generateThumbnail,
+} from "@/lib/utils/thumbnail";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
 );
 
 const BATCH_CONCURRENCY = 4;
 
 async function processOneThumb(
   bucket: string,
-  path: string
-): Promise<{ bucket: string; path: string; signedUrl?: string; cached?: boolean; error?: string }> {
+  path: string,
+): Promise<{
+  bucket: string;
+  path: string;
+  signedUrl?: string;
+  cached?: boolean;
+  error?: string;
+}> {
   const thumbPath = getThumbPath(path);
 
   try {
@@ -31,7 +42,11 @@ async function processOneThumb(
       .download(path);
 
     if (downloadError || !fileData) {
-      return { bucket, path, error: downloadError?.message ?? 'Failed to download' };
+      return {
+        bucket,
+        path,
+        error: downloadError?.message ?? "Failed to download",
+      };
     }
 
     const arrayBuffer = await fileData.arrayBuffer();
@@ -41,14 +56,14 @@ async function processOneThumb(
     try {
       thumbBuffer = await generateThumbnail(sourceBuffer);
     } catch {
-      return { bucket, path, error: 'Failed to resize' };
+      return { bucket, path, error: "Failed to resize" };
     }
 
     const { error: uploadError } = await supabase.storage
       .from(bucket)
       .upload(thumbPath, thumbBuffer, {
-        contentType: 'image/jpeg',
-        cacheControl: '86400',
+        contentType: "image/jpeg",
+        cacheControl: "86400",
         upsert: true,
       });
 
@@ -61,7 +76,7 @@ async function processOneThumb(
       .createSignedUrl(thumbPath, 3600);
 
     if (urlError || !newUrl?.signedUrl) {
-      return { bucket, path, error: 'Failed to create signed URL' };
+      return { bucket, path, error: "Failed to create signed URL" };
     }
 
     return { bucket, path, signedUrl: newUrl.signedUrl, cached: false };
@@ -69,7 +84,7 @@ async function processOneThumb(
     return {
       bucket,
       path,
-      error: err instanceof Error ? err.message : 'Unknown error',
+      error: err instanceof Error ? err.message : "Unknown error",
     };
   }
 }
@@ -77,7 +92,7 @@ async function processOneThumb(
 async function runWithConcurrency<T, R>(
   items: T[],
   concurrency: number,
-  fn: (item: T, i: number) => Promise<R>
+  fn: (item: T, i: number) => Promise<R>,
 ): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let idx = 0;
@@ -88,7 +103,7 @@ async function runWithConcurrency<T, R>(
     }
   }
   await Promise.all(
-    Array.from({ length: Math.min(concurrency, items.length) }, () => worker())
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
   );
   return results;
 }
@@ -100,13 +115,21 @@ async function runWithConcurrency<T, R>(
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const items = body?.items as Array<{ bucket: string; path: string }> | undefined;
+    const items = body?.items as
+      | Array<{ bucket: string; path: string }>
+      | undefined;
 
     if (!Array.isArray(items) || items.length === 0) {
-      return NextResponse.json({ error: 'Missing or empty items array' }, { status: 400 });
+      return NextResponse.json(
+        { error: "Missing or empty items array" },
+        { status: 400 },
+      );
     }
     if (items.length > 20) {
-      return NextResponse.json({ error: 'Max 20 items per batch' }, { status: 400 });
+      return NextResponse.json(
+        { error: "Max 20 items per batch" },
+        { status: 400 },
+      );
     }
 
     // Filter out RAW files (client uses signed-url for those)
@@ -114,19 +137,24 @@ export async function POST(request: NextRequest) {
       (item) =>
         item.bucket &&
         item.path &&
-        (item.bucket === 'photos' || item.bucket === 'originals' || item.bucket === 'collab-photos') &&
-        !isRawPath(item.path)
+        (item.bucket === "photos" ||
+          item.bucket === "originals" ||
+          item.bucket === "collab-photos") &&
+        !isRawPath(item.path),
     );
 
     const results = await runWithConcurrency(
       toProcess,
       BATCH_CONCURRENCY,
-      (item, i) => processOneThumb(item.bucket, item.path)
+      (item, i) => processOneThumb(item.bucket, item.path),
     );
 
     return NextResponse.json({ items: results });
   } catch (error) {
-    console.error('Thumbnail batch API error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    console.error("Thumbnail batch API error:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 },
+    );
   }
 }

@@ -1,25 +1,41 @@
-import { useEffect, useRef } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { User } from '@supabase/supabase-js';
-import { supabase } from '@/lib/supabase';
-import type { CanvasImage, CanvasText, PhotoFolder, PhotoEdits } from '@/lib/types';
-import { DEFAULT_CURVES } from '@/lib/types';
-import { useCanvasStore } from '@/lib/stores/canvasStore';
+import { useEffect, useRef } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { User } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase";
+import type {
+  CanvasImage,
+  CanvasText,
+  PhotoFolder,
+  PhotoEdits,
+} from "@/lib/types";
+import { DEFAULT_CURVES } from "@/lib/types";
+import { useCanvasStore } from "@/lib/stores/canvasStore";
 import {
-  FOLDER_COLORS, GRID_CONFIG, SOCIAL_LAYOUT_PAGE_WIDTH, SOCIAL_LAYOUT_MAX_PAGES,
+  FOLDER_COLORS,
+  GRID_CONFIG,
+  SOCIAL_LAYOUT_PAGE_WIDTH,
+  SOCIAL_LAYOUT_MAX_PAGES,
   getFolderBounds,
-} from '@/lib/folders/folderLayout';
-import { isDNG, decodeDNGFromUrl, getThumbStoragePath } from '@/lib/utils/imageUtils';
-import { getCachedImage } from '@/lib/imageCache';
+} from "@/lib/folders/folderLayout";
+import {
+  isDNG,
+  decodeDNGFromUrl,
+  getThumbStoragePath,
+} from "@/lib/utils/imageUtils";
+import { getCachedImage } from "@/lib/imageCache";
 
 // Re-export PhotoEdits for backward compatibility
-export type { PhotoEdits } from '@/lib/types';
+export type { PhotoEdits } from "@/lib/types";
 
 interface UsePhotoLoaderOptions {
   user: User | null;
   skipNextPhotosLoadRef: React.MutableRefObject<boolean>;
   onPhotosLoadStateChange?: (loading: boolean) => void;
-  setHistory: React.Dispatch<React.SetStateAction<{ images: CanvasImage[]; texts: CanvasText[]; folders: PhotoFolder[] }[]>>;
+  setHistory: React.Dispatch<
+    React.SetStateAction<
+      { images: CanvasImage[]; texts: CanvasText[]; folders: PhotoFolder[] }[]
+    >
+  >;
   setHistoryIndex: React.Dispatch<React.SetStateAction<number>>;
 }
 
@@ -34,22 +50,23 @@ export function usePhotoLoader({
 
   // React Query for fetching photo metadata (cached for fast reloads). Fetch all data; filter is show/hide in UI only.
   const { data: photoData } = useQuery({
-    queryKey: ['user-photos', user?.id],
+    queryKey: ["user-photos", user?.id],
     queryFn: async () => {
       if (!user) return null;
 
-      const [editsResult, foldersResult, photosResult, originalsResult] = await Promise.all([
-        supabase.from('photo_edits').select('*').eq('user_id', user.id),
-        supabase.from('photo_folders').select('*').eq('user_id', user.id),
-        supabase.storage.from('photos').list(user.id, {
-          limit: 500,
-          sortBy: { column: 'created_at', order: 'asc' },
-        }),
-        supabase.storage.from('originals').list(user.id, {
-          limit: 500,
-          sortBy: { column: 'created_at', order: 'asc' },
-        }),
-      ]);
+      const [editsResult, foldersResult, photosResult, originalsResult] =
+        await Promise.all([
+          supabase.from("photo_edits").select("*").eq("user_id", user.id),
+          supabase.from("photo_folders").select("*").eq("user_id", user.id),
+          supabase.storage.from("photos").list(user.id, {
+            limit: 500,
+            sortBy: { column: "created_at", order: "asc" },
+          }),
+          supabase.storage.from("originals").list(user.id, {
+            limit: 500,
+            sortBy: { column: "created_at", order: "asc" },
+          }),
+        ]);
 
       return {
         savedEdits: editsResult.data,
@@ -81,49 +98,91 @@ export function usePhotoLoader({
         return;
       }
 
-      const { setImages, setFolders, setStagePosition } = useCanvasStore.getState();
-      const { savedEdits, savedFolders, photosFiles, originalsFiles, photosError } = photoData;
+      const { setImages, setFolders, setStagePosition } =
+        useCanvasStore.getState();
+      const {
+        savedEdits,
+        savedFolders,
+        photosFiles,
+        originalsFiles,
+        photosError,
+      } = photoData;
 
       const defaultFolderX = 100;
       const defaultFolderY = 100;
-      const buildFoldersFromSaved = (imagesList: CanvasImage[]): PhotoFolder[] => {
+      const buildFoldersFromSaved = (
+        imagesList: CanvasImage[],
+      ): PhotoFolder[] => {
         const out: PhotoFolder[] = [];
         if (!savedFolders?.length) return out;
         for (const sf of savedFolders) {
           const folderId = String(sf.id);
-          const folderImageIds = imagesList.filter((img) => img.folderId === folderId).map((img) => img.id);
-          const sfX = sf.x != null && Number.isFinite(Number(sf.x)) ? Number(sf.x) : defaultFolderX;
-          const sfY = sf.y != null && Number.isFinite(Number(sf.y)) ? Number(sf.y) : defaultFolderY;
-          const isLayout = sf.type === 'social_layout';
-          const pageCount = isLayout && sf.page_count != null ? Math.max(1, Math.min(SOCIAL_LAYOUT_MAX_PAGES, Number(sf.page_count))) : undefined;
-          const layoutWidth = isLayout && pageCount ? pageCount * SOCIAL_LAYOUT_PAGE_WIDTH : undefined;
-          const sfWidth = layoutWidth ?? (sf.width != null && Number.isFinite(Number(sf.width)) ? Number(sf.width) : GRID_CONFIG.defaultFolderWidth);
-          const sfHeight = sf.height != null && Number.isFinite(Number(sf.height)) ? Number(sf.height) : undefined;
+          const folderImageIds = imagesList
+            .filter((img) => img.folderId === folderId)
+            .map((img) => img.id);
+          const sfX =
+            sf.x != null && Number.isFinite(Number(sf.x))
+              ? Number(sf.x)
+              : defaultFolderX;
+          const sfY =
+            sf.y != null && Number.isFinite(Number(sf.y))
+              ? Number(sf.y)
+              : defaultFolderY;
+          const isLayout = sf.type === "social_layout";
+          const pageCount =
+            isLayout && sf.page_count != null
+              ? Math.max(
+                  1,
+                  Math.min(SOCIAL_LAYOUT_MAX_PAGES, Number(sf.page_count)),
+                )
+              : undefined;
+          const layoutWidth =
+            isLayout && pageCount
+              ? pageCount * SOCIAL_LAYOUT_PAGE_WIDTH
+              : undefined;
+          const sfWidth =
+            layoutWidth ??
+            (sf.width != null && Number.isFinite(Number(sf.width))
+              ? Number(sf.width)
+              : GRID_CONFIG.defaultFolderWidth);
+          const sfHeight =
+            sf.height != null && Number.isFinite(Number(sf.height))
+              ? Number(sf.height)
+              : undefined;
           out.push({
             id: folderId,
-            name: String(sf.name ?? 'Untitled'),
+            name: String(sf.name ?? "Untitled"),
             x: sfX,
             y: sfY,
             width: sfWidth,
             height: sfHeight,
             color: String(sf.color ?? FOLDER_COLORS[0]),
             imageIds: folderImageIds,
-            type: isLayout ? 'social_layout' : 'folder',
+            type: isLayout ? "social_layout" : "folder",
             pageCount,
-            backgroundColor: isLayout && sf.background_color ? String(sf.background_color) : undefined,
+            backgroundColor:
+              isLayout && sf.background_color
+                ? String(sf.background_color)
+                : undefined,
           });
         }
         return out;
       };
 
       // Check if there are any files to load
-      const photosList = (photosFiles ?? []).filter((f) => !f.name.startsWith('.'));
-      const originalsList = (originalsFiles ?? []).filter((f) => !f.name.startsWith('.'));
+      const photosList = (photosFiles ?? []).filter(
+        (f) => !f.name.startsWith("."),
+      );
+      const originalsList = (originalsFiles ?? []).filter(
+        (f) => !f.name.startsWith("."),
+      );
       if (photosList.length === 0 && originalsList.length === 0) {
         loadKeyRef.current = loadKey;
         setImages([]);
         setFolders(buildFoldersFromSaved([]));
-        setHistory([{ images: [], texts: [], folders: buildFoldersFromSaved([]) }]);
+        setHistory([
+          { images: [], texts: [], folders: buildFoldersFromSaved([]) },
+        ]);
         setHistoryIndex(0);
         onPhotosLoadStateChange?.(false);
         return;
@@ -132,15 +191,24 @@ export function usePhotoLoader({
       onPhotosLoadStateChange?.(true);
 
       try {
-        const photosBaseNames = new Set(photosList.map((f) => f.name.replace(/\.[^.]+$/, '').toLowerCase()));
+        const photosBaseNames = new Set(
+          photosList.map((f) => f.name.replace(/\.[^.]+$/, "").toLowerCase()),
+        );
         const originalsOnly = originalsList.filter(
-          (f) => !photosBaseNames.has(f.name.replace(/\.[^.]+$/, '').toLowerCase())
+          (f) =>
+            !photosBaseNames.has(f.name.replace(/\.[^.]+$/, "").toLowerCase()),
         );
 
-        type FileEntry = { name: string; bucket: 'photos' | 'originals' };
+        type FileEntry = { name: string; bucket: "photos" | "originals" };
         const validFiles: FileEntry[] = [
-          ...photosList.map((f) => ({ name: f.name, bucket: 'photos' as const })),
-          ...originalsOnly.map((f) => ({ name: f.name, bucket: 'originals' as const })),
+          ...photosList.map((f) => ({
+            name: f.name,
+            bucket: "photos" as const,
+          })),
+          ...originalsOnly.map((f) => ({
+            name: f.name,
+            bucket: "originals" as const,
+          })),
         ];
 
         if (photosError) return;
@@ -160,7 +228,10 @@ export function usePhotoLoader({
         const maxSize = GRID_CONFIG.imageMaxSize;
 
         const SIGNED_URL_STALE_MS = 55 * 60 * 1000;
-        const loadOne = async (file: FileEntry, i: number): Promise<CanvasImage | null> => {
+        const loadOne = async (
+          file: FileEntry,
+          i: number,
+        ): Promise<CanvasImage | null> => {
           const storagePath = `${user.id}/${file.name}`;
           const bucket = file.bucket;
 
@@ -169,23 +240,23 @@ export function usePhotoLoader({
           // DNG files in originals bucket: they should have a preview JPG in photos bucket
           // (uploaded during DNG upload flow), so they won't appear as originals-only here.
           // If they do, fall back to signed URL for the original.
-          const isRawFile = isDNG(file.name) && file.bucket === 'originals';
+          const isRawFile = isDNG(file.name) && file.bucket === "originals";
 
           let imageUrl: string;
           try {
             if (isRawFile) {
               // RAW files can't be thumbnailed server-side — use signed URL directly
               imageUrl = await queryClient.ensureQueryData({
-                queryKey: ['signed-url', bucket, storagePath],
+                queryKey: ["signed-url", bucket, storagePath],
                 queryFn: async () => {
-                  const res = await fetch('/api/signed-url', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                  const res = await fetch("/api/signed-url", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ bucket, path: storagePath }),
                   });
                   if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
-                    throw new Error(err?.error ?? 'Signed URL failed');
+                    throw new Error(err?.error ?? "Signed URL failed");
                   }
                   const { signedUrl } = await res.json();
                   return signedUrl as string;
@@ -197,23 +268,23 @@ export function usePhotoLoader({
               // returns cached thumb signed URL if it already exists.
               // This downloads ~50-100KB instead of 5-10MB per image.
               imageUrl = await queryClient.ensureQueryData({
-                queryKey: ['thumbnail-url', bucket, storagePath],
+                queryKey: ["thumbnail-url", bucket, storagePath],
                 queryFn: async () => {
-                  const res = await fetch('/api/thumbnail', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                  const res = await fetch("/api/thumbnail", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ bucket, path: storagePath }),
                   });
                   if (!res.ok) {
                     // Fallback to full-res signed URL if thumbnail API fails
-                    const fallbackRes = await fetch('/api/signed-url', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
+                    const fallbackRes = await fetch("/api/signed-url", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ bucket, path: storagePath }),
                     });
                     if (!fallbackRes.ok) {
                       const err = await fallbackRes.json().catch(() => ({}));
-                      throw new Error(err?.error ?? 'Signed URL failed');
+                      throw new Error(err?.error ?? "Signed URL failed");
                     }
                     const { signedUrl } = await fallbackRes.json();
                     return signedUrl as string;
@@ -222,7 +293,7 @@ export function usePhotoLoader({
                   // If the API returned a signed URL
                   if (data.signedUrl) return data.signedUrl as string;
                   // Shouldn't happen, but fallback
-                  throw new Error('No signed URL in thumbnail response');
+                  throw new Error("No signed URL in thumbnail response");
                 },
                 staleTime: SIGNED_URL_STALE_MS,
               });
@@ -246,15 +317,15 @@ export function usePhotoLoader({
               const thumbPath = getThumbStoragePath(storagePath);
               const blob = await getCachedImage(thumbPath, async () => {
                 const response = await fetch(imageUrl);
-                if (!response.ok) throw new Error('Failed to fetch image');
+                if (!response.ok) throw new Error("Failed to fetch image");
                 return response.blob();
               });
               const objectUrl = URL.createObjectURL(blob);
               const img = new window.Image();
-              img.crossOrigin = 'anonymous';
+              img.crossOrigin = "anonymous";
               await new Promise<void>((resolve, reject) => {
                 img.onload = () => resolve();
-                img.onerror = () => reject(new Error('Failed to load'));
+                img.onerror = () => reject(new Error("Failed to load"));
                 img.src = objectUrl;
               });
               imgSrc = objectUrl;
@@ -276,14 +347,16 @@ export function usePhotoLoader({
             const edit = savedEdits?.find(
               (e: PhotoEdits) =>
                 e.storage_path === storagePath ||
-                (e.original_storage_path != null && e.original_storage_path === storagePath)
+                (e.original_storage_path != null &&
+                  e.original_storage_path === storagePath),
             );
 
-            const hasValidPosition = edit != null
-              && edit.x != null
-              && edit.y != null
-              && Number.isFinite(Number(edit.x))
-              && Number.isFinite(Number(edit.y));
+            const hasValidPosition =
+              edit != null &&
+              edit.x != null &&
+              edit.y != null &&
+              Number.isFinite(Number(edit.x)) &&
+              Number.isFinite(Number(edit.y));
             const x = hasValidPosition ? Number(edit.x) : gridX;
             const y = hasValidPosition ? Number(edit.y) : gridY;
 
@@ -319,23 +392,31 @@ export function usePhotoLoader({
             };
 
             if (edit) {
-              if (edit.original_storage_path != null) canvasImg.originalStoragePath = edit.original_storage_path;
+              if (edit.original_storage_path != null)
+                canvasImg.originalStoragePath = edit.original_storage_path;
               let savedWidth = edit.width ?? width;
               let savedHeight = edit.height ?? height;
               if (savedWidth > maxSize || savedHeight > maxSize) {
-                const ratio = Math.min(maxSize / savedWidth, maxSize / savedHeight);
+                const ratio = Math.min(
+                  maxSize / savedWidth,
+                  maxSize / savedHeight,
+                );
                 savedWidth = savedWidth * ratio;
                 savedHeight = savedHeight * ratio;
               }
               canvasImg.width = savedWidth;
               canvasImg.height = savedHeight;
-              canvasImg.folderId = edit.folder_id != null ? String(edit.folder_id) : undefined;
+              canvasImg.folderId =
+                edit.folder_id != null ? String(edit.folder_id) : undefined;
               canvasImg.rotation = edit.rotation ?? 0;
               canvasImg.scaleX = edit.scale_x ?? 1;
               if (edit.taken_at != null) canvasImg.takenAt = edit.taken_at;
-              if (edit.camera_make != null) canvasImg.cameraMake = edit.camera_make;
-              if (edit.camera_model != null) canvasImg.cameraModel = edit.camera_model;
-              if (edit.labels != null && Array.isArray(edit.labels)) canvasImg.labels = edit.labels;
+              if (edit.camera_make != null)
+                canvasImg.cameraMake = edit.camera_make;
+              if (edit.camera_model != null)
+                canvasImg.cameraModel = edit.camera_model;
+              if (edit.labels != null && Array.isArray(edit.labels))
+                canvasImg.labels = edit.labels;
               canvasImg.scaleY = edit.scale_y ?? 1;
               canvasImg.exposure = edit.exposure ?? 0;
               canvasImg.contrast = edit.contrast ?? 0;
@@ -350,8 +431,10 @@ export function usePhotoLoader({
               canvasImg.shadowTint = edit.shadow_tint ?? 0;
               canvasImg.colorHSL = edit.color_hsl ?? undefined;
               canvasImg.splitToning = edit.split_toning ?? undefined;
-              canvasImg.colorGrading = edit.color_grading as CanvasImage['colorGrading'];
-              canvasImg.colorCalibration = edit.color_calibration as CanvasImage['colorCalibration'];
+              canvasImg.colorGrading =
+                edit.color_grading as CanvasImage["colorGrading"];
+              canvasImg.colorCalibration =
+                edit.color_calibration as CanvasImage["colorCalibration"];
               canvasImg.clarity = edit.clarity ?? 0;
               canvasImg.dehaze = edit.dehaze ?? 0;
               canvasImg.vignette = edit.vignette ?? 0;
@@ -385,7 +468,7 @@ export function usePhotoLoader({
         const runWithConcurrency = async <T, R>(
           items: T[],
           concurrency: number,
-          fn: (item: T, i: number) => Promise<R | null>
+          fn: (item: T, i: number) => Promise<R | null>,
         ): Promise<(R | null)[]> => {
           const results: (R | null)[] = new Array(items.length);
           let idx = 0;
@@ -396,7 +479,9 @@ export function usePhotoLoader({
             }
           }
           await Promise.all(
-            Array.from({ length: Math.min(concurrency, items.length) }, () => worker())
+            Array.from({ length: Math.min(concurrency, items.length) }, () =>
+              worker(),
+            ),
           );
           return results;
         };
@@ -407,20 +492,23 @@ export function usePhotoLoader({
 
           // Prefetch thumbnail URLs via batch API (reduces HTTP round-trips)
           const batchItems = batchFiles
-            .filter((f) => !(isDNG(f.name) && f.bucket === 'originals'))
+            .filter((f) => !(isDNG(f.name) && f.bucket === "originals"))
             .map((f) => ({ bucket: f.bucket, path: `${user.id}/${f.name}` }));
           if (batchItems.length > 0) {
             try {
-              const batchRes = await fetch('/api/thumbnail-batch', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+              const batchRes = await fetch("/api/thumbnail-batch", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ items: batchItems }),
               });
               if (batchRes.ok) {
                 const batchData = await batchRes.json();
                 for (const item of batchData.items ?? []) {
                   if (item.signedUrl && item.bucket && item.path) {
-                    queryClient.setQueryData(['thumbnail-url', item.bucket, item.path], item.signedUrl);
+                    queryClient.setQueryData(
+                      ["thumbnail-url", item.bucket, item.path],
+                      item.signedUrl,
+                    );
                   }
                 }
               }
@@ -432,7 +520,7 @@ export function usePhotoLoader({
           const results = await runWithConcurrency(
             batchFiles,
             LOAD_CONCURRENCY,
-            (file, j) => loadOne(file, start + j)
+            (file, j) => loadOne(file, start + j),
           );
           for (let j = 0; j < results.length; j++) {
             const image = results[j];
@@ -445,7 +533,11 @@ export function usePhotoLoader({
         };
 
         await loadBatch(0, INITIAL_BATCH);
-        for (let start = INITIAL_BATCH; start < validFiles.length; start += CHUNK_SIZE) {
+        for (
+          let start = INITIAL_BATCH;
+          start < validFiles.length;
+          start += CHUNK_SIZE
+        ) {
           await new Promise((r) => setTimeout(r, CHUNK_DELAY_MS));
           await loadBatch(start, start + CHUNK_SIZE);
         }
@@ -459,19 +551,24 @@ export function usePhotoLoader({
             const edit = savedEdits.find(
               (e: PhotoEdits) =>
                 e.storage_path === newImages[i].storagePath ||
-                e.storage_path === (newImages[i].originalStoragePath ?? '') ||
-                (e.original_storage_path != null && e.original_storage_path === newImages[i].storagePath)
+                e.storage_path === (newImages[i].originalStoragePath ?? "") ||
+                (e.original_storage_path != null &&
+                  e.original_storage_path === newImages[i].storagePath),
             );
             if (edit) {
               const img = { ...newImages[i] }; // unfreeze: shallow copy
               newImages[i] = img;
-              const hasValidPosition = edit.x != null && edit.y != null
-                && Number.isFinite(Number(edit.x)) && Number.isFinite(Number(edit.y));
+              const hasValidPosition =
+                edit.x != null &&
+                edit.y != null &&
+                Number.isFinite(Number(edit.x)) &&
+                Number.isFinite(Number(edit.y));
               if (hasValidPosition) {
                 img.x = Number(edit.x);
                 img.y = Number(edit.y);
               }
-              if (edit.original_storage_path != null) img.originalStoragePath = edit.original_storage_path;
+              if (edit.original_storage_path != null)
+                img.originalStoragePath = edit.original_storage_path;
               let savedWidth = edit.width ?? img.width;
               let savedHeight = edit.height ?? img.height;
               const mSize = GRID_CONFIG.imageMaxSize;
@@ -482,14 +579,17 @@ export function usePhotoLoader({
               }
               img.width = savedWidth;
               img.height = savedHeight;
-              img.folderId = edit.folder_id != null ? String(edit.folder_id) : undefined;
+              img.folderId =
+                edit.folder_id != null ? String(edit.folder_id) : undefined;
               img.rotation = edit.rotation ?? 0;
               img.scaleX = edit.scale_x ?? 1;
               img.scaleY = edit.scale_y ?? 1;
               if (edit.taken_at != null) img.takenAt = edit.taken_at;
               if (edit.camera_make != null) img.cameraMake = edit.camera_make;
-              if (edit.camera_model != null) img.cameraModel = edit.camera_model;
-              if (edit.labels != null && Array.isArray(edit.labels)) img.labels = edit.labels;
+              if (edit.camera_model != null)
+                img.cameraModel = edit.camera_model;
+              if (edit.labels != null && Array.isArray(edit.labels))
+                img.labels = edit.labels;
               img.exposure = edit.exposure ?? 0;
               img.contrast = edit.contrast ?? 0;
               img.highlights = edit.highlights ?? 0;
@@ -503,8 +603,10 @@ export function usePhotoLoader({
               img.shadowTint = edit.shadow_tint ?? 0;
               img.colorHSL = edit.color_hsl ?? undefined;
               img.splitToning = edit.split_toning ?? undefined;
-              img.colorGrading = edit.color_grading as CanvasImage['colorGrading'];
-              img.colorCalibration = edit.color_calibration as CanvasImage['colorCalibration'];
+              img.colorGrading =
+                edit.color_grading as CanvasImage["colorGrading"];
+              img.colorCalibration =
+                edit.color_calibration as CanvasImage["colorCalibration"];
               img.clarity = edit.clarity ?? 0;
               img.dehaze = edit.dehaze ?? 0;
               img.vignette = edit.vignette ?? 0;
@@ -530,11 +632,15 @@ export function usePhotoLoader({
 
         if (newImages.length > 0) {
           if (loadedFolders.length > 0) {
-            let minX = Infinity, maxX = -Infinity;
-            let minY = Infinity, maxY = -Infinity;
+            let minX = Infinity,
+              maxX = -Infinity;
+            let minY = Infinity,
+              maxY = -Infinity;
 
             for (const folder of loadedFolders) {
-              const folderImgCount = newImages.filter(img => folder.imageIds.includes(img.id)).length;
+              const folderImgCount = newImages.filter((img) =>
+                folder.imageIds.includes(img.id),
+              ).length;
               const bounds = getFolderBounds(folder, folderImgCount);
               minX = Math.min(minX, bounds.x);
               maxX = Math.max(maxX, bounds.right);
@@ -554,7 +660,7 @@ export function usePhotoLoader({
           }
         }
       } catch (err) {
-        console.error('Error loading user photos:', err);
+        console.error("Error loading user photos:", err);
       } finally {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
@@ -565,7 +671,15 @@ export function usePhotoLoader({
     };
 
     loadUserPhotos();
-  }, [user, photoData, onPhotosLoadStateChange, queryClient, skipNextPhotosLoadRef, setHistory, setHistoryIndex]);
+  }, [
+    user,
+    photoData,
+    onPhotosLoadStateChange,
+    queryClient,
+    skipNextPhotosLoadRef,
+    setHistory,
+    setHistoryIndex,
+  ]);
 
   return { photoData };
 }
