@@ -64,7 +64,7 @@ function getEditSignature(img: CanvasImage): string {
     taken_at: img.takenAt ?? null,
     camera_make: img.cameraMake ?? null,
     camera_model: img.cameraModel ?? null,
-    labels: img.labels ?? null,
+    labels: img.labels || [],
   });
 }
 
@@ -176,10 +176,21 @@ export function useAutoSave({
           taken_at: img.takenAt ?? null,
           camera_make: img.cameraMake ?? null,
           camera_model: img.cameraModel ?? null,
-          labels: img.labels ?? null,
+          labels: img.labels || [],
           border_width: img.borderWidth,
           border_color: img.borderColor,
         }));
+
+        // Deduplicate by conflict key to avoid "ON CONFLICT DO UPDATE cannot affect row a second time"
+        const uniqueEditsMap = new Map<string, typeof editsToSave[0]>();
+        for (const edit of editsToSave) {
+          const key = sessionId 
+            ? `${edit.storage_path}-${edit.session_id}` 
+            : `${edit.storage_path}-${edit.user_id}`;
+          // Keep the last occurrence (most recent edit)
+          uniqueEditsMap.set(key, edit);
+        }
+        const uniqueEdits = Array.from(uniqueEditsMap.values());
 
         const tableName = sessionId ? "collab_photos" : "photo_edits";
         const conflictOn = sessionId
@@ -187,7 +198,7 @@ export function useAutoSave({
           : "storage_path,user_id";
 
         // Upsert edits (insert or update)
-        const { error } = await supabase.from(tableName).upsert(editsToSave, {
+        const { error } = await supabase.from(tableName).upsert(uniqueEdits, {
           onConflict: conflictOn,
         });
 

@@ -4,7 +4,6 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useAuth } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { TopBar } from "@/components/TopBar";
 
 interface Session {
   id: string;
@@ -262,14 +261,46 @@ export default function CommunityPage() {
 
   return (
     <div className="min-h-screen bg-[#0a0a0a]">
-      <TopBar
-        onUpload={() => {}}
-        onUndo={() => {}}
-        onRedo={() => {}}
-        canUndo={false}
-        canRedo={false}
-        visible={true}
-      />
+      {/* Header */}
+      <div className="sticky top-0 z-10 flex h-14 items-center gap-3 bg-[#171717]/95 backdrop-blur-xl border-b border-[#2a2a2a] px-4">
+        {/* Back to home */}
+        <button
+          onClick={() => router.push("/")}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 text-sm text-[#888] hover:text-white hover:bg-[#252525] rounded-lg transition-colors"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+          <span>Home</span>
+        </button>
+
+        {/* Logo */}
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#3ECF8E] to-[#2da36f] flex items-center justify-center">
+            <svg className="w-4 h-4 text-[#0d0d0d]" fill="currentColor" viewBox="0 0 20 20">
+              <path d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z" />
+            </svg>
+          </div>
+          <span className="text-base font-semibold text-white">Driftboard</span>
+        </div>
+
+        {/* Right: user menu */}
+        <div className="ml-auto flex items-center gap-2">
+          {user?.user_metadata?.avatar_url ? (
+            <img src={user.user_metadata.avatar_url} alt="Profile" className="w-8 h-8 rounded-full ring-2 ring-[#333]" />
+          ) : (
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#3ECF8E] to-[#2da36f] flex items-center justify-center text-[#0d0d0d] text-sm font-semibold">
+              {user?.email?.charAt(0).toUpperCase() || "U"}
+            </div>
+          )}
+          <button
+            onClick={async () => { await supabase.auth.signOut(); router.push("/login"); }}
+            className="text-sm text-[#888] hover:text-white transition-colors cursor-pointer"
+          >
+            Sign out
+          </button>
+        </div>
+      </div>
 
       <div className="pt-24 pb-12 px-6 max-w-6xl mx-auto">
         {/* Page Header */}

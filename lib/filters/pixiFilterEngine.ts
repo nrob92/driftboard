@@ -1286,7 +1286,8 @@ export class PixiFilterEngine {
     );
   }
 
-  private hasActiveHSL(colorHSL: ColorHSL): boolean {
+  private hasActiveHSL(colorHSL: ColorHSL | null | undefined): boolean {
+    if (!colorHSL) return false;
     return Object.values(colorHSL).some(
       (adj) =>
         adj &&

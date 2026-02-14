@@ -4,17 +4,6 @@ import { useRef, useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth";
 import { useUIStore } from "@/lib/stores/uiStore";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
-
-interface CollabSession {
-  id: string;
-  name: string;
-  invite_code: string;
-  owner_id: string;
-  max_collaborators: number;
-  is_active: boolean;
-  created_at: string;
-}
 
 export interface PhotoFilterState {
   dateFrom?: string;
@@ -59,10 +48,15 @@ function SearchFilterInput({
   );
 }
 
+interface OnlineUser {
+  id: string;
+  email: string;
+  name?: string;
+  color: string;
+}
+
 interface TopBarProps {
   onUpload: (files: FileList | null) => void;
-  onRecenterHorizontally?: () => void;
-  onRecenterVertically?: () => void;
   onUndo: () => void;
   onRedo: () => void;
   canUndo: boolean;
@@ -71,33 +65,38 @@ interface TopBarProps {
   isMobile?: boolean;
   photoFilter?: PhotoFilterState;
   onPhotoFilterChange?: (filter: PhotoFilterState) => void;
+  onToggleSidebar?: () => void;
+  sessionId?: string;
+  onlineUsers?: OnlineUser[];
+  pendingRequestCount?: number;
+  approvedCount?: number;
+  maxCollaborators?: number;
+  isOwner?: boolean;
 }
 
 export function TopBar({
   onUpload,
-  onRecenterHorizontally,
-  onRecenterVertically,
   onUndo,
   onRedo,
   canUndo,
   canRedo,
   visible,
-
   photoFilter = {},
   onPhotoFilterChange,
+  onToggleSidebar,
+  sessionId,
+  onlineUsers = [],
+  pendingRequestCount = 0,
+  approvedCount = 0,
+  maxCollaborators = 0,
+  isOwner = false,
 }: TopBarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const helpRef = useRef<HTMLDivElement>(null);
   const filterRef = useRef<HTMLDivElement>(null);
-  const sessionRef = useRef<HTMLDivElement>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
-  const [sessionsOpen, setSessionsOpen] = useState(false);
-  const [collabSessions, setCollabSessions] = useState<CollabSession[]>([]);
-  const [loadingSessions, setLoadingSessions] = useState(false);
 
-  const [showToast, setShowToast] = useState(false);
-  const [toastMessage, setToastMessage] = useState("");
   const { user, signOut } = useAuth();
   const mobileMenuOpen = useUIStore((s) => s.mobileMenuOpen);
   const setMobileMenuOpen = useUIStore((s) => s.setMobileMenuOpen);
@@ -122,102 +121,6 @@ export function TopBar({
     window.addEventListener("click", close, true);
     return () => window.removeEventListener("click", close, true);
   }, [filterOpen]);
-
-  useEffect(() => {
-    if (!sessionsOpen) return;
-    const close = (e: MouseEvent) => {
-      if (sessionRef.current && !sessionRef.current.contains(e.target as Node))
-        setSessionsOpen(false);
-    };
-    window.addEventListener("click", close, true);
-    return () => window.removeEventListener("click", close, true);
-  }, [sessionsOpen]);
-
-  useEffect(() => {
-    if (!user) return;
-
-    const channel = supabase
-      .channel("session-updates")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "collab_members",
-          filter: `user_id=eq.${user.id}`,
-        },
-        (payload: {
-          eventType?: string;
-          new?: { user_id?: string; status?: string };
-          old?: { user_id?: string };
-        }) => {
-          console.log("TopBar pg-change received:", payload.eventType, payload);
-          if (
-            payload.new?.user_id === user?.id ||
-            payload.old?.user_id === user?.id
-          ) {
-            fetchCollabSessions();
-
-            if (
-              payload.eventType === "UPDATE" &&
-              payload.new?.status === "approved"
-            ) {
-              console.log("TopBar showing toast");
-              setToastMessage("Your join request was approved!");
-              setShowToast(true);
-              setTimeout(() => setShowToast(false), 3000);
-            }
-          }
-        },
-      )
-      .subscribe((status) => {
-        console.log("TopBar subscription status:", status);
-      });
-
-    const sessionChannel = supabase
-      .channel("session-inserts")
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "collab_sessions",
-          filter: `owner_id=eq.${user.id}`,
-        },
-        () => {
-          console.log("New owned session detected");
-          fetchCollabSessions();
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-      supabase.removeChannel(sessionChannel);
-    };
-  }, [user]);
-
-  useEffect(() => {
-    if (user && sessionsOpen) {
-      fetchCollabSessions();
-    }
-  }, [user, sessionsOpen]);
-
-  const fetchCollabSessions = async () => {
-    setLoadingSessions(true);
-    try {
-      const response = await fetch(`/api/collab/session?userId=${user?.id}`);
-      const result = await response.json();
-
-      if (result.sessions) {
-        setCollabSessions(result.sessions as CollabSession[]);
-      }
-    } catch (err) {
-      console.error("Error fetching sessions:", err);
-    } finally {
-      setLoadingSessions(false);
-    }
-  };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     onUpload(e.target.files);
@@ -277,6 +180,31 @@ export function TopBar({
           </svg>
         )}
       </button>
+
+      {/* Back to Community (only in session mode) */}
+      {sessionId && (
+        <button
+          type="button"
+          onClick={() => router.push("/community")}
+          className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 text-sm text-[#888] hover:text-white hover:bg-[#252525] rounded-lg transition-colors cursor-pointer"
+          title="Back to Community"
+        >
+          <svg
+            className="w-4 h-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M15 19l-7-7 7-7"
+            />
+          </svg>
+          <span>Community</span>
+        </button>
+      )}
 
       {/* Logo */}
       <div className="flex items-center gap-2 md:mr-4">
@@ -413,7 +341,7 @@ export function TopBar({
       {/* Desktop: Divider */}
       <div className="hidden md:block w-px h-6 bg-[#333]" />
 
-      {/* Upload + Recenter (Upload always visible, Recenter desktop only) */}
+      {/* Upload */}
       <div className="flex items-center gap-2">
         <button
           onClick={() => fileInputRef.current?.click()}
@@ -442,59 +370,6 @@ export function TopBar({
           onChange={handleFileSelect}
           className="hidden"
         />
-        <div className="hidden md:flex items-center bg-[#252525] rounded-lg overflow-hidden">
-          <span className="px-3 py-1.5 text-sm font-medium text-[#888] cursor-default select-none">
-            Recenter
-          </span>
-          {onRecenterHorizontally && (
-            <>
-              <div className="w-px h-5 bg-[#333]" />
-              <button
-                onClick={onRecenterHorizontally}
-                className="p-2 text-[#999] hover:text-white hover:bg-[#333] transition-colors cursor-pointer"
-                title="Recenter horizontally"
-              >
-                <svg
-                  className="w-4 h-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M4 6h16M4 12h16M4 18h16"
-                  />
-                </svg>
-              </button>
-            </>
-          )}
-          {onRecenterVertically && (
-            <>
-              <div className="w-px h-5 bg-[#333]" />
-              <button
-                onClick={onRecenterVertically}
-                className="p-2 text-[#999] hover:text-white hover:bg-[#333] transition-colors cursor-pointer"
-                title="Recenter vertically"
-              >
-                <svg
-                  className="w-4 h-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 4v16M12 4v16M18 4v16"
-                  />
-                </svg>
-              </button>
-            </>
-          )}
-        </div>
       </div>
 
       {/* Right side */}
@@ -633,14 +508,47 @@ export function TopBar({
           </button>
         </div>
 
-        {/* Community / Session Selector */}
-        <div className="hidden md:block relative" ref={sessionRef}>
+        {/* Session: online users + member count badge (toggles sidebar) */}
+        {sessionId && onToggleSidebar && (
           <button
             type="button"
-            onClick={() => setSessionsOpen((o) => !o)}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-[#888] hover:text-white hover:bg-[#252525] rounded-lg transition-colors cursor-pointer"
+            onClick={onToggleSidebar}
+            className="hidden md:flex items-center gap-2 px-2 py-1 hover:bg-[#252525] rounded-lg transition-colors cursor-pointer relative"
+            title="Members & Activity"
+          >
+            {/* Online user avatars */}
+            <div className="flex -space-x-2">
+              {onlineUsers.slice(0, 5).map((u) => (
+                <div
+                  key={u.id}
+                  className="w-7 h-7 rounded-full border-2 border-[#171717] flex items-center justify-center text-[10px] font-medium"
+                  style={{ backgroundColor: u.color }}
+                  title={u.email}
+                >
+                  {u.name?.[0]?.toUpperCase() || u.email[0]?.toUpperCase()}
+                </div>
+              ))}
+            </div>
+            {/* Member count */}
+            <span className="text-xs text-[#888]">
+              {approvedCount}/{maxCollaborators}
+            </span>
+            {/* Pending requests indicator */}
+            {isOwner && pendingRequestCount > 0 && (
+              <span className="absolute -top-1 -right-1 w-5 h-5 bg-yellow-500 text-black text-[10px] font-bold rounded-full flex items-center justify-center animate-pulse">
+                {pendingRequestCount}
+              </span>
+            )}
+          </button>
+        )}
+
+        {/* Desktop: Community link (home page only) */}
+        {!sessionId && (
+          <button
+            type="button"
+            onClick={() => router.push("/community")}
+            className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 text-sm text-[#888] hover:text-white hover:bg-[#252525] rounded-lg transition-colors cursor-pointer"
             title="Community Sessions"
-            aria-expanded={sessionsOpen}
           >
             <svg
               className="w-4 h-4"
@@ -655,143 +563,32 @@ export function TopBar({
                 d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
               />
             </svg>
-            <span>Sessions</span>
-            <svg
-              className="w-3 h-3"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M19 9l-7 7-7-7"
-              />
-            </svg>
+            <span>Community</span>
           </button>
-          {sessionsOpen && (
-            <div className="absolute right-0 top-full mt-2 w-72 bg-[#171717] border border-[#2a2a2a] rounded-xl shadow-2xl shadow-black/50 z-50 overflow-hidden">
-              <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-white">
-                  Your Sessions
-                </h3>
-                <button
-                  onClick={() => router.push("/community")}
-                  className="text-xs text-[#3ECF8E] hover:text-[#35b87a] transition-colors"
-                >
-                  Manage all
-                </button>
-              </div>
-              <div className="max-h-64 overflow-y-auto">
-                {loadingSessions ? (
-                  <div className="px-4 py-6 text-center">
-                    <div className="w-5 h-5 border-2 border-[#3ECF8E] border-t-transparent rounded-full animate-spin mx-auto" />
-                  </div>
-                ) : collabSessions.length === 0 ? (
-                  <div className="px-4 py-6 text-center">
-                    <p className="text-sm text-gray-400 mb-3">
-                      No sessions yet
-                    </p>
-                    <button
-                      onClick={() => {
-                        setSessionsOpen(false);
-                        router.push("/community");
-                      }}
-                      className="px-3 py-1.5 text-xs bg-[#3ECF8E] text-black font-medium rounded-lg hover:bg-[#35b87a] transition-colors"
-                    >
-                      Create Session
-                    </button>
-                  </div>
-                ) : (
-                  <div className="py-2">
-                    {collabSessions.map((session) => (
-                      <button
-                        key={session.id}
-                        onClick={() => {
-                          router.push(`/community/${session.id}`);
-                          setSessionsOpen(false);
-                        }}
-                        className="w-full px-4 py-2 text-left hover:bg-[#252525] transition-colors flex items-center gap-3"
-                      >
-                        <div className="w-8 h-8 rounded-lg bg-[#252525] flex items-center justify-center">
-                          <svg
-                            className="w-4 h-4 text-[#3ECF8E]"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"
-                            />
-                          </svg>
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-white truncate">
-                            {session.name}
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            {session.owner_id === user?.id
-                              ? "You are master"
-                              : "Collaborator"}
-                          </p>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="px-4 py-3 border-t border-[#2a2a2a]">
-                <button
-                  onClick={() => {
-                    setSessionsOpen(false);
-                    router.push("/community");
-                  }}
-                  className="w-full px-3 py-1.5 text-sm text-[#888] hover:text-white hover:bg-[#252525] rounded-lg transition-colors flex items-center justify-center gap-2"
-                >
-                  <svg
-                    className="w-4 h-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 4v16m8-8H4"
-                    />
-                  </svg>
-                  Create or Join Session
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        )}
 
-        {/* Desktop: User menu */}
-        <div className="hidden md:flex items-center gap-2">
-          {user?.user_metadata?.avatar_url ? (
-            <img
-              src={user.user_metadata.avatar_url}
-              alt="Profile"
-              className="w-8 h-8 rounded-full ring-2 ring-[#333]"
-            />
-          ) : (
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#3ECF8E] to-[#2da36f] flex items-center justify-center text-[#0d0d0d] text-sm font-semibold">
-              {user?.email?.charAt(0).toUpperCase() || "U"}
-            </div>
-          )}
-          <button
-            onClick={handleSignOut}
-            className="text-sm text-[#888] hover:text-white transition-colors cursor-pointer"
-          >
-            Sign out
-          </button>
-        </div>
+        {/* Desktop: User menu (home page only) */}
+        {!sessionId && (
+          <div className="hidden md:flex items-center gap-2">
+            {user?.user_metadata?.avatar_url ? (
+              <img
+                src={user.user_metadata.avatar_url}
+                alt="Profile"
+                className="w-8 h-8 rounded-full ring-2 ring-[#333]"
+              />
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#3ECF8E] to-[#2da36f] flex items-center justify-center text-[#0d0d0d] text-sm font-semibold">
+                {user?.email?.charAt(0).toUpperCase() || "U"}
+              </div>
+            )}
+            <button
+              onClick={handleSignOut}
+              className="text-sm text-[#888] hover:text-white transition-colors cursor-pointer"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Mobile hamburger menu dropdown */}
@@ -893,62 +690,7 @@ export function TopBar({
 
           <div className="w-full h-px bg-[#2a2a2a]" />
 
-          {/* Recenter */}
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-[#888]">Recenter</span>
-            {onRecenterHorizontally && (
-              <button
-                onClick={() => {
-                  onRecenterHorizontally();
-                  setMobileMenuOpen(false);
-                }}
-                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-[#999] hover:text-white hover:bg-[#333] rounded-lg transition-colors"
-                title="Recenter horizontally"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M4 6h16M4 12h16M4 18h16"
-                  />
-                </svg>
-              </button>
-            )}
-            {onRecenterVertically && (
-              <button
-                onClick={() => {
-                  onRecenterVertically();
-                  setMobileMenuOpen(false);
-                }}
-                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-[#999] hover:text-white hover:bg-[#333] rounded-lg transition-colors"
-                title="Recenter vertically"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 4v16M12 4v16M18 4v16"
-                  />
-                </svg>
-              </button>
-            )}
-          </div>
-
-          <div className="w-full h-px bg-[#2a2a2a]" />
-
-          {/* Community - mobile hamburger */}
+          {/* Community (mobile) */}
           <button
             onClick={() => {
               router.push("/community");
@@ -969,8 +711,40 @@ export function TopBar({
                 d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
               />
             </svg>
-            Community Sessions
+            Community
           </button>
+
+          {/* Sidebar toggle (mobile, session mode) */}
+          {sessionId && onToggleSidebar && (
+            <>
+              <div className="w-full h-px bg-[#2a2a2a]" />
+              <button
+                onClick={() => {
+                  onToggleSidebar();
+                  setMobileMenuOpen(false);
+                }}
+                className="flex items-center gap-3 w-full py-2 text-sm text-[#888] hover:text-white transition-colors"
+              >
+                <div className="flex -space-x-2">
+                  {onlineUsers.slice(0, 4).map((u) => (
+                    <div
+                      key={u.id}
+                      className="w-6 h-6 rounded-full border-2 border-[#171717] flex items-center justify-center text-[9px] font-medium"
+                      style={{ backgroundColor: u.color }}
+                    >
+                      {u.name?.[0]?.toUpperCase() || u.email[0]?.toUpperCase()}
+                    </div>
+                  ))}
+                </div>
+                <span>Members ({approvedCount}/{maxCollaborators})</span>
+                {isOwner && pendingRequestCount > 0 && (
+                  <span className="ml-auto px-1.5 py-0.5 bg-yellow-500/20 text-yellow-400 text-xs rounded animate-pulse">
+                    {pendingRequestCount} pending
+                  </span>
+                )}
+              </button>
+            </>
+          )}
 
           <div className="w-full h-px bg-[#2a2a2a]" />
 
@@ -988,75 +762,29 @@ export function TopBar({
 
           <div className="w-full h-px bg-[#2a2a2a]" />
 
-          {/* Community - mobile */}
-          <button
-            onClick={() => {
-              router.push("/community");
-              setMobileMenuOpen(false);
-            }}
-            className="flex items-center gap-3 w-full py-2 text-sm text-[#888] hover:text-white transition-colors"
-          >
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
-              />
-            </svg>
-            Community Sessions
-          </button>
-
-          <div className="w-full h-px bg-[#2a2a2a]" />
-
-          {/* User / Sign out */}
-          <div className="flex items-center gap-3">
-            {user?.user_metadata?.avatar_url ? (
-              <img
-                src={user.user_metadata.avatar_url}
-                alt="Profile"
-                className="w-8 h-8 rounded-full ring-2 ring-[#333]"
-              />
-            ) : (
-              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#3ECF8E] to-[#2da36f] flex items-center justify-center text-[#0d0d0d] text-sm font-semibold">
-                {user?.email?.charAt(0).toUpperCase() || "U"}
-              </div>
-            )}
-            <span className="text-sm text-[#ccc]">{user?.email}</span>
-            <button
-              onClick={handleSignOut}
-              className="ml-auto text-sm text-[#888] hover:text-white transition-colors py-2"
-            >
-              Sign out
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Toast notification */}
-      {showToast && (
-        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-[#171717] border border-[#3ECF8E]/30 rounded-lg shadow-lg">
-          <div className="flex items-center gap-2">
-            <svg
-              className="w-4 h-4 text-[#3ECF8E]"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M5 13l4 4L19 7"
-              />
-            </svg>
-            <span className="text-sm text-white">{toastMessage}</span>
-          </div>
+          {/* User / Sign out (home page only) */}
+          {!sessionId && (
+            <div className="flex items-center gap-3">
+              {user?.user_metadata?.avatar_url ? (
+                <img
+                  src={user.user_metadata.avatar_url}
+                  alt="Profile"
+                  className="w-8 h-8 rounded-full ring-2 ring-[#333]"
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#3ECF8E] to-[#2da36f] flex items-center justify-center text-[#0d0d0d] text-sm font-semibold">
+                  {user?.email?.charAt(0).toUpperCase() || "U"}
+                </div>
+              )}
+              <span className="text-sm text-[#ccc]">{user?.email}</span>
+              <button
+                onClick={handleSignOut}
+                className="ml-auto text-sm text-[#888] hover:text-white transition-colors py-2"
+              >
+                Sign out
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -81,12 +81,14 @@ export default function CollaborativeCanvasPage() {
   const [loadingSession, setLoadingSession] = useState(true);
   const [error, setError] = useState("");
   const [isOwner, setIsOwner] = useState(false);
+  const isOwnerRef = useRef(false); // Keep a ref for realtime callback
   const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
   const [onlineUsers, setOnlineUsers] = useState<UserPresence[]>([]);
   const [activityFeed, setActivityFeed] = useState<Activity[]>([]);
   const [showMembers, setShowMembers] = useState(false);
   const [showActivity, setShowActivity] = useState(false);
   const [photosLoading, setPhotosLoading] = useState(true);
+  const [newJoinRequest, setNewJoinRequest] = useState<{email?: string; name?: string} | null>(null);
 
   const realtimeChannel = useRef<ReturnType<typeof supabase.channel> | null>(
     null,
@@ -155,6 +157,7 @@ export default function CollaborativeCanvasPage() {
         collab_members: members,
       } as Session);
       setIsOwner(ownerStatus);
+      isOwnerRef.current = ownerStatus; // Sync ref for realtime callback
       setActivityFeed(activityRes.data || []);
 
       // Initialize Realtime
@@ -275,9 +278,17 @@ export default function CollaborativeCanvasPage() {
           table: "collab_members",
           filter: `session_id=eq.${sessionId}`,
         },
-        () => {
+        (payload) => {
+          console.log("[Realtime] Member change detected:", payload);
           fetchSession();
-          if (isOwner) fetchPendingRequests();
+          console.log("[Realtime] isOwner value:", isOwnerRef.current);
+          if (isOwnerRef.current) {
+            console.log("[Realtime] Fetching pending requests with notification");
+            // Check if there's a new pending request to show notification
+            fetchPendingRequests(true);
+          } else {
+            console.log("[Realtime] Not owner, skipping notification");
+          }
         },
       )
       .on(
@@ -293,17 +304,35 @@ export default function CollaborativeCanvasPage() {
           setActivityFeed((prev) => [newActivity, ...prev.slice(0, 49)]);
         },
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        console.log("[Realtime] Subscription status:", status, err);
+      });
   };
 
-  const fetchPendingRequests = async () => {
+  const fetchPendingRequests = async (showNotification = false) => {
     try {
+      console.log("[fetchPendingRequests] showNotification:", showNotification, "current pendingRequests:", pendingRequests.length);
       const response = await fetch(
         `/api/collab/join?sessionId=${sessionId}&userId=${user?.id}`,
       );
       const result = await response.json();
+      console.log("[fetchPendingRequests] API result:", result);
       if (result.requests) {
+        const previousCount = pendingRequests.length;
+        console.log("[fetchPendingRequests] previous count:", previousCount, "new count:", result.requests.length);
         setPendingRequests(result.requests);
+        
+        // Show notification for new pending requests
+        if (showNotification && result.requests.length > previousCount) {
+          console.log("[fetchPendingRequests] Showing notification for new request");
+          const newRequest = result.requests[0]; // Get the most recent
+          setNewJoinRequest({
+            email: newRequest.email,
+            name: newRequest.email?.split('@')[0],
+          });
+          // Auto-hide after 5 seconds
+          setTimeout(() => setNewJoinRequest(null), 5000);
+        }
       }
     } catch (err) {
       console.error("Error fetching pending requests:", err);
@@ -440,6 +469,12 @@ export default function CollaborativeCanvasPage() {
       <CanvasEditor
         sessionId={sessionId}
         onPhotosLoadStateChange={setPhotosLoading}
+        onToggleSidebar={() => setShowMembers((v) => !v)}
+        onlineUsers={onlineUsers}
+        pendingRequestCount={pendingRequests.length}
+        approvedCount={approvedMembers.length}
+        maxCollaborators={session?.max_collaborators}
+        isOwner={isOwner}
       />
 
       {/* Loading Overlay */}
@@ -452,39 +487,27 @@ export default function CollaborativeCanvasPage() {
         </div>
       )}
 
-      {/* Online Users */}
-      <div className="absolute top-4 right-4 z-50 flex items-center gap-2">
-        <div className="flex -space-x-2">
-          {onlineUsers.map((onlineUser) => (
-            <div
-              key={onlineUser.id}
-              className="w-8 h-8 rounded-full border-2 border-[#0a0a0a] flex items-center justify-center text-xs font-medium"
-              style={{ backgroundColor: onlineUser.color }}
-              title={onlineUser.email}
-            >
-              {onlineUser.name?.[0]?.toUpperCase() ||
-                onlineUser.email[0]?.toUpperCase()}
-            </div>
-          ))}
-        </div>
-        <button
-          onClick={() => setShowMembers(true)}
-          className="ml-2 px-3 py-1 bg-[#171717]/80 backdrop-blur border border-[#2a2a2a] rounded-lg text-xs hover:bg-[#1a1a1a] text-white"
-        >
-          {approvedMembers.length}/{session?.max_collaborators}
-        </button>
-      </div>
 
-      {/* Pending Requests Badge */}
-      {isOwner && pendingRequests.length > 0 && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
-          <button
-            onClick={() => setShowMembers(true)}
-            className="px-3 py-1 bg-yellow-500/20 border border-yellow-500/30 rounded-lg text-xs text-yellow-400 animate-pulse"
-          >
-            {pendingRequests.length} pending request
-            {pendingRequests.length > 1 ? "s" : ""}
-          </button>
+      {/* New Join Request Toast Notification */}
+      {newJoinRequest && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 animate-slide-down">
+          <div className="bg-[#171717] border border-[#3ECF8E]/30 rounded-lg px-4 py-3 shadow-lg shadow-black/50 flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-[#3ECF8E]/20 flex items-center justify-center">
+              <svg className="w-4 h-4 text-[#3ECF8E]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+              </svg>
+            </div>
+            <div>
+              <p className="text-white text-sm font-medium">New join request</p>
+              <p className="text-gray-400 text-xs">{newJoinRequest.name || newJoinRequest.email}</p>
+            </div>
+            <button
+              onClick={() => { setShowMembers(true); setNewJoinRequest(null); }}
+              className="ml-2 px-3 py-1 bg-[#3ECF8E] text-black text-xs font-medium rounded hover:bg-[#35b87a]"
+            >
+              Review
+            </button>
+          </div>
         </div>
       )}
 
@@ -506,14 +529,6 @@ export default function CollaborativeCanvasPage() {
             d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
           />
         </svg>
-      </button>
-
-      {/* Back Button */}
-      <button
-        onClick={() => router.push("/community")}
-        className="absolute top-4 left-4 z-50 px-3 py-1 bg-[#171717]/80 backdrop-blur border border-[#2a2a2a] rounded-lg text-xs hover:bg-[#1a1a1a] text-white"
-      >
-        ← Community
       </button>
 
       {/* Members Panel */}

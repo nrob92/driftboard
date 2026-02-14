@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState, Suspense, useRef } from "react";
 import { useAuth } from "@/lib/auth";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -20,6 +20,8 @@ function JoinSessionContent() {
   >("none");
   const [loadingState, setLoadingState] = useState(true);
   const [requesting, setRequesting] = useState(false);
+  const [autoRedirect, setAutoRedirect] = useState(false);
+  const memberChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   const inviteCode = searchParams.get("code");
 
@@ -96,6 +98,11 @@ function JoinSessionContent() {
       }
 
       setRequestStatus("pending");
+
+      // Set up realtime listener for this user's membership
+      if (sessionInfo?.id && user?.id) {
+        setupMembershipListener(sessionInfo.id, user.id);
+      }
     } catch (err: unknown) {
       const errorMessage =
         err instanceof Error ? err.message : "Failed to request to join";
@@ -104,6 +111,63 @@ function JoinSessionContent() {
       setRequesting(false);
     }
   };
+
+  // Set up realtime listener for membership status changes
+  const setupMembershipListener = (sessionId: string, userId: string) => {
+    // Clean up any existing channel
+    if (memberChannelRef.current) {
+      supabase.removeChannel(memberChannelRef.current);
+    }
+
+    memberChannelRef.current = supabase
+      .channel(`member-status:${sessionId}:${userId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "collab_members",
+          filter: `session_id=eq.${sessionId}`,
+        },
+        async (payload) => {
+          // Check if this change is for our user
+          const newRecord = payload.new as { user_id?: string; status?: string } | null;
+          const oldRecord = payload.old as { user_id?: string } | null;
+          const memberUserId = newRecord?.user_id || oldRecord?.user_id;
+          
+          if (memberUserId === userId) {
+            const newStatus = newRecord?.status;
+            
+            if (newStatus === "approved") {
+              setRequestStatus("approved");
+              setAutoRedirect(true);
+            } else if (newStatus === "rejected") {
+              setRequestStatus("rejected");
+            }
+          }
+        }
+      )
+      .subscribe();
+  };
+
+  // Auto-redirect when approved
+  useEffect(() => {
+    if (autoRedirect && sessionInfo) {
+      const timer = setTimeout(() => {
+        router.push(`/community/${sessionInfo.id}`);
+      }, 1500); // Wait 1.5 seconds so user sees the "You're In!" message
+      return () => clearTimeout(timer);
+    }
+  }, [autoRedirect, sessionInfo, router]);
+
+  // Clean up channel on unmount
+  useEffect(() => {
+    return () => {
+      if (memberChannelRef.current) {
+        supabase.removeChannel(memberChannelRef.current);
+      }
+    };
+  }, []);
 
   if (loading || loadingState) {
     return (

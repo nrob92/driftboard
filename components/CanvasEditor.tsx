@@ -51,6 +51,7 @@ import { useIsMobile } from "@/lib/hooks/useIsMobile";
 import { getCachedImage } from "@/lib/imageCache";
 import { useAutoSave } from "@/lib/hooks/useAutoSave";
 import { useExport } from "@/lib/hooks/useExport";
+import { useCollabRealtime } from "@/lib/hooks/useCollabRealtime";
 
 import { ImageNode } from "@/components/canvas/ImageNode";
 import { useUpload } from "@/lib/hooks/useUpload";
@@ -125,14 +126,33 @@ function getEditSnapshot(img: CanvasImage): Partial<CanvasImage> {
 
 // PhotoEdits imported from @/lib/types
 
+interface SessionOnlineUser {
+  id: string;
+  email: string;
+  name?: string;
+  color: string;
+}
+
 type CanvasEditorProps = {
   onPhotosLoadStateChange?: (loading: boolean) => void;
   sessionId?: string;
+  onToggleSidebar?: () => void;
+  onlineUsers?: SessionOnlineUser[];
+  pendingRequestCount?: number;
+  approvedCount?: number;
+  maxCollaborators?: number;
+  isOwner?: boolean;
 };
 
 export function CanvasEditor({
   onPhotosLoadStateChange,
   sessionId,
+  onToggleSidebar,
+  onlineUsers,
+  pendingRequestCount,
+  approvedCount,
+  maxCollaborators,
+  isOwner,
 }: CanvasEditorProps = {}) {
   const stageRef = useRef<Konva.Stage>(null);
   const folderLabelRefs = useRef<Record<string, Konva.Text>>({});
@@ -351,6 +371,17 @@ export function CanvasEditor({
   const colorPreviewRafRef = useRef<number | null>(null);
   const queryClient = useQueryClient();
   const { user } = useAuth();
+
+  // Determine correct table names based on session context
+  const isSession = !!sessionId;
+  const folderTable = isSession ? "collab_folders" : "photo_folders";
+  const photoTable = isSession ? "collab_photos" : "photo_edits";
+
+  // Realtime collaboration - only active for collaborative sessions
+  const { broadcastCursor } = useCollabRealtime({
+    sessionId: sessionId as string,
+    userId: user?.id,
+  });
 
   // Auto-save hook (handles saveStatus, editSignature, debounced save)
   const { saveStatus, setSaveStatus, handleSave } = useAutoSave({
@@ -2011,7 +2042,8 @@ export function CanvasEditor({
 
     if (user) {
       try {
-        await supabase.from("photo_folders").insert({
+        // Insert folder
+        const folderData: Record<string, unknown> = {
           id: folderId,
           user_id: user.id,
           name,
@@ -2019,45 +2051,78 @@ export function CanvasEditor({
           y: Math.round(newFolder.y),
           width: GRID_CONFIG.defaultFolderWidth,
           color: FOLDER_COLORS[colorIndex],
-        });
+        };
+        if (isSession) {
+          folderData.session_id = sessionId;
+        }
+        await supabase.from(folderTable).insert(folderData);
+        
+        // Update photos in the folder
         const finalReflowed = resolvedImages.filter(
           (img) => img.folderId === folderId,
         );
         for (const img of finalReflowed) {
           const path = img.storagePath || img.originalStoragePath;
           if (path) {
-            await supabase
-              .from("photo_edits")
-              .update({
-                folder_id: folderId,
-                x: Math.round(img.x),
-                y: Math.round(img.y),
-              })
-              .eq("storage_path", path)
-              .eq("user_id", user.id);
+            const photoUpdate: Record<string, unknown> = {
+              folder_id: folderId,
+              x: Math.round(img.x),
+              y: Math.round(img.y),
+            };
+            if (isSession) {
+              await supabase
+                .from(photoTable)
+                .update(photoUpdate)
+                .eq("storage_path", path)
+                .eq("session_id", sessionId);
+            } else {
+              await supabase
+                .from(photoTable)
+                .update(photoUpdate)
+                .eq("storage_path", path)
+                .eq("user_id", user.id);
+            }
           }
         }
+        
+        // Update moved folders
         const movedFolders = resolvedFolders.filter((f) => {
           if (f.id === folderId) return false;
           const prev = foldersWithNewFolder.find((of) => of.id === f.id);
           return prev && (prev.x !== f.x || prev.y !== f.y);
         });
         for (const f of movedFolders) {
-          await supabase
-            .from("photo_folders")
-            .update({ x: Math.round(f.x), y: Math.round(f.y) })
-            .eq("id", f.id)
-            .eq("user_id", user.id);
+          if (isSession) {
+            await supabase
+              .from(folderTable)
+              .update({ x: Math.round(f.x), y: Math.round(f.y) })
+              .eq("id", f.id)
+              .eq("session_id", sessionId);
+          } else {
+            await supabase
+              .from(folderTable)
+              .update({ x: Math.round(f.x), y: Math.round(f.y) })
+              .eq("id", f.id)
+              .eq("user_id", user.id);
+          }
           const movedFolderImgIds = new Set(f.imageIds);
           for (const img of resolvedImages) {
             if (!movedFolderImgIds.has(img.id)) continue;
             const path = img.storagePath || img.originalStoragePath;
             if (path) {
-              await supabase
-                .from("photo_edits")
-                .update({ x: Math.round(img.x), y: Math.round(img.y) })
-                .eq("storage_path", path)
-                .eq("user_id", user.id);
+              if (isSession) {
+                await supabase
+                  .from(photoTable)
+                  .update({ x: Math.round(img.x), y: Math.round(img.y) })
+                  .eq("storage_path", path)
+                  .eq("session_id", sessionId);
+              } else {
+                await supabase
+                  .from(photoTable)
+                  .update({ x: Math.round(img.x), y: Math.round(img.y) })
+                  .eq("storage_path", path)
+                  .eq("user_id", user.id);
+              }
             }
           }
         }
@@ -2082,6 +2147,7 @@ export function CanvasEditor({
     stagePosition,
     stageScale,
     user,
+    sessionId,
     resolveOverlapsAndReflow,
     saveToHistory,
     queryClient,
@@ -2137,7 +2203,7 @@ export function CanvasEditor({
       const finalFolder = resolvedFolders.find((f) => f.id === folderId);
       if (finalFolder) {
         try {
-          await supabase.from("photo_folders").insert({
+          const folderData: Record<string, unknown> = {
             id: folderId,
             user_id: user.id,
             name,
@@ -2145,18 +2211,31 @@ export function CanvasEditor({
             y: Math.round(finalFolder.y),
             width: GRID_CONFIG.defaultFolderWidth,
             color: FOLDER_COLORS[colorIndex],
-          });
+          };
+          if (isSession) {
+            folderData.session_id = sessionId;
+          }
+          await supabase.from(folderTable).insert(folderData);
+          
           const movedFolders = resolvedFolders.filter((f) => {
             if (f.id === folderId) return false;
             const prev = foldersWithNew.find((of) => of.id === f.id);
             return prev && (prev.x !== f.x || prev.y !== f.y);
           });
           for (const f of movedFolders) {
-            await supabase
-              .from("photo_folders")
-              .update({ x: Math.round(f.x), y: Math.round(f.y) })
-              .eq("id", f.id)
-              .eq("user_id", user.id);
+            if (isSession) {
+              await supabase
+                .from(folderTable)
+                .update({ x: Math.round(f.x), y: Math.round(f.y) })
+                .eq("id", f.id)
+                .eq("session_id", sessionId);
+            } else {
+              await supabase
+                .from(folderTable)
+                .update({ x: Math.round(f.x), y: Math.round(f.y) })
+                .eq("id", f.id)
+                .eq("user_id", user.id);
+            }
           }
         } catch (err) {
           console.error("Failed to create folder", err);
@@ -2173,8 +2252,12 @@ export function CanvasEditor({
     stagePosition,
     stageScale,
     user,
+    sessionId,
     resolveOverlapsAndReflow,
     saveToHistory,
+    folderTable,
+    photoTable,
+    isSession,
   ]);
 
   const handleCreateEmptyFolderCancel = useCallback(() => {
@@ -2243,7 +2326,7 @@ export function CanvasEditor({
       const finalFolder = resolvedFolders.find((f) => f.id === folderId);
       if (finalFolder) {
         try {
-          await supabase.from("photo_folders").insert({
+          const folderData: Record<string, unknown> = {
             id: folderId,
             user_id: user.id,
             name,
@@ -2255,28 +2338,41 @@ export function CanvasEditor({
             type: "social_layout",
             page_count: pages,
             background_color: DEFAULT_SOCIAL_LAYOUT_BG,
-          });
+          };
+          if (isSession) {
+            folderData.session_id = sessionId;
+          }
+          await supabase.from(folderTable).insert(folderData);
+          
           const movedFolders = resolvedFolders.filter((f) => {
             if (f.id === folderId) return false;
             const prev = foldersWithNew.find((of) => of.id === f.id);
             return prev && (prev.x !== f.x || prev.y !== f.y);
           });
           for (const f of movedFolders) {
-            await supabase
-              .from("photo_folders")
-              .update({
-                x: Math.round(f.x),
-                y: Math.round(f.y),
-                ...(f.type === "social_layout" && f.pageCount != null
-                  ? {
-                      width: Math.round(f.pageCount * SOCIAL_LAYOUT_PAGE_WIDTH),
-                      page_count: f.pageCount,
-                      background_color: f.backgroundColor ?? undefined,
-                    }
-                  : {}),
-              })
-              .eq("id", f.id)
-              .eq("user_id", user.id);
+            const updateData: Record<string, unknown> = {
+              x: Math.round(f.x),
+              y: Math.round(f.y),
+            };
+            if (f.type === "social_layout" && f.pageCount != null) {
+              updateData.width = Math.round(f.pageCount * SOCIAL_LAYOUT_PAGE_WIDTH);
+              updateData.page_count = f.pageCount;
+              updateData.background_color = f.backgroundColor ?? undefined;
+            }
+            
+            if (isSession) {
+              await supabase
+                .from(folderTable)
+                .update(updateData)
+                .eq("id", f.id)
+                .eq("session_id", sessionId);
+            } else {
+              await supabase
+                .from(folderTable)
+                .update(updateData)
+                .eq("id", f.id)
+                .eq("user_id", user.id);
+            }
           }
         } catch (err) {
           console.error("Failed to create social layout", err);
@@ -2294,8 +2390,12 @@ export function CanvasEditor({
     stagePosition,
     stageScale,
     user,
+    sessionId,
     resolveOverlapsAndReflow,
     saveToHistory,
+    folderTable,
+    photoTable,
+    isSession,
   ]);
 
   const handleCreateSocialLayoutCancel = useCallback(() => {
@@ -2319,18 +2419,25 @@ export function CanvasEditor({
       setFolderContextMenu(null);
       setSelectedFolderId(null);
       saveToHistory();
+      
       if (user) {
-        supabase
-          .from("photo_folders")
+        const query = supabase
+          .from(folderTable)
           .update({ page_count: n, width: Math.round(width) })
-          .eq("id", folderId)
-          .eq("user_id", user.id)
-          .then(({ error }) => {
-            if (error) console.error("Failed to update layout pages:", error);
-          });
+          .eq("id", folderId);
+        
+        if (isSession) {
+          query.eq("session_id", sessionId);
+        } else {
+          query.eq("user_id", user.id);
+        }
+        
+        query.then(({ error }) => {
+          if (error) console.error("Failed to update layout pages:", error);
+        });
       }
     },
-    [folders, user, saveToHistory],
+    [folders, user, sessionId, folderTable, isSession, saveToHistory],
   );
 
   const handleLayoutRemovePage = useCallback(
@@ -2347,18 +2454,25 @@ export function CanvasEditor({
       setFolderContextMenu(null);
       setSelectedFolderId(null);
       saveToHistory();
+      
       if (user) {
-        supabase
-          .from("photo_folders")
+        const query = supabase
+          .from(folderTable)
           .update({ page_count: n, width: Math.round(width) })
-          .eq("id", folderId)
-          .eq("user_id", user.id)
-          .then(({ error }) => {
-            if (error) console.error("Failed to update layout pages:", error);
-          });
+          .eq("id", folderId);
+        
+        if (isSession) {
+          query.eq("session_id", sessionId);
+        } else {
+          query.eq("user_id", user.id);
+        }
+        
+        query.then(({ error }) => {
+          if (error) console.error("Failed to update layout pages:", error);
+        });
       }
     },
-    [folders, user, saveToHistory],
+    [folders, user, sessionId, folderTable, isSession, saveToHistory],
   );
 
   // Live preview only (no DB call) — throttled to once per frame so dragging feels smooth
@@ -2391,19 +2505,26 @@ export function CanvasEditor({
       );
       setFolders(updated);
       saveToHistory();
+      
       if (user) {
-        supabase
-          .from("photo_folders")
+        const query = supabase
+          .from(folderTable)
           .update({ background_color: color })
-          .eq("id", folderId)
-          .eq("user_id", user.id)
-          .then(({ error }) => {
-            if (error)
-              console.error("Failed to update layout background:", error);
-          });
+          .eq("id", folderId);
+        
+        if (isSession) {
+          query.eq("session_id", sessionId);
+        } else {
+          query.eq("user_id", user.id);
+        }
+        
+        query.then(({ error }) => {
+          if (error)
+            console.error("Failed to update layout background:", error);
+        });
       }
     },
-    [folders, user, saveToHistory],
+    [folders, user, sessionId, folderTable, isSession, saveToHistory],
   );
 
   // Close image/canvas/folder context menu and border dialog on click outside or escape
@@ -2873,17 +2994,22 @@ export function CanvasEditor({
                   x: newFolderX,
                   y: newFolderY,
                 };
+                
+                const folderData: Record<string, unknown> = {
+                  id: newFolderId,
+                  user_id: user.id,
+                  name: untitledName,
+                  x: Math.round(newF.x),
+                  y: Math.round(newF.y),
+                  width: Math.round(newFolderWidth),
+                  color: FOLDER_COLORS[colorIndex],
+                };
+                if (isSession) {
+                  folderData.session_id = sessionId;
+                }
                 supabase
-                  .from("photo_folders")
-                  .insert({
-                    id: newFolderId,
-                    user_id: user.id,
-                    name: untitledName,
-                    x: Math.round(newF.x),
-                    y: Math.round(newF.y),
-                    width: Math.round(newFolderWidth),
-                    color: FOLDER_COLORS[colorIndex],
-                  })
+                  .from(folderTable)
+                  .insert(folderData)
                   .then(({ error }) => {
                     if (error)
                       console.error("Failed to save new folder:", error);
@@ -2894,41 +3020,76 @@ export function CanvasEditor({
                   if (f.id === newFolderId) continue;
                   const prev = latestFolders.find((of) => of.id === f.id);
                   if (prev && (prev.x !== f.x || prev.y !== f.y)) {
-                    supabase
-                      .from("photo_folders")
-                      .update({ x: Math.round(f.x), y: Math.round(f.y) })
-                      .eq("id", f.id)
-                      .eq("user_id", user.id)
-                      .then(({ error }) => {
-                        if (error)
-                          console.error(
-                            "Failed to update folder position:",
-                            error,
-                          );
-                      });
+                    if (isSession) {
+                      supabase
+                        .from(folderTable)
+                        .update({ x: Math.round(f.x), y: Math.round(f.y) })
+                        .eq("id", f.id)
+                        .eq("session_id", sessionId)
+                        .then(({ error }) => {
+                          if (error)
+                            console.error(
+                              "Failed to update folder position:",
+                              error,
+                            );
+                        });
+                    } else {
+                      supabase
+                        .from(folderTable)
+                        .update({ x: Math.round(f.x), y: Math.round(f.y) })
+                        .eq("id", f.id)
+                        .eq("user_id", user.id)
+                        .then(({ error }) => {
+                          if (error)
+                            console.error(
+                              "Failed to update folder position:",
+                              error,
+                            );
+                        });
+                    }
                   }
                 }
 
                 const currentCanonical =
                   currentImg.storagePath || currentImg.originalStoragePath;
                 if (currentCanonical && finalImg) {
-                  supabase
-                    .from("photo_edits")
-                    .update({
-                      folder_id: newFolderId,
-                      x: Math.round(finalImg.x),
-                      y: Math.round(finalImg.y),
-                      width: Math.round(finalImg.width),
-                      height: Math.round(finalImg.height),
-                      scale_x: finalImg.scaleX ?? 1,
-                      scale_y: finalImg.scaleY ?? 1,
-                    })
-                    .eq("storage_path", currentCanonical)
-                    .eq("user_id", user.id)
-                    .then(({ error }) => {
-                      if (error)
-                        console.error("Failed to update photo folder:", error);
-                    });
+                  if (isSession) {
+                    supabase
+                      .from(photoTable)
+                      .update({
+                        folder_id: newFolderId,
+                        x: Math.round(finalImg.x),
+                        y: Math.round(finalImg.y),
+                        width: Math.round(finalImg.width),
+                        height: Math.round(finalImg.height),
+                        scale_x: finalImg.scaleX ?? 1,
+                        scale_y: finalImg.scaleY ?? 1,
+                      })
+                      .eq("storage_path", currentCanonical)
+                      .eq("session_id", sessionId)
+                      .then(({ error }) => {
+                        if (error)
+                          console.error("Failed to update photo folder:", error);
+                      });
+                  } else {
+                    supabase
+                      .from(photoTable)
+                      .update({
+                        folder_id: newFolderId,
+                        x: Math.round(finalImg.x),
+                        y: Math.round(finalImg.y),
+                        width: Math.round(finalImg.width),
+                        height: Math.round(finalImg.height),
+                        scale_x: finalImg.scaleX ?? 1,
+                        scale_y: finalImg.scaleY ?? 1,
+                      })
+                      .eq("storage_path", currentCanonical)
+                      .eq("user_id", user.id)
+                      .then(({ error }) => {
+                        if (error)
+                          console.error("Failed to update photo folder:", error);
+                      });
+                  }
                 }
               }
 
@@ -3066,15 +3227,27 @@ export function CanvasEditor({
                 for (const f of resolvedFolders) {
                   const oldF = latestFolders.find((of) => of.id === f.id);
                   if (oldF && (oldF.x !== f.x || oldF.y !== f.y)) {
-                    supabase
-                      .from("photo_folders")
-                      .update({ x: Math.round(f.x), y: Math.round(f.y) })
-                      .eq("id", f.id)
-                      .eq("user_id", user.id)
-                      .then(({ error }) => {
-                        if (error)
-                          console.error("Failed to update folder:", error);
-                      });
+                    if (isSession) {
+                      supabase
+                        .from(folderTable)
+                        .update({ x: Math.round(f.x), y: Math.round(f.y) })
+                        .eq("id", f.id)
+                        .eq("session_id", sessionId)
+                        .then(({ error }) => {
+                          if (error)
+                            console.error("Failed to update folder:", error);
+                        });
+                    } else {
+                      supabase
+                        .from(folderTable)
+                        .update({ x: Math.round(f.x), y: Math.round(f.y) })
+                        .eq("id", f.id)
+                        .eq("user_id", user.id)
+                        .then(({ error }) => {
+                          if (error)
+                            console.error("Failed to update folder:", error);
+                        });
+                    }
                   }
                 }
 
@@ -3082,23 +3255,43 @@ export function CanvasEditor({
                 const currentCanonical =
                   currentImg.storagePath || currentImg.originalStoragePath;
                 if (currentCanonical && finalImg) {
-                  supabase
-                    .from("photo_edits")
-                    .update({
-                      folder_id: targetFolderId,
-                      x: Math.round(finalImg.x),
-                      y: Math.round(finalImg.y),
-                      width: Math.round(finalImg.width),
-                      height: Math.round(finalImg.height),
-                      scale_x: finalImg.scaleX ?? 1,
-                      scale_y: finalImg.scaleY ?? 1,
-                    })
-                    .eq("storage_path", currentCanonical)
-                    .eq("user_id", user.id)
-                    .then(({ error }) => {
-                      if (error)
-                        console.error("Failed to update photo folder:", error);
-                    });
+                  if (isSession) {
+                    supabase
+                      .from(photoTable)
+                      .update({
+                        folder_id: targetFolderId,
+                        x: Math.round(finalImg.x),
+                        y: Math.round(finalImg.y),
+                        width: Math.round(finalImg.width),
+                        height: Math.round(finalImg.height),
+                        scale_x: finalImg.scaleX ?? 1,
+                        scale_y: finalImg.scaleY ?? 1,
+                      })
+                      .eq("storage_path", currentCanonical)
+                      .eq("session_id", sessionId)
+                      .then(({ error }) => {
+                        if (error)
+                          console.error("Failed to update photo folder:", error);
+                      });
+                  } else {
+                    supabase
+                      .from(photoTable)
+                      .update({
+                        folder_id: targetFolderId,
+                        x: Math.round(finalImg.x),
+                        y: Math.round(finalImg.y),
+                        width: Math.round(finalImg.width),
+                        height: Math.round(finalImg.height),
+                        scale_x: finalImg.scaleX ?? 1,
+                        scale_y: finalImg.scaleY ?? 1,
+                      })
+                      .eq("storage_path", currentCanonical)
+                      .eq("user_id", user.id)
+                      .then(({ error }) => {
+                        if (error)
+                          console.error("Failed to update photo folder:", error);
+                      });
+                  }
                 }
 
                 // Save swapped image if there was a swap (when moving within same folder before folder change)
@@ -3107,22 +3300,41 @@ export function CanvasEditor({
                     (img) => img.id === lastSwappedImageRef.current!.id,
                   );
                   if (swappedImg?.storagePath) {
-                    supabase
-                      .from("photo_edits")
-                      .update({
-                        x: Math.round(swappedImg.x),
-                        y: Math.round(swappedImg.y),
-                        folder_id: swappedImg.folderId || null,
-                      })
-                      .eq("storage_path", swappedImg.storagePath)
-                      .eq("user_id", user.id)
-                      .then(({ error }) => {
-                        if (error)
-                          console.error(
-                            "Failed to update swapped photo position:",
-                            error,
-                          );
-                      });
+                    if (isSession) {
+                      supabase
+                        .from(photoTable)
+                        .update({
+                          x: Math.round(swappedImg.x),
+                          y: Math.round(swappedImg.y),
+                          folder_id: swappedImg.folderId || null,
+                        })
+                        .eq("storage_path", swappedImg.storagePath)
+                        .eq("session_id", sessionId)
+                        .then(({ error }) => {
+                          if (error)
+                            console.error(
+                              "Failed to update swapped photo position:",
+                              error,
+                            );
+                        });
+                    } else {
+                      supabase
+                        .from(photoTable)
+                        .update({
+                          x: Math.round(swappedImg.x),
+                          y: Math.round(swappedImg.y),
+                          folder_id: swappedImg.folderId || null,
+                        })
+                        .eq("storage_path", swappedImg.storagePath)
+                        .eq("user_id", user.id)
+                        .then(({ error }) => {
+                          if (error)
+                            console.error(
+                              "Failed to update swapped photo position:",
+                              error,
+                            );
+                        });
+                    }
                   }
                   // Clear swap tracking
                   lastSwappedImageRef.current = null;
@@ -3327,19 +3539,35 @@ export function CanvasEditor({
               const currentCanonical =
                 currentImg.storagePath || currentImg.originalStoragePath;
               if (currentCanonical) {
-                supabase
-                  .from("photo_edits")
-                  .update({
-                    x: Math.round(finalX),
-                    y: Math.round(finalY),
-                    folder_id: targetFolderId,
-                  })
-                  .eq("storage_path", currentCanonical)
-                  .eq("user_id", user.id)
-                  .then(({ error }) => {
-                    if (error)
-                      console.error("Failed to update photo position:", error);
-                  });
+                if (isSession) {
+                  supabase
+                    .from(photoTable)
+                    .update({
+                      x: Math.round(finalX),
+                      y: Math.round(finalY),
+                      folder_id: targetFolderId,
+                    })
+                    .eq("storage_path", currentCanonical)
+                    .eq("session_id", sessionId)
+                    .then(({ error }) => {
+                      if (error)
+                        console.error("Failed to update photo position:", error);
+                    });
+                } else {
+                  supabase
+                    .from(photoTable)
+                    .update({
+                      x: Math.round(finalX),
+                      y: Math.round(finalY),
+                      folder_id: targetFolderId,
+                    })
+                    .eq("storage_path", currentCanonical)
+                    .eq("user_id", user.id)
+                    .then(({ error }) => {
+                      if (error)
+                        console.error("Failed to update photo position:", error);
+                    });
+                }
               }
 
               // Save swapped image if there was a swap - use the position from ref (calculated during drag)
@@ -3363,21 +3591,39 @@ export function CanvasEditor({
                     ),
                   );
 
-                  supabase
-                    .from("photo_edits")
-                    .update({
-                      x: Math.round(swappedX),
-                      y: Math.round(swappedY),
-                    })
-                    .eq("storage_path", swappedCanonical)
-                    .eq("user_id", user.id)
-                    .then(({ error }) => {
-                      if (error)
-                        console.error(
-                          "Failed to update swapped photo position:",
-                          error,
-                        );
-                    });
+                  if (isSession) {
+                    supabase
+                      .from(photoTable)
+                      .update({
+                        x: Math.round(swappedX),
+                        y: Math.round(swappedY),
+                      })
+                      .eq("storage_path", swappedCanonical)
+                      .eq("session_id", sessionId)
+                      .then(({ error }) => {
+                        if (error)
+                          console.error(
+                            "Failed to update swapped photo position:",
+                            error,
+                          );
+                      });
+                  } else {
+                    supabase
+                      .from(photoTable)
+                      .update({
+                        x: Math.round(swappedX),
+                        y: Math.round(swappedY),
+                      })
+                      .eq("storage_path", swappedCanonical)
+                      .eq("user_id", user.id)
+                      .then(({ error }) => {
+                        if (error)
+                          console.error(
+                            "Failed to update swapped photo position:",
+                            error,
+                          );
+                      });
+                  }
                 }
                 // Clear swap tracking
                 lastSwappedImageRef.current = null;
@@ -3408,14 +3654,25 @@ export function CanvasEditor({
         ) {
           const canonical =
             currentImg.storagePath || currentImg.originalStoragePath;
-          supabase
-            .from("photo_edits")
-            .update({ x: Math.round(newX), y: Math.round(newY) })
-            .eq("storage_path", canonical)
-            .eq("user_id", user.id)
-            .then(({ error }) => {
-              if (error) console.error("Failed to save photo position:", error);
-            });
+          if (isSession) {
+            supabase
+              .from(photoTable)
+              .update({ x: Math.round(newX), y: Math.round(newY) })
+              .eq("storage_path", canonical)
+              .eq("session_id", sessionId)
+              .then(({ error }) => {
+                if (error) console.error("Failed to save photo position:", error);
+              });
+          } else {
+            supabase
+              .from(photoTable)
+              .update({ x: Math.round(newX), y: Math.round(newY) })
+              .eq("storage_path", canonical)
+              .eq("user_id", user.id)
+              .then(({ error }) => {
+                if (error) console.error("Failed to save photo position:", error);
+              });
+          }
         }
       } else {
         setTexts((prev) =>
@@ -3474,11 +3731,19 @@ export function CanvasEditor({
     // Update in Supabase if user is logged in
     if (user) {
       try {
-        await supabase
-          .from("photo_folders")
-          .update({ name: newName })
-          .eq("id", editingFolder.id)
-          .eq("user_id", user.id);
+        if (isSession) {
+          await supabase
+            .from(folderTable)
+            .update({ name: newName })
+            .eq("id", editingFolder.id)
+            .eq("session_id", sessionId);
+        } else {
+          await supabase
+            .from(folderTable)
+            .update({ name: newName })
+            .eq("id", editingFolder.id)
+            .eq("user_id", user.id);
+        }
       } catch (error) {
         console.error("Failed to update folder name:", error);
       }
@@ -3684,15 +3949,27 @@ export function CanvasEditor({
     // Persist to Supabase
     if (user) {
       for (const f of recenteredFolders) {
-        supabase
-          .from("photo_folders")
-          .update({ x: Math.round(f.x), y: Math.round(f.y) })
-          .eq("id", f.id)
-          .eq("user_id", user.id)
-          .then(({ error }) => {
-            if (error)
-              console.error("Failed to update folder position:", error);
-          });
+        if (isSession) {
+          supabase
+            .from(folderTable)
+            .update({ x: Math.round(f.x), y: Math.round(f.y) })
+            .eq("id", f.id)
+            .eq("session_id", sessionId)
+            .then(({ error }) => {
+              if (error)
+                console.error("Failed to update folder position:", error);
+            });
+        } else {
+          supabase
+            .from(folderTable)
+            .update({ x: Math.round(f.x), y: Math.round(f.y) })
+            .eq("id", f.id)
+            .eq("user_id", user.id)
+            .then(({ error }) => {
+              if (error)
+                console.error("Failed to update folder position:", error);
+            });
+        }
       }
 
       const folderImages = recenteredImages.filter(
@@ -3700,14 +3977,25 @@ export function CanvasEditor({
       );
       for (const img of folderImages) {
         const canonicalPath = img.storagePath || img.originalStoragePath!;
-        supabase
-          .from("photo_edits")
-          .update({ x: Math.round(img.x), y: Math.round(img.y) })
-          .eq("storage_path", canonicalPath)
-          .eq("user_id", user.id)
-          .then(({ error }) => {
-            if (error) console.error("Failed to update image position:", error);
-          });
+        if (isSession) {
+          supabase
+            .from(photoTable)
+            .update({ x: Math.round(img.x), y: Math.round(img.y) })
+            .eq("storage_path", canonicalPath)
+            .eq("session_id", sessionId)
+            .then(({ error }) => {
+              if (error) console.error("Failed to update image position:", error);
+            });
+        } else {
+          supabase
+            .from(photoTable)
+            .update({ x: Math.round(img.x), y: Math.round(img.y) })
+            .eq("storage_path", canonicalPath)
+            .eq("user_id", user.id)
+            .then(({ error }) => {
+              if (error) console.error("Failed to update image position:", error);
+            });
+        }
       }
     }
   }, [
@@ -3718,6 +4006,10 @@ export function CanvasEditor({
     stageScale,
     user,
     saveToHistory,
+    isSession,
+    sessionId,
+    folderTable,
+    photoTable,
   ]);
 
   // Recenter folders horizontally (stack in a row, centered — same as main Recenter button)
@@ -3753,26 +4045,49 @@ export function CanvasEditor({
     saveToHistory();
     if (user) {
       for (const f of recenteredFolders) {
-        supabase
-          .from("photo_folders")
-          .update({ x: Math.round(f.x), y: Math.round(f.y) })
-          .eq("id", f.id)
-          .eq("user_id", user.id)
-          .then(({ error }) => {
-            if (error) console.error(error);
-          });
+        if (isSession) {
+          supabase
+            .from(folderTable)
+            .update({ x: Math.round(f.x), y: Math.round(f.y) })
+            .eq("id", f.id)
+            .eq("session_id", sessionId)
+            .then(({ error }) => {
+              if (error) console.error(error);
+            });
+        } else {
+          supabase
+            .from(folderTable)
+            .update({ x: Math.round(f.x), y: Math.round(f.y) })
+            .eq("id", f.id)
+            .eq("user_id", user.id)
+            .then(({ error }) => {
+              if (error) console.error(error);
+            });
+        }
       }
       for (const img of recenteredImages.filter(
         (i) => (i.storagePath || i.originalStoragePath) && i.folderId,
       )) {
-        supabase
-          .from("photo_edits")
-          .update({ x: Math.round(img.x), y: Math.round(img.y) })
-          .eq("storage_path", img.storagePath || img.originalStoragePath!)
-          .eq("user_id", user.id)
-          .then(({ error }) => {
-            if (error) console.error(error);
-          });
+        const canonicalPath = img.storagePath || img.originalStoragePath!;
+        if (isSession) {
+          supabase
+            .from(photoTable)
+            .update({ x: Math.round(img.x), y: Math.round(img.y) })
+            .eq("storage_path", canonicalPath)
+            .eq("session_id", sessionId)
+            .then(({ error }) => {
+              if (error) console.error(error);
+            });
+        } else {
+          supabase
+            .from(photoTable)
+            .update({ x: Math.round(img.x), y: Math.round(img.y) })
+            .eq("storage_path", canonicalPath)
+            .eq("user_id", user.id)
+            .then(({ error }) => {
+              if (error) console.error(error);
+            });
+        }
       }
     }
   }, [
@@ -3783,6 +4098,10 @@ export function CanvasEditor({
     stageScale,
     user,
     saveToHistory,
+    isSession,
+    sessionId,
+    folderTable,
+    photoTable,
   ]);
 
   // Recenter folders vertically (stack in a column, centered — same as main Recenter but vertical)
@@ -3831,26 +4150,49 @@ export function CanvasEditor({
     saveToHistory();
     if (user) {
       for (const f of recenteredFolders) {
-        supabase
-          .from("photo_folders")
-          .update({ x: Math.round(f.x), y: Math.round(f.y) })
-          .eq("id", f.id)
-          .eq("user_id", user.id)
-          .then(({ error }) => {
-            if (error) console.error(error);
-          });
+        if (isSession) {
+          supabase
+            .from(folderTable)
+            .update({ x: Math.round(f.x), y: Math.round(f.y) })
+            .eq("id", f.id)
+            .eq("session_id", sessionId)
+            .then(({ error }) => {
+              if (error) console.error(error);
+            });
+        } else {
+          supabase
+            .from(folderTable)
+            .update({ x: Math.round(f.x), y: Math.round(f.y) })
+            .eq("id", f.id)
+            .eq("user_id", user.id)
+            .then(({ error }) => {
+              if (error) console.error(error);
+            });
+        }
       }
       for (const img of recenteredImages.filter(
         (i) => (i.storagePath || i.originalStoragePath) && i.folderId,
       )) {
-        supabase
-          .from("photo_edits")
-          .update({ x: Math.round(img.x), y: Math.round(img.y) })
-          .eq("storage_path", img.storagePath || img.originalStoragePath!)
-          .eq("user_id", user.id)
-          .then(({ error }) => {
-            if (error) console.error(error);
-          });
+        const canonicalPath = img.storagePath || img.originalStoragePath!;
+        if (isSession) {
+          supabase
+            .from(photoTable)
+            .update({ x: Math.round(img.x), y: Math.round(img.y) })
+            .eq("storage_path", canonicalPath)
+            .eq("session_id", sessionId)
+            .then(({ error }) => {
+              if (error) console.error(error);
+            });
+        } else {
+          supabase
+            .from(photoTable)
+            .update({ x: Math.round(img.x), y: Math.round(img.y) })
+            .eq("storage_path", canonicalPath)
+            .eq("user_id", user.id)
+            .then(({ error }) => {
+              if (error) console.error(error);
+            });
+        }
       }
     }
   }, [
@@ -3861,6 +4203,10 @@ export function CanvasEditor({
     stageScale,
     user,
     saveToHistory,
+    isSession,
+    sessionId,
+    folderTable,
+    photoTable,
   ]);
 
   // Add text at double-click position (left button only)
@@ -4075,8 +4421,6 @@ export function CanvasEditor({
     <div className="relative h-full w-full bg-[#0d0d0d]">
       <TopBar
         onUpload={handleFileUpload}
-        onRecenterHorizontally={handleRecenterHorizontally}
-        onRecenterVertically={handleRecenterVertically}
         onUndo={handleUndo}
         onRedo={handleRedo}
         canUndo={editHistory.length > 0}
@@ -4085,6 +4429,13 @@ export function CanvasEditor({
         isMobile={isMobile}
         photoFilter={photoFilter}
         onPhotoFilterChange={setPhotoFilter}
+        sessionId={sessionId}
+        onToggleSidebar={onToggleSidebar}
+        onlineUsers={onlineUsers}
+        pendingRequestCount={pendingRequestCount}
+        approvedCount={approvedCount}
+        maxCollaborators={maxCollaborators}
+        isOwner={isOwner}
       />
 
       {/* Upload loading indicator */}
@@ -4733,6 +5084,18 @@ export function CanvasEditor({
             handleTouchEnd();
           }}
           onMouseDown={handleStageMouseDownWithZoom}
+          onMouseMove={(e) => {
+            // Broadcast cursor position for collaborative sessions
+            if (sessionId) {
+              const stage = e.target.getStage();
+              if (stage) {
+                const pointer = stage.getPointerPosition();
+                if (pointer) {
+                  broadcastCursor(pointer.x, pointer.y);
+                }
+              }
+            }
+          }}
           onContextMenu={(e) => {
             e.evt.preventDefault();
             const stage = e.target.getStage();
@@ -4999,21 +5362,39 @@ export function CanvasEditor({
 
                           if (user) {
                             for (const f of finalFolders) {
-                              supabase
-                                .from("photo_folders")
-                                .update({
-                                  x: Math.round(f.x),
-                                  y: Math.round(f.y),
-                                })
-                                .eq("id", f.id)
-                                .eq("user_id", user.id)
-                                .then(({ error }) => {
-                                  if (error)
-                                    console.error(
-                                      "Failed to update folder position:",
-                                      error,
-                                    );
-                                });
+                              if (isSession) {
+                                supabase
+                                  .from(folderTable)
+                                  .update({
+                                    x: Math.round(f.x),
+                                    y: Math.round(f.y),
+                                  })
+                                  .eq("id", f.id)
+                                  .eq("session_id", sessionId)
+                                  .then(({ error }) => {
+                                    if (error)
+                                      console.error(
+                                        "Failed to update folder position:",
+                                        error,
+                                      );
+                                  });
+                              } else {
+                                supabase
+                                  .from(folderTable)
+                                  .update({
+                                    x: Math.round(f.x),
+                                    y: Math.round(f.y),
+                                  })
+                                  .eq("id", f.id)
+                                  .eq("user_id", user.id)
+                                  .then(({ error }) => {
+                                    if (error)
+                                      console.error(
+                                        "Failed to update folder position:",
+                                        error,
+                                      );
+                                  });
+                              }
                             }
 
                             const allFolderImages = finalImages.filter(
@@ -5024,21 +5405,39 @@ export function CanvasEditor({
                             for (const img of allFolderImages) {
                               const canonicalPath =
                                 img.storagePath || img.originalStoragePath!;
-                              supabase
-                                .from("photo_edits")
-                                .update({
-                                  x: Math.round(img.x),
-                                  y: Math.round(img.y),
-                                })
-                                .eq("storage_path", canonicalPath)
-                                .eq("user_id", user.id)
-                                .then(({ error }) => {
-                                  if (error)
-                                    console.error(
-                                      "Failed to update image position:",
-                                      error,
-                                    );
-                                });
+                              if (isSession) {
+                                supabase
+                                  .from(photoTable)
+                                  .update({
+                                    x: Math.round(img.x),
+                                    y: Math.round(img.y),
+                                  })
+                                  .eq("storage_path", canonicalPath)
+                                  .eq("session_id", sessionId)
+                                  .then(({ error }) => {
+                                    if (error)
+                                      console.error(
+                                        "Failed to update image position:",
+                                        error,
+                                      );
+                                  });
+                              } else {
+                                supabase
+                                  .from(photoTable)
+                                  .update({
+                                    x: Math.round(img.x),
+                                    y: Math.round(img.y),
+                                  })
+                                  .eq("storage_path", canonicalPath)
+                                  .eq("user_id", user.id)
+                                  .then(({ error }) => {
+                                    if (error)
+                                      console.error(
+                                        "Failed to update image position:",
+                                        error,
+                                      );
+                                  });
+                              }
                             }
                           }
                         }}
@@ -5566,25 +5965,47 @@ export function CanvasEditor({
                             if (user) {
                               // Save all folder positions (some may have been pushed)
                               for (const f of finalFolders) {
-                                supabase
-                                  .from("photo_folders")
-                                  .update({
-                                    x: Math.round(f.x),
-                                    y: Math.round(f.y),
-                                    width: Math.round(f.width),
-                                    ...(f.height != null && {
-                                      height: Math.round(f.height),
-                                    }),
-                                  })
-                                  .eq("id", f.id)
-                                  .eq("user_id", user.id)
-                                  .then(({ error }) => {
-                                    if (error)
-                                      console.error(
-                                        "Failed to update folder:",
-                                        error,
-                                      );
-                                  });
+                                if (isSession) {
+                                  supabase
+                                    .from(folderTable)
+                                    .update({
+                                      x: Math.round(f.x),
+                                      y: Math.round(f.y),
+                                      width: Math.round(f.width),
+                                      ...(f.height != null && {
+                                        height: Math.round(f.height),
+                                      }),
+                                    })
+                                    .eq("id", f.id)
+                                    .eq("session_id", sessionId)
+                                    .then(({ error }) => {
+                                      if (error)
+                                        console.error(
+                                          "Failed to update folder:",
+                                          error,
+                                        );
+                                    });
+                                } else {
+                                  supabase
+                                    .from(folderTable)
+                                    .update({
+                                      x: Math.round(f.x),
+                                      y: Math.round(f.y),
+                                      width: Math.round(f.width),
+                                      ...(f.height != null && {
+                                        height: Math.round(f.height),
+                                      }),
+                                    })
+                                    .eq("id", f.id)
+                                    .eq("user_id", user.id)
+                                    .then(({ error }) => {
+                                      if (error)
+                                        console.error(
+                                          "Failed to update folder:",
+                                          error,
+                                        );
+                                    });
+                                }
                               }
 
                               // Save all images positions (canonical key)
@@ -5597,21 +6018,39 @@ export function CanvasEditor({
                               for (const img of allFolderImages) {
                                 const canonicalPath =
                                   img.storagePath || img.originalStoragePath!;
-                                supabase
-                                  .from("photo_edits")
-                                  .update({
-                                    x: Math.round(img.x),
-                                    y: Math.round(img.y),
-                                  })
-                                  .eq("storage_path", canonicalPath)
-                                  .eq("user_id", user.id)
-                                  .then(({ error }) => {
-                                    if (error)
-                                      console.error(
-                                        "Failed to update image position:",
-                                        error,
-                                      );
-                                  });
+                                if (isSession) {
+                                  supabase
+                                    .from(photoTable)
+                                    .update({
+                                      x: Math.round(img.x),
+                                      y: Math.round(img.y),
+                                    })
+                                    .eq("storage_path", canonicalPath)
+                                    .eq("session_id", sessionId)
+                                    .then(({ error }) => {
+                                      if (error)
+                                        console.error(
+                                          "Failed to update image position:",
+                                          error,
+                                        );
+                                    });
+                                } else {
+                                  supabase
+                                    .from(photoTable)
+                                    .update({
+                                      x: Math.round(img.x),
+                                      y: Math.round(img.y),
+                                    })
+                                    .eq("storage_path", canonicalPath)
+                                    .eq("user_id", user.id)
+                                    .then(({ error }) => {
+                                      if (error)
+                                        console.error(
+                                          "Failed to update image position:",
+                                          error,
+                                        );
+                                    });
+                                }
                               }
                             }
                           }}

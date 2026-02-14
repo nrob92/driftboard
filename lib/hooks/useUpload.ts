@@ -337,58 +337,41 @@ export function useUpload({
                   const thumbFilePath = getThumbStoragePath(previewFilePath);
                   thumbnailPath = thumbFilePath;
 
-                  fetch(decoded.dataUrl)
-                    .then((r) => r.blob())
-                    .then((previewBlob) => {
-                      supabase.storage
-                        .from(previewBucket)
-                        .upload(previewFilePath, previewBlob, {
-                          contentType: "image/jpeg",
-                          cacheControl: "3600",
-                        })
-                        .then(({ error }) => {
-                          if (error) {
-                            console.error("Failed to upload preview:", error);
-                            previewStoragePath = undefined;
-                            thumbnailPath = undefined;
-                          } else {
-                            console.log(
-                              "Uploaded client-decoded preview:",
-                              previewFilePath,
-                            );
-                            // Generate and upload thumbnail
-                            createThumbnailBlob(previewBlob)
-                              .then((thumbBlob) => {
-                                supabase.storage
-                                  .from(previewBucket)
-                                  .upload(thumbFilePath, thumbBlob, {
-                                    contentType: "image/jpeg",
-                                    cacheControl: "86400",
-                                    upsert: true,
-                                  })
-                                  .then(({ error: thumbError }) => {
-                                    if (thumbError) {
-                                      console.warn(
-                                        "Thumbnail upload failed:",
-                                        thumbError,
-                                      );
-                                    } else {
-                                      console.log(
-                                        "Uploaded thumbnail:",
-                                        thumbFilePath,
-                                      );
-                                    }
-                                  });
-                              })
-                              .catch((err) =>
-                                console.warn(
-                                  "Thumbnail generation failed:",
-                                  err,
-                                ),
-                              );
-                          }
-                        });
+                  // Upload preview and wait for it to complete before proceeding
+                  const previewBlob = await fetch(decoded.dataUrl).then((r) => r.blob());
+                  const { error: previewError } = await supabase.storage
+                    .from(previewBucket)
+                    .upload(previewFilePath, previewBlob, {
+                      contentType: "image/jpeg",
+                      cacheControl: "3600",
                     });
+                  
+                  if (previewError) {
+                    console.error("Failed to upload preview:", previewError);
+                    previewStoragePath = undefined;
+                    thumbnailPath = undefined;
+                  } else {
+                    console.log(
+                      "Uploaded client-decoded preview:",
+                      previewFilePath,
+                    );
+                    
+                    // Generate and upload thumbnail - wait for completion
+                    const thumbBlob = await createThumbnailBlob(previewBlob);
+                    const { error: thumbError } = await supabase.storage
+                      .from(previewBucket)
+                      .upload(thumbFilePath, thumbBlob, {
+                        contentType: "image/jpeg",
+                        cacheControl: "86400",
+                        upsert: true,
+                      });
+                    
+                    if (thumbError) {
+                      console.warn("Thumbnail upload failed:", thumbError);
+                    } else {
+                      console.log("Uploaded thumbnail:", thumbFilePath);
+                    }
+                  }
                 }
               } else {
                 // Fallback to client-side decoding
@@ -918,7 +901,7 @@ export function useUpload({
                   taken_at: img.takenAt ?? null,
                   camera_make: img.cameraMake ?? null,
                   camera_model: img.cameraModel ?? null,
-                  labels: img.labels ?? null,
+                  labels: img.labels || [],
                   border_width: img.borderWidth ?? null,
                   border_color: img.borderColor ?? null,
                 }));
@@ -1518,7 +1501,7 @@ export function useUpload({
                   taken_at: img.takenAt ?? null,
                   camera_make: img.cameraMake ?? null,
                   camera_model: img.cameraModel ?? null,
-                  labels: img.labels ?? null,
+                  labels: img.labels || [],
                   border_width: img.borderWidth ?? null,
                   border_color: img.borderColor ?? null,
                 }));
