@@ -4,6 +4,8 @@ import { useCanvasStore } from '@/lib/stores/canvasStore';
 import { useQueryClient } from '@tanstack/react-query';
 import type { CanvasImage, PhotoFolder } from '@/lib/types';
 import { DEFAULT_CURVES } from '@/lib/types';
+import { getCachedImage } from '@/lib/imageCache';
+import { getThumbStoragePath } from '@/lib/utils/imageUtils';
 
 /**
  * Hook for handling real-time collaboration on the canvas
@@ -38,73 +40,34 @@ export function useCollabRealtime({
     const storagePath = record.storage_path as string;
     
     let src = "";
-    
-    if (sessionId) {
+
+    if (sessionId && storagePath) {
+      // Use thumbnail to minimize egress — /api/thumbnail generates on-demand if not ready yet
       try {
-        if (thumbnailPath) {
-          // Try to get signed URL for the thumbnail
-          // Note: thumbnail might still be uploading (timing issue), so handle errors gracefully
-          const res = await fetch("/api/signed-url", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              bucket: "collab-photos",
-              path: thumbnailPath,
-            }),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            src = data.signedUrl;
-          } else {
-            // Thumbnail not available - try signed URL for preview image (storage_path)
-            // With awaited uploads, the preview should be available when INSERT fires
-            const previewRes = await fetch("/api/signed-url", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                bucket: "collab-photos",
-                path: storagePath,
-              }),
+        const res = await fetch("/api/thumbnail", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ bucket: "collab-photos", path: storagePath }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.signedUrl) {
+            // Cache thumbnail blob in IndexedDB for future loads
+            const thumbPath = getThumbStoragePath(storagePath);
+            const blob = await getCachedImage(thumbPath, async () => {
+              const response = await fetch(data.signedUrl);
+              if (!response.ok) throw new Error("Failed to fetch thumbnail");
+              return response.blob();
             });
-            if (previewRes.ok) {
-              const data = await previewRes.json();
-              src = data.signedUrl;
-            }
-          }
-        } else if (storagePath) {
-          // No thumbnail yet - use thumbnail API to generate one
-          const res = await fetch("/api/thumbnail", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              bucket: "collab-photos",
-              path: storagePath,
-            }),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data.signedUrl) {
-              src = data.signedUrl;
-            }
-          }
-          // If thumbnail API fails, try signed URL as fallback
-          if (!src) {
-            const fallbackRes = await fetch("/api/signed-url", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                bucket: "collab-photos",
-                path: storagePath,
-              }),
-            });
-            if (fallbackRes.ok) {
-              const data = await fallbackRes.json();
-              src = data.signedUrl;
-            }
+            src = URL.createObjectURL(blob);
           }
         }
-      } catch (err) {
-        console.error("Failed to get image URL:", err);
+      } catch {
+        // Thumbnail failed — fall back to full-res public URL
+      }
+      if (!src) {
+        const { data } = supabase.storage.from('collab-photos').getPublicUrl(storagePath);
+        src = data.publicUrl;
       }
     }
     
@@ -259,14 +222,24 @@ export function useCollabRealtime({
       },
       (payload) => {
         const { eventType, new: newRecord, old: oldRecord } = payload;
-        
+
         switch (eventType) {
-          case 'INSERT':
-            // Handle new photo imports in real-time
-            parseDbPhotoToCanvasImage(newRecord as Record<string, unknown>).then((newImage) => {
-              // Check if photo already exists — match by id OR storagePath
-              // (uploader's local state uses client-generated id like "img-...",
-              //  but the DB record has a server-generated UUID, so id alone won't catch duplicates)
+          case 'INSERT': {
+            // Quick dedup: skip expensive API calls if image already exists locally
+            // (uploader's local state has the image before the DB insert fires realtime)
+            const record = newRecord as Record<string, unknown>;
+            const recordStoragePath = record.storage_path as string;
+            const recordId = record.id as string;
+            const currentImages = useCanvasStore.getState().images;
+            if (currentImages.some((img) =>
+              img.id === recordId ||
+              (img.storagePath && img.storagePath === recordStoragePath)
+            )) {
+              break;
+            }
+
+            // Image is from another collaborator - fetch URL and add to canvas
+            parseDbPhotoToCanvasImage(record).then((newImage) => {
               let wasAdded = false;
               setImages((prev) => {
                 if (prev.some((img) => img.id === newImage.id || (img.storagePath && img.storagePath === newImage.storagePath))) return prev;
@@ -274,7 +247,6 @@ export function useCollabRealtime({
                 return [...prev, newImage];
               });
               // Update folder's imageIds so the image renders inside the folder
-              // Only if the image was actually added (not a duplicate from own upload)
               if (wasAdded && newImage.folderId) {
                 setFolders((prev) =>
                   prev.map((f) =>
@@ -286,6 +258,7 @@ export function useCollabRealtime({
               }
             });
             break;
+          }
             
           case 'UPDATE':
             // Update all editable properties

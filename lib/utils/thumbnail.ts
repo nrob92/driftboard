@@ -6,12 +6,12 @@
 import sharp from "sharp";
 
 // Thumbnail version - increment when changing settings to force regeneration
-export const THUMB_VERSION = "v2";
+export const THUMB_VERSION = "v4";
 
-// Grid thumbnails: smaller size for efficient canvas display
-// 400px at 80% quality typically yields 30-60KB vs 200-400KB at 1200px/95%
-export const THUMB_MAX_DIM = 400;
-export const THUMB_QUALITY = 80;
+// Grid thumbnails: WebP at 1200px for retina-sharp display at 360px cells
+// 1200px WebP @ 85% ≈ 80-150KB per thumbnail (same or less than 800px JPEG @ 95%)
+export const THUMB_MAX_DIM = 1200;
+export const THUMB_QUALITY = 85;
 
 export const RAW_EXTENSIONS = [".dng", ".raw", ".cr2", ".nef", ".arw"];
 
@@ -40,6 +40,6 @@ export async function generateThumbnail(sourceBuffer: Buffer): Promise<Buffer> {
       fit: "inside",
       withoutEnlargement: true,
     })
-    .jpeg({ quality: THUMB_QUALITY })
+    .webp({ quality: THUMB_QUALITY })
     .toBuffer();
 }

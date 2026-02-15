@@ -12,7 +12,7 @@
 const DB_NAME = "driftboard-image-cache";
 const DB_VERSION = 1;
 const STORE_NAME = "images";
-const MAX_CACHE_SIZE = 500 * 1024 * 1024; // 500MB
+const MAX_CACHE_SIZE = 1500 * 1024 * 1024; // 1.5GB
 
 interface CacheEntry {
   storagePath: string;
@@ -22,6 +22,7 @@ interface CacheEntry {
 }
 
 let dbPromise: Promise<IDBDatabase> | null = null;
+let persistRequested = false;
 
 function openDB(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
@@ -146,12 +147,19 @@ export async function getCachedImage(
       touchEntry(storagePath).catch(() => {});
       return cached.blob;
     }
+
   } catch {
     // IndexedDB not available, fall through to fetcher
   }
 
   // Cache miss: fetch the image
   const blob = await fetcher();
+
+  // Request persistent storage so browser won't evict IndexedDB (fire-and-forget, once)
+  if (!persistRequested && navigator.storage?.persist) {
+    persistRequested = true;
+    navigator.storage.persist().catch(() => {});
+  }
 
   // Cache it (fire-and-forget, don't block the caller)
   (async () => {

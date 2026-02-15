@@ -36,8 +36,8 @@ export async function loadLibRaw(): Promise<void> {
 }
 
 // Thumbnail settings - must match server-side lib/utils/thumbnail.ts
-export const THUMB_MAX_DIM = 400;
-export const THUMB_QUALITY = 0.8;
+export const THUMB_MAX_DIM = 1200;
+export const THUMB_QUALITY = 0.85;
 
 /** Create a thumbnail blob from a file or blob for low-egress grid display */
 export async function createThumbnailBlob(
@@ -54,7 +54,7 @@ export async function createThumbnailBlob(
       if (w <= maxDim && h <= maxDim) {
         file
           .arrayBuffer()
-          .then((buf) => resolve(new Blob([buf], { type: "image/jpeg" })))
+          .then((buf) => resolve(new Blob([buf], { type: "image/webp" })))
           .catch(reject);
         return;
       }
@@ -70,7 +70,7 @@ export async function createThumbnailBlob(
       ctx.drawImage(img, 0, 0, tw, th);
       canvas.toBlob(
         (blob) => (blob ? resolve(blob) : reject(new Error("toBlob failed"))),
-        "image/jpeg",
+        "image/webp",
         THUMB_QUALITY,
       );
     };
@@ -118,9 +118,6 @@ export async function resizeImageForEditing(
       ctx.drawImage(img, 0, 0, newW, newH);
 
       const resizedSrc = canvas.toDataURL("image/jpeg", 0.92);
-      console.log(
-        `Resized image from ${w}x${h} to ${newW}x${newH} for editing`,
-      );
       resolve({ src: resizedSrc, width: newW, height: newH });
     };
     img.onerror = () => reject(new Error("Image load failed"));
@@ -129,7 +126,7 @@ export async function resizeImageForEditing(
 }
 
 // Thumbnail version - must match server-side lib/utils/thumbnail.ts
-export const THUMB_VERSION = "v2";
+export const THUMB_VERSION = "v4";
 
 /** Get thumb storage path from full path: user_id/filename.jpg -> user_id/thumbs/v2/filename.jpg */
 export function getThumbStoragePath(fullPath: string): string {

@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
     const { error: uploadError } = await supabase.storage
       .from(bucket)
       .upload(thumbPath, thumbBuffer, {
-        contentType: "image/jpeg",
+        contentType: "image/webp",
         cacheControl: "86400",
         upsert: true,
       });
@@ -104,7 +104,7 @@ export async function POST(request: NextRequest) {
       // Still serve the resized image directly even if storage upload fails
       return new NextResponse(new Uint8Array(thumbBuffer), {
         headers: {
-          "Content-Type": "image/jpeg",
+          "Content-Type": "image/webp",
           "Cache-Control": "public, max-age=86400",
         },
       });
@@ -119,7 +119,7 @@ export async function POST(request: NextRequest) {
       // Fallback: serve the buffer directly
       return new NextResponse(new Uint8Array(thumbBuffer), {
         headers: {
-          "Content-Type": "image/jpeg",
+          "Content-Type": "image/webp",
           "Cache-Control": "public, max-age=86400",
         },
       });

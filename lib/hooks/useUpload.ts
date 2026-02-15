@@ -73,12 +73,6 @@ export function useUpload({
   // Handle file upload - uploads to Supabase Storage
   // Show folder name prompt when uploading
   const handleFileUpload = useCallback((files: FileList | null) => {
-    console.log(
-      "handleFileUpload called with files:",
-      files,
-      "length:",
-      files?.length,
-    );
 
     if (!files || files.length === 0) {
       console.log("No files provided");
@@ -97,7 +91,6 @@ export function useUpload({
         validTypes.includes(f.type) || f.name.toLowerCase().endsWith(".dng"),
     );
 
-    console.log("Valid files:", validFiles.length);
 
     if (validFiles.length === 0) {
       alert("Please upload JPEG, PNG, WebP, or DNG files only.");
@@ -106,7 +99,6 @@ export function useUpload({
 
     // Store COPY of files in ref (not the live FileList reference)
     pendingFilesRef.current = validFiles;
-    console.log("Stored in ref:", pendingFilesRef.current);
     const uiActions = useUIStore.getState();
     uiActions.setPendingFileCount(validFiles.length);
     uiActions.setNewFolderName("");
@@ -118,7 +110,6 @@ export function useUpload({
     async (folderName: string) => {
       const files = pendingFilesRef.current;
       if (!files || files.length === 0) {
-        console.log("No pending files in ref");
         return;
       }
 
@@ -138,13 +129,6 @@ export function useUpload({
         return;
       }
 
-      console.log(
-        "Processing files with folder:",
-        folderName,
-        "Files:",
-        files.length,
-        files,
-      );
 
       uiActions.setFolderNameError("");
       uiActions.setShowFolderPrompt(false);
@@ -156,7 +140,6 @@ export function useUpload({
       const folderX = 100;
       const folderY = 100 + existingFolderCount * 500; // Stack folders vertically
 
-      console.log("Folder position:", folderX, folderY);
 
       // Create the folder (we'll add images to state as each is ready so the UI updates progressively)
       const folderId = `folder-${Date.now()}`;
@@ -169,13 +152,11 @@ export function useUpload({
       let imageIndex = 0;
 
       // files is already an array of validated files
-      console.log("Files to process:", files.length);
 
       for (const file of files) {
         // Files are already validated, no need to check again
 
         try {
-          console.log("Processing file:", file.name);
 
           // Extract EXIF metadata (client-side) for filter search
           let takenAt: string | undefined;
@@ -212,7 +193,6 @@ export function useUpload({
 
           // Skip direct upload for DNG files - they go through the API which creates JPG previews
           if (!isDNG(file.name) && supabaseUrl && user) {
-            console.log(`Uploading to ${bucket}:`, filePath);
             const { data: uploadData, error: uploadError } =
               await supabase.storage.from(bucket).upload(filePath, file, {
                 cacheControl: "3600",
@@ -229,12 +209,10 @@ export function useUpload({
               });
             } else {
               photosUploadSucceeded = true;
-              console.log("Upload successful:", uploadData);
               const { data: urlData } = supabase.storage
                 .from(bucket)
                 .getPublicUrl(filePath);
               imageSrc = urlData.publicUrl;
-              console.log("Public URL:", imageSrc);
               // Set thumbnail path for regular images
               thumbnailPath = getThumbStoragePath(filePath);
               // Upload thumbnail in background (reduces egress when loading grid)
@@ -244,7 +222,7 @@ export function useUpload({
                   supabase.storage
                     .from(bucket)
                     .upload(thumbPath, thumbBlob, {
-                      contentType: "image/jpeg",
+                      contentType: "image/webp",
                       cacheControl: "86400",
                       upsert: true,
                     })
@@ -255,7 +233,6 @@ export function useUpload({
                 .catch(() => {});
             }
           } else if (!isDNG(file.name)) {
-            console.log("Using base64 (no Supabase or not logged in)");
             const reader = new FileReader();
             imageSrc = await new Promise<string>((resolve) => {
               reader.onload = (e) => resolve(e.target?.result as string);
@@ -264,7 +241,6 @@ export function useUpload({
           }
 
           // Load image to get dimensions
-          console.log("Loading image to get dimensions...");
           let width: number;
           let height: number;
           let dngBuffer: ArrayBuffer | undefined;
@@ -278,7 +254,6 @@ export function useUpload({
 
           // Check if file is DNG - use server-side processing for better performance
           if (isDNG(file.name) && user) {
-            console.log("Processing DNG file via server:", file.name);
             isRaw = true;
 
             try {
@@ -303,21 +278,8 @@ export function useUpload({
                   imageSrc = result.previewUrl;
                   width = result.width;
                   height = result.height;
-                  console.log(
-                    "DNG processed via server:",
-                    width,
-                    "x",
-                    height,
-                    "original:",
-                    originalWidth,
-                    "x",
-                    originalHeight,
-                  );
                 } else {
                   // Original saved to originals; no server preview — decode client-side and upload preview
-                  console.log(
-                    "DNG saved to originals, decoding preview client-side",
-                  );
                   const buffer = await file.arrayBuffer();
                   dngBuffer = buffer;
                   const decoded = await decodeDNG(buffer, true);
@@ -351,17 +313,13 @@ export function useUpload({
                     previewStoragePath = undefined;
                     thumbnailPath = undefined;
                   } else {
-                    console.log(
-                      "Uploaded client-decoded preview:",
-                      previewFilePath,
-                    );
                     
                     // Generate and upload thumbnail - wait for completion
                     const thumbBlob = await createThumbnailBlob(previewBlob);
                     const { error: thumbError } = await supabase.storage
                       .from(previewBucket)
                       .upload(thumbFilePath, thumbBlob, {
-                        contentType: "image/jpeg",
+                        contentType: "image/webp",
                         cacheControl: "86400",
                         upsert: true,
                       });
@@ -369,7 +327,6 @@ export function useUpload({
                     if (thumbError) {
                       console.warn("Thumbnail upload failed:", thumbError);
                     } else {
-                      console.log("Uploaded thumbnail:", thumbFilePath);
                     }
                   }
                 }
@@ -422,7 +379,7 @@ export function useUpload({
                               supabase.storage
                                 .from(previewBucket)
                                 .upload(thumbFilePath, thumbBlob, {
-                                  contentType: "image/jpeg",
+                                  contentType: "image/webp",
                                   cacheControl: "86400",
                                   upsert: true,
                                 })
@@ -497,7 +454,7 @@ export function useUpload({
                             supabase.storage
                               .from(previewBucket)
                               .upload(thumbFilePath, thumbBlob, {
-                                contentType: "image/jpeg",
+                                contentType: "image/webp",
                                 cacheControl: "86400",
                                 upsert: true,
                               })
@@ -524,40 +481,27 @@ export function useUpload({
             }
           } else if (isDNG(file.name)) {
             // Client-side fallback for DNG when not logged in
-            console.log("Decoding DNG file (client-side preview):", file.name);
             const buffer = await file.arrayBuffer();
             dngBuffer = buffer;
             const decoded = await decodeDNG(buffer, true);
             imageSrc = decoded.dataUrl;
             width = decoded.width;
             height = decoded.height;
-            console.log("DNG preview decoded:", width, "x", height);
           } else {
             // Regular image - resize for editing if needed (Lightroom-style smart preview)
-            console.log(
-              "Loading and potentially resizing image for editing...",
-            );
             const resized = await resizeImageForEditing(imageSrc, 1500);
             imageSrc = resized.src; // Use resized version for editing
             width = resized.width;
             height = resized.height;
-            console.log("Image ready for editing:", width, "x", height);
           }
 
           // UNIVERSAL RESIZE: Ensure ALL images (including DNG previews) are resized for editing
           // This catches any images that went through DNG decoding or server preview paths
           if (width > 1500 || height > 1500) {
-            console.log(
-              "Resizing large image/DNG preview for editing:",
-              width,
-              "x",
-              height,
-            );
             const resized = await resizeImageForEditing(imageSrc, 1500);
             imageSrc = resized.src;
             width = resized.width;
             height = resized.height;
-            console.log("Resized to:", width, "x", height);
           }
 
           // Keep original source for quality; only scale display size to fit layout bounds
@@ -588,7 +532,6 @@ export function useUpload({
           const x = contentStartX + col * CELL_SIZE + Math.max(0, cellOffsetX);
           const y = contentStartY + row * CELL_HEIGHT;
 
-          console.log("Image position:", x, y, "Size:", width, height);
 
           // Use actual photos upload success so DNG with client-side preview still gets photos path (load matches by listing photos)
           const imageId = `img-${Date.now()}-${Math.random()}`;
@@ -675,7 +618,6 @@ export function useUpload({
         }
       }
 
-      console.log("Processed images:", newImages.length);
 
       // Final overlap resolution and save (folder already in state with all images)
       if (newImages.length > 0) {
@@ -997,6 +939,7 @@ export function useUpload({
           let originalWidth: number | undefined;
           let originalHeight: number | undefined;
           let dngBuffer: ArrayBuffer | undefined;
+          let thumbnailPath: string | undefined;
 
           // DNG: use upload-dng API so raw goes to originals, preview to photos (never put raw DNG in photos)
           if (isDNG(file.name) && user) {
@@ -1013,6 +956,7 @@ export function useUpload({
                 const result = await response.json();
                 originalStoragePath = result.originalPath;
                 storagePath = result.previewPath ?? undefined;
+                if (storagePath) thumbnailPath = getThumbStoragePath(storagePath);
                 originalWidth = result.originalWidth;
                 originalHeight = result.originalHeight;
                 isRaw = true;
@@ -1028,23 +972,19 @@ export function useUpload({
                   const previewFilePath = sessionId
                     ? `${sessionId}/${previewFileName}`
                     : `${user.id}/${previewFileName}`;
-                  storagePath = previewFilePath; // Set optimistically for immediate use
-                  fetch(decoded.dataUrl)
-                    .then((r) => r.blob())
-                    .then((previewBlob) => {
-                      supabase.storage
-                        .from(bucket)
-                        .upload(previewFilePath, previewBlob, {
-                          contentType: "image/jpeg",
-                          cacheControl: "3600",
-                        })
-                        .then(({ error }) => {
-                          if (!error) {
-                            storagePath = previewFilePath;
-                            photosUploadSucceeded = true;
-                          }
-                        });
+                  thumbnailPath = getThumbStoragePath(previewFilePath);
+                  // Await preview upload so the file exists in storage before DB insert
+                  const previewBlob = await fetch(decoded.dataUrl).then((r) => r.blob());
+                  const { error: previewUploadError } = await supabase.storage
+                    .from(bucket)
+                    .upload(previewFilePath, previewBlob, {
+                      contentType: "image/jpeg",
+                      cacheControl: "3600",
                     });
+                  if (!previewUploadError) {
+                    storagePath = previewFilePath;
+                    photosUploadSucceeded = true;
+                  }
                 }
               }
             } catch {
@@ -1057,30 +997,21 @@ export function useUpload({
               const previewFilePath = sessionId
                 ? `${sessionId}/${previewFileName}`
                 : `${user.id}/${previewFileName}`;
-              storagePath = previewFilePath; // Set optimistically for immediate use
-              photosUploadSucceeded = true;
-              fetch(decoded.dataUrl)
-                .then((r) => r.blob())
-                .then((previewBlob) => {
-                  supabase.storage
-                    .from(bucket)
-                    .upload(previewFilePath, previewBlob, {
-                      contentType: "image/jpeg",
-                      cacheControl: "3600",
-                    })
-                    .then(({ error }) => {
-                      if (error) {
-                        console.error("Failed to upload preview:", error);
-                        storagePath = undefined; // Clear if upload failed
-                        photosUploadSucceeded = false;
-                      } else {
-                        console.log(
-                          "Uploaded client-decoded preview:",
-                          previewFilePath,
-                        );
-                      }
-                    });
+              thumbnailPath = getThumbStoragePath(previewFilePath);
+              // Await preview upload so the file exists in storage before DB insert
+              const fallbackPreviewBlob = await fetch(decoded.dataUrl).then((r) => r.blob());
+              const { error: fallbackUploadError } = await supabase.storage
+                .from(bucket)
+                .upload(previewFilePath, fallbackPreviewBlob, {
+                  contentType: "image/jpeg",
+                  cacheControl: "3600",
                 });
+              if (fallbackUploadError) {
+                console.error("Failed to upload preview:", fallbackUploadError);
+              } else {
+                storagePath = previewFilePath;
+                photosUploadSucceeded = true;
+              }
               isRaw = true;
             }
           } else if (supabaseUrl && user && !isDNG(file.name)) {
@@ -1100,6 +1031,7 @@ export function useUpload({
             } else {
               photosUploadSucceeded = true;
               storagePath = filePath;
+              thumbnailPath = getThumbStoragePath(filePath);
               const { data: urlData } = supabase.storage
                 .from(bucket)
                 .getPublicUrl(filePath);
@@ -1110,7 +1042,7 @@ export function useUpload({
                   supabase.storage
                     .from(bucket)
                     .upload(thumbPath, thumbBlob, {
-                      contentType: "image/jpeg",
+                      contentType: "image/webp",
                       cacheControl: "86400",
                       upsert: true,
                     })
@@ -1232,6 +1164,7 @@ export function useUpload({
             takenAt: takenAt ?? undefined,
             cameraMake: cameraMake ?? undefined,
             cameraModel: cameraModel ?? undefined,
+            thumbnailPath,
           };
 
           newImages.push(newImage);
@@ -1555,11 +1488,9 @@ export function useUpload({
 
   // Handle adding photos to a specific folder via plus button
   const handleAddPhotosToFolder = useCallback((folderId: string) => {
-    console.log("handleAddPhotosToFolder called with folderId:", folderId);
     if (folderFileInputRef.current) {
       folderFileInputRef.current.setAttribute("data-folder-id", folderId);
       folderFileInputRef.current.click();
-      console.log("File input clicked");
     } else {
       console.error("folderFileInputRef.current is null");
     }

@@ -62,7 +62,7 @@ async function processOneThumb(
     const { error: uploadError } = await supabase.storage
       .from(bucket)
       .upload(thumbPath, thumbBuffer, {
-        contentType: "image/jpeg",
+        contentType: "image/webp",
         cacheControl: "86400",
         upsert: true,
       });
