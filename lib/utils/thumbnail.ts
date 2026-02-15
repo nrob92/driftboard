@@ -8,9 +8,9 @@ import sharp from "sharp";
 // Thumbnail version - increment when changing settings to force regeneration
 export const THUMB_VERSION = "v4";
 
-// Grid thumbnails: WebP at 1200px for retina-sharp display at 360px cells
-// 1200px WebP @ 85% ≈ 80-150KB per thumbnail (same or less than 800px JPEG @ 95%)
-export const THUMB_MAX_DIM = 1200;
+// Grid thumbnails: WebP at 1500px — matches editing preview resolution, no quality loss after refresh
+// 1500px WebP @ 85% ≈ 70-230KB per thumbnail (still less than old 800px JPEG @ 95%)
+export const THUMB_MAX_DIM = 1500;
 export const THUMB_QUALITY = 85;
 
 export const RAW_EXTENSIONS = [".dng", ".raw", ".cr2", ".nef", ".arw"];

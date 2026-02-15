@@ -36,7 +36,7 @@ export async function loadLibRaw(): Promise<void> {
 }
 
 // Thumbnail settings - must match server-side lib/utils/thumbnail.ts
-export const THUMB_MAX_DIM = 1200;
+export const THUMB_MAX_DIM = 1500;
 export const THUMB_QUALITY = 0.85;
 
 /** Create a thumbnail blob from a file or blob for low-egress grid display */
