@@ -134,7 +134,7 @@ export const ImageNode = React.memo(
         scaleX={groupScaleX}
         scaleY={groupScaleY}
         draggable={draggable}
-        listening={draggable}
+        listening={true}
         onClick={onClick}
         onDblClick={(e) => {
           e.cancelBubble = true;

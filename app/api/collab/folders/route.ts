@@ -177,10 +177,17 @@ export async function PATCH(request: NextRequest) {
     }
 
     if (folder.user_id !== userId) {
-      return NextResponse.json(
-        { error: "You can only update your own folders" },
-        { status: 403 },
-      );
+      const { data: sessionData } = await supabase
+        .from("collab_sessions")
+        .select("owner_id")
+        .eq("id", sessionId)
+        .single();
+      if (sessionData?.owner_id !== userId) {
+        return NextResponse.json(
+          { error: "You can only update your own folders" },
+          { status: 403 },
+        );
+      }
     }
 
     const { data: updatedFolder, error } = await supabase
@@ -235,10 +242,17 @@ export async function DELETE(request: NextRequest) {
     }
 
     if (folder.user_id !== userId) {
-      return NextResponse.json(
-        { error: "You can only delete your own folders" },
-        { status: 403 },
-      );
+      const { data: sessionData } = await supabase
+        .from("collab_sessions")
+        .select("owner_id")
+        .eq("id", sessionId)
+        .single();
+      if (sessionData?.owner_id !== userId) {
+        return NextResponse.json(
+          { error: "You can only delete your own folders" },
+          { status: 403 },
+        );
+      }
     }
 
     // Delete from database (cascades to photos via RLS)

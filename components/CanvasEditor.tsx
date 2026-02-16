@@ -138,6 +138,7 @@ type CanvasEditorProps = {
   sessionId?: string;
   onToggleSidebar?: () => void;
   onlineUsers?: SessionOnlineUser[];
+  memberNames?: Record<string, string>;
   pendingRequestCount?: number;
   approvedCount?: number;
   maxCollaborators?: number;
@@ -149,6 +150,7 @@ export function CanvasEditor({
   sessionId,
   onToggleSidebar,
   onlineUsers,
+  memberNames,
   pendingRequestCount,
   approvedCount,
   maxCollaborators,
@@ -376,6 +378,36 @@ export function CanvasEditor({
   const isSession = !!sessionId;
   const folderTable = isSession ? "collab_folders" : "photo_folders";
   const photoTable = isSession ? "collab_photos" : "photo_edits";
+
+  // Build userId → display name map. Base: static memberNames from DB (covers offline users).
+  // Override with presence data (more accurate, reflects current session name).
+  const userNameMap = useMemo(() => {
+    const map: Record<string, string> = { ...(memberNames ?? {}) };
+    for (const u of onlineUsers ?? []) {
+      const name = u.name || (u.email ? u.email.split("@")[0] : "");
+      if (name) map[u.id] = name;
+    }
+    return map;
+  }, [onlineUsers, memberNames]);
+
+  // Folder permission: master can manage any folder; non-master manages only their own.
+  const canManageFolder = useCallback(
+    (folderUserId?: string): boolean => {
+      if (!sessionId) return true;   // personal canvas — always allowed
+      if (isOwner) return true;      // session master — always allowed
+      return folderUserId === user?.id;
+    },
+    [sessionId, isOwner, user?.id],
+  );
+
+  // Photo permission: only the original uploader can manage their photo (master has no exception).
+  const canManagePhoto = useCallback(
+    (photoUserId?: string): boolean => {
+      if (!sessionId) return true;   // personal canvas — always allowed
+      return photoUserId === user?.id;
+    },
+    [sessionId, user?.id],
+  );
 
   // Realtime collaboration - only active for collaborative sessions
   const { broadcastCursor } = useCollabRealtime({
@@ -640,6 +672,7 @@ export function CanvasEditor({
               : undefined;
           out.push({
             id: folderId,
+            userId: (sf.user_id as string | undefined) ?? undefined,
             name: String(sf.name ?? "Untitled"),
             x: sfX,
             y: sfY,
@@ -1003,6 +1036,7 @@ export function CanvasEditor({
             };
 
             if (edit) {
+              if (edit.user_id) canvasImg.userId = edit.user_id;
               if (edit.original_storage_path != null)
                 canvasImg.originalStoragePath = edit.original_storage_path;
               let savedWidth = edit.width ?? width;
@@ -1655,6 +1689,11 @@ export function CanvasEditor({
       }
       e.cancelBubble = true;
       const id = e.target.id();
+
+      // Non-master collaborators cannot select or interact with others' items
+      const clickedItem = images.find((img) => img.id === id);
+      if (clickedItem && !canManagePhoto(clickedItem.userId)) return;
+
       const ctrl = e.evt.ctrlKey || e.evt.metaKey;
       const shift = e.evt.shiftKey;
 
@@ -1696,6 +1735,7 @@ export function CanvasEditor({
               const hi = Math.max(idxClicked, idxLast);
               const rangeIds = folderImages
                 .slice(lo, hi + 1)
+                .filter((img) => canManagePhoto(img.userId))
                 .map((img) => img.id);
               setSelectedIds(rangeIds);
               lastSelectedIdRef.current = id;
@@ -1710,7 +1750,10 @@ export function CanvasEditor({
         if (imageIndex >= 0 && lastImageIndex >= 0) {
           const lo = Math.min(imageIndex, lastImageIndex);
           const hi = Math.max(imageIndex, lastImageIndex);
-          const rangeIds = images.slice(lo, hi + 1).map((img) => img.id);
+          const rangeIds = images
+            .slice(lo, hi + 1)
+            .filter((img) => canManagePhoto(img.userId))
+            .map((img) => img.id);
           setSelectedIds(rangeIds);
         } else {
           setSelectedIds([id]);
@@ -1729,6 +1772,9 @@ export function CanvasEditor({
   const handleImageContextMenu = useCallback(
     (e: Konva.KonvaEventObject<PointerEvent>, imageId: string) => {
       e.evt.preventDefault();
+      // Non-master collaborators cannot open context menu on others' items
+      const ctxImg = images.find((img) => img.id === imageId);
+      if (!canManagePhoto(ctxImg?.userId)) return;
       const imageIdsOnly = (ids: string[]) =>
         ids.filter((id) => images.some((img) => img.id === id));
       const multi =
@@ -1765,10 +1811,14 @@ export function CanvasEditor({
       longPressTouchPosRef.current = { x: touch.clientX, y: touch.clientY };
       cancelLongPress();
       longPressTimerRef.current = setTimeout(() => {
+        // Non-master collaborators cannot open context menu on others' items
+        const { images: imgs } = useCanvasStore.getState();
+        const lpImg = imgs.find((img) => img.id === imageId);
+        if (!canManagePhoto(lpImg?.userId)) return;
         longPressTriggeredRef.current = true;
         if (navigator.vibrate) navigator.vibrate(50);
         // Build context menu exactly like handleImageContextMenu
-        const { selectedIds: sids, images: imgs } = useCanvasStore.getState();
+        const { selectedIds: sids } = useCanvasStore.getState();
         const imageIdsOnly = (ids: string[]) =>
           ids.filter((id) => imgs.some((img) => img.id === id));
         const multi =
@@ -2941,6 +2991,7 @@ export function CanvasEditor({
                 )
                 .concat({
                   id: newFolderId,
+                  userId: user?.id ?? undefined,
                   name: untitledName,
                   x: newFolderX,
                   y: newFolderY,
@@ -3694,8 +3745,8 @@ export function CanvasEditor({
 
   // Handle folder click to edit
   const handleFolderDoubleClick = useCallback((folder: PhotoFolder) => {
-    // Only edit if we didn't just drag the folder name
-    if (!folderNameDragRef.current) {
+    // Only edit if we didn't just drag the folder name, and user can manage this folder
+    if (!folderNameDragRef.current && canManageFolder(folder.userId)) {
       setEditingFolder(folder);
       setEditingFolderName(folder.name);
     }
@@ -4299,11 +4350,13 @@ export function CanvasEditor({
       )
         return;
 
-      // Mobile: open fullscreen edit mode instead of zoom-to-fit
+      // Mobile: open fullscreen edit mode instead of zoom-to-fit (only for own/manageable images)
       if (isMobile) {
-        setSelectedIds([image.id]);
-        useUIStore.getState().setMobileEditFullscreen(true);
-        useUIStore.getState().setMobileMenuOpen(false);
+        if (canManagePhoto(image.userId)) {
+          setSelectedIds([image.id]);
+          useUIStore.getState().setMobileEditFullscreen(true);
+          useUIStore.getState().setMobileMenuOpen(false);
+        }
         return;
       }
       const imgW = image.width * image.scaleX;
@@ -4492,13 +4545,13 @@ export function CanvasEditor({
             </p>
 
             {/* Existing Folders */}
-            {folders.length > 0 && (
+            {folders.filter((f) => canManageFolder(f.userId)).length > 0 && (
               <div className="mb-4">
                 <label className="block text-xs uppercase tracking-wide text-[#666] mb-2">
                   Existing Folders
                 </label>
                 <div className="space-y-2 max-h-40 overflow-y-auto">
-                  {folders.map((folder) => (
+                  {folders.filter((f) => canManageFolder(f.userId)).map((folder) => (
                     <button
                       key={folder.id}
                       onClick={() => {
@@ -4529,7 +4582,7 @@ export function CanvasEditor({
             )}
 
             {/* Divider */}
-            {folders.length > 0 && (
+            {folders.filter((f) => canManageFolder(f.userId)).length > 0 && (
               <div className="flex items-center gap-3 mb-4">
                 <div className="flex-1 h-px bg-[#333]" />
                 <span className="text-xs text-[#666]">OR</span>
@@ -5202,6 +5255,7 @@ export function CanvasEditor({
                       onContextMenu={(e) => {
                         // Social layout: toolbar on background click duplicates these actions — skip right-click menu
                         if (isSocialLayout(currentFolder)) return;
+                        if (!canManageFolder(currentFolder.userId)) return;
                         e.evt.preventDefault();
                         e.cancelBubble = true;
                         setCanvasContextMenu(null);
@@ -5225,6 +5279,7 @@ export function CanvasEditor({
                               cancelLongPress();
                               const folderId = currentFolder.id;
                               longPressTimerRef.current = setTimeout(() => {
+                                if (!canManageFolder(currentFolder.userId)) return;
                                 longPressTriggeredRef.current = true;
                                 if (navigator.vibrate) navigator.vibrate(50);
                                 setCanvasContextMenu(null);
@@ -5260,7 +5315,7 @@ export function CanvasEditor({
                       <Group
                         x={currentFolder.x}
                         y={currentFolder.y - labelYOffset}
-                        draggable={!isSpacePressed}
+                        draggable={!isSpacePressed && canManageFolder(currentFolder.userId)}
                         listening={!isSpacePressed}
                         onMouseEnter={(e) => {
                           const container = e.target.getStage()?.container();
@@ -5468,24 +5523,43 @@ export function CanvasEditor({
                           onClick={() => handleFolderDoubleClick(currentFolder)}
                           onTap={() => handleFolderDoubleClick(currentFolder)}
                         />
-                        <Text
-                          x={folderLabelWidths[currentFolder.id] ?? 0}
-                          y={2}
-                          text=" +"
-                          fontFamily="PP Fraktion Mono"
-                          fontSize={labelFontSize}
-                          fontStyle="600"
-                          fill={currentFolder.color}
-                          listening={true}
-                          onClick={(e) => {
-                            e.cancelBubble = true;
-                            handleAddPhotosToFolder(currentFolder.id);
-                          }}
-                          onTap={(e) => {
-                            e.cancelBubble = true;
-                            handleAddPhotosToFolder(currentFolder.id);
-                          }}
-                        />
+                        {canManageFolder(currentFolder.userId) && (
+                          <Text
+                            x={folderLabelWidths[currentFolder.id] ?? 0}
+                            y={2}
+                            text=" +"
+                            fontFamily="PP Fraktion Mono"
+                            fontSize={labelFontSize}
+                            fontStyle="600"
+                            fill={currentFolder.color}
+                            listening={true}
+                            onClick={(e) => {
+                              e.cancelBubble = true;
+                              handleAddPhotosToFolder(currentFolder.id);
+                            }}
+                            onTap={(e) => {
+                              e.cancelBubble = true;
+                              handleAddPhotosToFolder(currentFolder.id);
+                            }}
+                          />
+                        )}
+                        {/* Owner name — right side of label row (collab sessions only) */}
+                        {isSession && currentFolder.userId && userNameMap[currentFolder.userId] && (
+                          <Text
+                            x={0}
+                            y={2}
+                            width={currentFolder.width}
+                            text={userNameMap[currentFolder.userId].toUpperCase()}
+                            fontFamily="PP Fraktion Mono"
+                            fontSize={labelFontSize * 0.65}
+                            fontStyle="400"
+                            letterSpacing={Math.max(0.5, labelFontSize * 0.05)}
+                            fill={currentFolder.color}
+                            opacity={0.5}
+                            align="right"
+                            listening={false}
+                          />
+                        )}
                       </Group>
 
                       {/* Folder fill - solid background (not transparent); social layout: N pages with backgroundColor */}
@@ -5630,7 +5704,7 @@ export function CanvasEditor({
                           }
                           opacity={isHovered || isResizing ? 0.6 : 0}
                           cornerRadius={4}
-                          draggable={!isSpacePressed}
+                          draggable={!isSpacePressed && canManageFolder(currentFolder.userId)}
                           listening={!isSpacePressed}
                           dragBoundFunc={(pos) => pos}
                           onMouseEnter={(e) => {
@@ -6097,7 +6171,7 @@ export function CanvasEditor({
                     selectedIds[0] === img.id
                   }
                   isSelected={selectedIds.includes(img.id)}
-                  draggable={!isSpacePressed}
+                  draggable={!isSpacePressed && canManagePhoto(img.userId)}
                   onClick={handleObjectClick}
                   onDblClick={(e) => handleImageDoubleClick(img, e)}
                   onContextMenu={handleImageContextMenu}

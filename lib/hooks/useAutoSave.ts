@@ -101,8 +101,12 @@ export function useAutoSave({
       setSaveStatus("saving");
 
       // Always operate on latest images state
+      // In collab sessions, only save the current user's own photos —
+      // attempting to upsert another user's photo would violate RLS and fail the entire batch.
       const imagesToSave = imagesRef.current.filter(
-        (img) => img.storagePath || img.originalStoragePath,
+        (img) =>
+          (img.storagePath || img.originalStoragePath) &&
+          (!sessionId || !img.userId || img.userId === user.id),
       );
       if (imagesToSave.length === 0) {
         setSaveStatus("idle");

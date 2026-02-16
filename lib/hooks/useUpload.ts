@@ -538,6 +538,7 @@ export function useUpload({
 
           const newImage: CanvasImage = {
             id: imageId,
+            userId: user?.id ?? undefined,
             x,
             y,
             width,
@@ -623,6 +624,7 @@ export function useUpload({
       if (newImages.length > 0) {
         const newFolder: PhotoFolder = {
           id: folderId,
+          userId: user?.id ?? undefined,
           name: folderName,
           x: folderX,
           y: folderY,
@@ -1127,6 +1129,7 @@ export function useUpload({
 
           const newImage: CanvasImage = {
             id: imageId,
+            userId: user?.id ?? undefined,
             x,
             y,
             width,

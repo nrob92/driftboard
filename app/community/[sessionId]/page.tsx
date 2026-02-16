@@ -27,6 +27,7 @@ interface SessionMember {
   user_id: string;
   role: string;
   status: string;
+  invited_email?: string;
   approved_at?: string;
   joined_at?: string;
 }
@@ -463,6 +464,18 @@ export default function CollaborativeCanvasPage() {
       (m: SessionMember) => m.status === "approved",
     ) || [];
 
+  // Build a static userId → display name map from all members (covers offline users too)
+  const memberNames: Record<string, string> = {};
+  session?.collab_members?.forEach((m: SessionMember) => {
+    if (m.user_id && m.invited_email) {
+      memberNames[m.user_id] = m.invited_email.split("@")[0];
+    }
+  });
+  // Always include the current user (session owner may not be in collab_members)
+  if (user?.id && user?.email) {
+    memberNames[user.id] = user.email.split("@")[0];
+  }
+
   return (
     <div className="h-screen w-screen overflow-hidden relative bg-[#0a0a0a]">
       {/* Collaborative Canvas */}
@@ -471,6 +484,7 @@ export default function CollaborativeCanvasPage() {
         onPhotosLoadStateChange={setPhotosLoading}
         onToggleSidebar={() => setShowMembers((v) => !v)}
         onlineUsers={onlineUsers}
+        memberNames={memberNames}
         pendingRequestCount={pendingRequests.length}
         approvedCount={approvedMembers.length}
         maxCollaborators={session?.max_collaborators}

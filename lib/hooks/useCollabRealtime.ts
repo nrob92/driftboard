@@ -260,53 +260,62 @@ export function useCollabRealtime({
             break;
           }
             
-          case 'UPDATE':
-            // Update all editable properties
-            updateImage((newRecord as Record<string, unknown>).id as string, {
-              x: (newRecord as Record<string, unknown>).x as number,
-              y: (newRecord as Record<string, unknown>).y as number,
-              width: (newRecord as Record<string, unknown>).width as number,
-              height: (newRecord as Record<string, unknown>).height as number,
-              rotation: (newRecord as Record<string, unknown>).rotation as number,
-              scaleX: (newRecord as Record<string, unknown>).scale_x as number,
-              scaleY: (newRecord as Record<string, unknown>).scale_y as number,
-              folderId: (newRecord as Record<string, unknown>).folder_id as string | undefined,
+          case 'UPDATE': {
+            const updateRecord = newRecord as Record<string, unknown>;
+            const dbId = updateRecord.id as string;
+            const dbStoragePath = updateRecord.storage_path as string;
+            // Uploader has a local ID (img-xxx), not the DB UUID — fall back to storagePath match
+            const currentImages = useCanvasStore.getState().images;
+            const targetImage =
+              currentImages.find((img) => img.id === dbId) ||
+              currentImages.find((img) => img.storagePath === dbStoragePath);
+            if (!targetImage) break;
+            updateImage(targetImage.id, {
+              x: updateRecord.x as number,
+              y: updateRecord.y as number,
+              width: updateRecord.width as number,
+              height: updateRecord.height as number,
+              rotation: updateRecord.rotation as number,
+              scaleX: updateRecord.scale_x as number,
+              scaleY: updateRecord.scale_y as number,
+              folderId: updateRecord.folder_id as string | undefined,
               // Light adjustments
-              exposure: (newRecord as Record<string, unknown>).exposure as number,
-              contrast: (newRecord as Record<string, unknown>).contrast as number,
-              highlights: (newRecord as Record<string, unknown>).highlights as number,
-              shadows: (newRecord as Record<string, unknown>).shadows as number,
-              whites: (newRecord as Record<string, unknown>).whites as number,
-              blacks: (newRecord as Record<string, unknown>).blacks as number,
-              texture: (newRecord as Record<string, unknown>).texture as number,
+              exposure: updateRecord.exposure as number,
+              contrast: updateRecord.contrast as number,
+              highlights: updateRecord.highlights as number,
+              shadows: updateRecord.shadows as number,
+              whites: updateRecord.whites as number,
+              blacks: updateRecord.blacks as number,
+              texture: updateRecord.texture as number,
               // Color adjustments
-              temperature: (newRecord as Record<string, unknown>).temperature as number,
-              vibrance: (newRecord as Record<string, unknown>).vibrance as number,
-              saturation: (newRecord as Record<string, unknown>).saturation as number,
-              shadowTint: (newRecord as Record<string, unknown>).shadow_tint as number,
-              colorHSL: (newRecord as Record<string, unknown>).color_hsl as CanvasImage['colorHSL'],
-              splitToning: (newRecord as Record<string, unknown>).split_toning as CanvasImage['splitToning'],
-              colorGrading: (newRecord as Record<string, unknown>).color_grading as CanvasImage['colorGrading'],
-              colorCalibration: (newRecord as Record<string, unknown>).color_calibration as CanvasImage['colorCalibration'],
+              temperature: updateRecord.temperature as number,
+              vibrance: updateRecord.vibrance as number,
+              saturation: updateRecord.saturation as number,
+              shadowTint: updateRecord.shadow_tint as number,
+              colorHSL: updateRecord.color_hsl as CanvasImage['colorHSL'],
+              splitToning: updateRecord.split_toning as CanvasImage['splitToning'],
+              colorGrading: updateRecord.color_grading as CanvasImage['colorGrading'],
+              colorCalibration: updateRecord.color_calibration as CanvasImage['colorCalibration'],
               // Effects
-              clarity: (newRecord as Record<string, unknown>).clarity as number,
-              dehaze: (newRecord as Record<string, unknown>).dehaze as number,
-              vignette: (newRecord as Record<string, unknown>).vignette as number,
-              grain: (newRecord as Record<string, unknown>).grain as number,
-              grainSize: (newRecord as Record<string, unknown>).grain_size as number,
-              grainRoughness: (newRecord as Record<string, unknown>).grain_roughness as number,
+              clarity: updateRecord.clarity as number,
+              dehaze: updateRecord.dehaze as number,
+              vignette: updateRecord.vignette as number,
+              grain: updateRecord.grain as number,
+              grainSize: updateRecord.grain_size as number,
+              grainRoughness: updateRecord.grain_roughness as number,
               // Curves
-              curves: (newRecord as Record<string, unknown>).curves as CanvasImage['curves'],
+              curves: updateRecord.curves as CanvasImage['curves'],
               // Legacy
-              brightness: (newRecord as Record<string, unknown>).brightness as number,
-              hue: (newRecord as Record<string, unknown>).hue as number,
-              blur: (newRecord as Record<string, unknown>).blur as number,
-              filters: (newRecord as Record<string, unknown>).filters as string[],
+              brightness: updateRecord.brightness as number,
+              hue: updateRecord.hue as number,
+              blur: updateRecord.blur as number,
+              filters: updateRecord.filters as string[],
               // Border
-              borderWidth: (newRecord as Record<string, unknown>).border_width as number | undefined,
-              borderColor: (newRecord as Record<string, unknown>).border_color as string | undefined,
+              borderWidth: updateRecord.border_width as number | undefined,
+              borderColor: updateRecord.border_color as string | undefined,
             });
             break;
+          }
             
           case 'DELETE': {
             const deletedId = (oldRecord as Record<string, unknown>).id as string;
